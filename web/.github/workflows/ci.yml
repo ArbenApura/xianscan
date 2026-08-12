@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Generate .svelte-kit (tsconfig + types)
+        run: npx svelte-kit sync
+      - name: Unit tests + coverage gate
+        run: npm run test:coverage
+      - name: svelte-check
+        run: npm run check
+      - name: Lint
+        run: npx eslint src tests
+      - name: Type-check (app)
+        run: npx tsc --noEmit
+      - name: Type-check (tests)
+        run: npx tsc -p tsconfig.test.json --noEmit

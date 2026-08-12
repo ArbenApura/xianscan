@@ -1,0 +1,7 @@
+# PYTHON / ML SIDECAR — NEVER COMMIT MODELS, VENVS, OR TRANSIENT OUTPUTS
+ml/.venv/
+ml/models/
+ml/__pycache__/
+ml/**/__pycache__/
+ml/.pytest_cache/
+verify-out/

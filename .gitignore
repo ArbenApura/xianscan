@@ -1,0 +1,19 @@
+# REASONIX DESKTOP TOOLING STATE
+/.reasonix
+
+# PYTHON (ML SIDECAR)
+__pycache__/
+*.pyc
+.venv/
+ml/models/
+ml/.pytest_cache/
+
+# APP DATA / RUNTIME ARTIFACTS
+/data
+*.db
+*.db-shm
+*.db-wal
+
+# MISC
+*.log
+.DS_Store
