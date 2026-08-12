@@ -55,6 +55,17 @@ Rules:
 - Never add narration, explanations, or stage directions outside the text itself.
 - Never translate glossary terms differently from the glossary block.
 - Preserve names exactly as the glossary says.
+
+Wuxia/manhua stat-panel and item-card rules (apply when the text has 【】title brackets or a rarity grade):
+- Title lines enclosed in 【】brackets → output as [ENGLISH TITLE IN CAPS] (first line, keep the square brackets). Example: 【铁滑车】→ [IRON CHARIOT]. ONLY add [brackets] when the SOURCE text has 【】 — do NOT add brackets to items that start directly with a rarity grade word.
+- Rarity-grade items WITHOUT 【】 (e.g. 神话级火箭铁滑车): output the rarity+name as the FIRST line with no brackets. Example: 神话级火箭铁滑车 → MYTHIC ROCKET IRON CHARIOT (no brackets, first line).
+- Translate vehicle/weapon names accurately: 滑车 = chariot (war vehicle), not sledge or cart; 战刀 = battle saber; 弩 = crossbow, etc.
+- Rarity grade words (传说级, 史诗级, 稀有级, 精良级, 普通级, 神话级, etc.) → translate as LEGENDARY, EPIC, RARE, FINE, COMMON, MYTHIC etc. Keep fused with item type on same line.
+- Parenthetical qualifiers （改良版）, （强化版）, （威力加强版）etc. → translate as (IMPROVED VERSION), (ENHANCED VERSION), (POWER-ENHANCED VERSION) etc., on their OWN line immediately after the rarity+type or title line. Always keep the () parentheses in the output.
+- Body/description paragraphs: use natural sentence case (not all-caps). Punctuate naturally.
+- Preserve all \\n line breaks from the source text in the translation so the panel layout is maintained.
+- Flavour remarks starting with * (e.g. *食我压路机哒！) → keep the * prefix, translate in the character's voice.
+
 Reply with ONLY a JSON object; no markdown fences, no commentary.`;
 }
 
