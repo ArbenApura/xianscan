@@ -64,8 +64,12 @@ def _append_ellipsis(text: str) -> str:
 	tail = text.rstrip()
 	if not tail:
 		return text
-	if "…" in tail[-3:]:
-		return tail + "……"
+	if tail.endswith("……") or tail.endswith("......"):
+		return tail
+	if tail.endswith("..."):
+		return tail + "..."
+	if "…" in tail[-2:]:
+		return tail + "…"
 	if tail[-1] in ".．·":
 		return tail + "..."
 	# NO DOTS IN THE TEXT YET (A MASK-GROWN DOTS LINE BELOW) — MATCH THE SCRIPT OF THE TEXT.
@@ -283,6 +287,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	# CLEAN STRAY LATIN NOISE BEFORE ELLIPSIS / PUNCTUATION (e.g. "NMT..." -> "……")
 	normalized_rapid_lines = []
 	for pts, t, s in rapid_lines:
+		line_angle = detect.calculate_box_angle(pts)
 		clean_t = t
 		if re.fullmatch(r'^[A-Za-z]{1,4}[.．…!！?？]{1,}$', t.strip()):
 			has_bang = "!" in t or "！" in t
@@ -295,12 +300,12 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 				clean_t = "……？"
 			else:
 				clean_t = "……"
-		normalized_rapid_lines.append((pts, clean_t, s))
+		normalized_rapid_lines.append((pts, clean_t, s, line_angle))
 	rapid_lines = normalized_rapid_lines
 
-	rapid_boxes = [pts for pts, _t, _s in rapid_lines]
-	rapid_scores = [float(s) for _pts, _t, s in rapid_lines]
-	rapid_texts = [t for _pts, t, _s in rapid_lines]
+	rapid_boxes = [pts for pts, _t, _s, _ang in rapid_lines]
+	rapid_scores = [float(s) for _pts, _t, s, _ang in rapid_lines]
+	rapid_texts = [t for _pts, t, _s, _ang in rapid_lines]
 
 	# FILTER OUT COMIC DETECTOR BLOBS THAT SPAN MULTIPLE VERTICAL LINES.
 	# RAPIDOCR PROVIDES PRECISE SINGLE-LINE DETECTIONS; INGESTING OVERLAPPING MULTI-LINE COMIC BLOBS
@@ -314,13 +319,13 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 	all_boxes = rapid_boxes + kept_comic_boxes
 	all_scores = rapid_scores + kept_comic_scores
-	all_texts = [t for _pts, t, _s in rapid_lines] + [""] * len(kept_comic_boxes)
+	all_texts = [t for _pts, t, _s, _ang in rapid_lines] + [""] * len(kept_comic_boxes)
 	boxes, _scores = detect.merge_text_lines(all_boxes, all_scores, texts=all_texts)
 
 	# MAP LINE TEXTS TO BOXES FOR WATERMARK / URL SEPARATION DURING PARAGRAPH GROUPING
 	box_texts: list[str] = []
 	for b in boxes:
-		matched_txts = [t for line, t, _sc in rapid_lines if detect.line_center_inside(line, b)]
+		matched_txts = [t for line, t, _sc, _ang in rapid_lines if detect.line_center_inside(line, b)]
 		box_texts.append("\n".join(matched_txts))
 
 	# PARAGRAPH GROUPING: A MULTI-LINE BUBBLE'S LINES BECOME ONE REGION (ONE TRANSLATION, ONE BLOCK)
@@ -340,8 +345,8 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		# ORDERED TOP-TO-BOTTOM (LEFT-TO-RIGHT TIES) AND JOINED — A MULTI-LINE BUBBLE READS AS ONE
 		# PARAGRAPH WITH \n BETWEEN LINES.
 		matched = [
-			(line, text, score)
-			for line, text, score in rapid_lines
+			(line, text, score, line_ang)
+			for line, text, score, line_ang in rapid_lines
 			if detect.line_center_inside(line, box)
 		]
 		hull_pts: np.ndarray | None = None
@@ -355,15 +360,15 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			if story_matched:
 				matched = story_matched
 			matched.sort(key=lambda m: (m[0][:, 1].min(), m[0][:, 0].min()))
-			region.text = "\n".join(t for _l, t, _s in matched if t.strip())
-			region.confidence = float(max(s for _l, _t, s in matched)) if matched else 0.0
+			region.text = "\n".join(t for _l, t, _s, _ang in matched if t.strip())
+			region.confidence = float(max(s for _l, _t, s, _ang in matched)) if matched else 0.0
 			# USE THE CONVEX HULL OF ALL MATCHED RAPID-LINE CORNER POINTS AS:
 			#   1) THE INPAINT POLYGON — TIGHTER THAN THE GROUPED AABB UNION.
 			#   2) THE BASIS FOR region.box AND region.category — THE RAPIDOCR LINE POLYGONS
 			#      ARE TIGHT AROUND ACTUAL TEXT, SO THEIR HULL'S BOUNDING BOX IS THE REAL TEXT
 			#      EXTENT. THE ORIGINAL GROUPED BOX IS THE AABB UNION (OFTEN MUCH WIDER), WHICH
 			#      CAUSES classify_region TO MISFIRE AND THE TYPESETTER TO PICK ENORMOUS FONTS.
-			all_pts = np.vstack([line.reshape(-1, 2) for line, _, _ in matched]).astype(np.float32)
+			all_pts = np.vstack([line.reshape(-1, 2) for line, _, _, _ in matched]).astype(np.float32)
 			hull = cv2.convexHull(all_pts)
 			if hull is not None and len(hull) >= 3:
 				hull_pts = hull.reshape(-1, 2).astype(np.float64)
@@ -405,8 +410,8 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					region.box = Box(x=hx, y=hy, w=max(1, hw), h=max(1, hh))
 				region.category = detect.classify_region(hull_pts, page_w, page_h)  # type: ignore[arg-type]
 				region.vertical = detect.is_vertical_box(hull_pts)
-			# 3. COMPUTE ORIENTATION ANGLE FROM MATCHED TEXT LINES
-			line_angles = [detect.calculate_box_angle(l) for l, _t, _s in matched]
+			# 3. COMPUTE ORIENTATION ANGLE FROM MATCHED OCR LINE ANGLES
+			line_angles = [line_ang for _l, _t, _s, line_ang in matched]
 			non_zero = [a for a in line_angles if abs(a) >= 2.0]
 			if non_zero:
 				region.angle = round(float(np.median(non_zero)), 2)
@@ -466,16 +471,13 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					if last_char not in "。.;；:：!！?？)]】”’\"'":
 						unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
 						region.text = region.text.rstrip() + "\n" + unit
-				# A REAL HORIZONTAL EXTENSION TO THE RIGHT IS MISSED TRAILING PUNCTUATION OR ELLIPSIS
-				# (e.g. THE "！" OF "找到军师了！！" OR THE "……" OF "这里建……") — REFLECT IT IN THE EXTRACTED TEXT TOO.
-				if line_h > 0 and added_w >= max(10.0, line_h * 0.20):
+				# A REAL HORIZONTAL EXTENSION TO THE RIGHT IS MISSED TRAILING PUNCTUATION
+				# (e.g. THE "！" OF "找到军师了！！") — REFLECT IT IN THE EXTRACTED TEXT TOO.
+				if line_h > 0 and added_w >= line_h * 0.35:
 					if _ELLIPSIS_TAIL.search(region.text):
 						region.text = _append_ellipsis(region.text)
-					elif any(c in "！!？?" for c in region.text):
+					else:
 						region.text = _append_punctuation(region.text)
-					elif region.text.strip() and region.text.rstrip()[-1] not in "。.;；:：)]】”’\"'":
-						unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
-						region.text = region.text.rstrip() + unit
 		regions.append(region)
 
 	# -- STRAY-DOT CLEANUP: REC MODELS SOMETIMES SPLIT A FINAL "..." INTO THE LAST WORD PLUS A
@@ -564,9 +566,19 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		kept_final.sort(key=lambda r: (r.box.y, r.box.x))
 		final_regions = kept_final
 
-	regions = final_regions
+	# 4) DISCARD EMPTY OR DASH-ONLY FALSE DETECTIONS (e.g. "—", speed lines, drawing strokes)
+	_IGNORED_NOISE_RE = re.compile(r"^[—―\-_~～\s]*$")
+	final_regions = [
+		r for r in final_regions
+		if r.text.strip() and not _IGNORED_NOISE_RE.fullmatch(r.text.strip())
+	]
 
-	return AnalyzeResponse(width=page_w, height=page_h, regions=regions, backend=backend)
+	return AnalyzeResponse(
+		width=page_w,
+		height=page_h,
+		regions=final_regions,
+		backend=backend,
+	)
 
 
 def clean_image(img_bgr: np.ndarray, regions: list[CleanRequestRegion]) -> np.ndarray:

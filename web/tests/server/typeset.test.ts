@@ -9,6 +9,7 @@ import {
 	reflowText,
 	renderText,
 	sampleBackground,
+	sanitizeForFont,
 	typesetPage,
 	wrapText,
 } from '$lib/server/typeset';
@@ -40,13 +41,31 @@ describe('fontFor', () => {
 	});
 });
 
-// -- RENDER STRING -- //
+// -- SANITIZE & RENDER STRING -- //
+
+describe('sanitizeForFont', () => {
+	it('replaces em-dashes and en-dashes with natural comma pauses', () => {
+		expect(sanitizeForFont('Might as well use them all—who knows, I might get something good.')).toBe(
+			'Might as well use them all, who knows, I might get something good.',
+		);
+	});
+
+	it('cleans up trailing em-dashes or punctuation collisions', () => {
+		expect(sanitizeForFont('Wait—!')).toBe('Wait!');
+		expect(sanitizeForFont('Hello — world')).toBe('Hello, world');
+	});
+});
 
 describe('renderText', () => {
-	it('uppercases Latin text at render time', () => {
-		expect(renderText({ id: 'r0', box: { x: 0, y: 0, w: 10, h: 10 }, text: 'Watch out! He\'s attacking again!', category: 'dialogue' })).toBe(
-			'WATCH OUT! HE\'S ATTACKING AGAIN!',
-		);
+	it('uppercases Latin text at render time and cleans em-dashes', () => {
+		expect(
+			renderText({
+				id: 'r0',
+				box: { x: 0, y: 0, w: 10, h: 10 },
+				text: 'Might as well use them all—who knows',
+				category: 'dialogue',
+			}),
+		).toBe('MIGHT AS WELL USE THEM ALL, WHO KNOWS');
 	});
 
 	it('uppercases accented letters', () => {

@@ -179,22 +179,27 @@ def is_vertical_box(box: np.ndarray) -> bool:
 
 
 def calculate_box_angle(box: np.ndarray | list[list[int | float]]) -> float:
-	"""CALCULATE ORIENTATION ANGLE IN DEGREES [-90, 90] OF A 4-POINT POLYGON / BOX.
+	"""CALCULATE ORIENTATION ANGLE IN DEGREES [-90, 90] OF A 4-POINT POLYGON / BOX OR CONTOUR.
 	ANGLES WITH MAGNITUDE < 2.0 DEGREES ARE ROUNDED TO 0.0 TO PREVENT SUBPIXEL BLUR ON HORIZONTAL TEXT.
 	"""
 	pts = np.array(box, dtype=np.float32).reshape(-1, 2)
-	if len(pts) < 4:
+	if len(pts) < 3:
 		return 0.0
 
-	p0, p1, p2, p3 = pts[0], pts[1], pts[2], pts[3]
-	dx = float(p1[0] - p0[0] + p2[0] - p3[0]) / 2.0
-	dy = float(p1[1] - p0[1] + p2[1] - p3[1]) / 2.0
-
-	if dx == 0 and dy == 0:
-		return 0.0
-
-	angle_rad = np.arctan2(dy, dx)
-	angle_deg = float(np.degrees(angle_rad))
+	if len(pts) == 4:
+		p0, p1, p2, p3 = pts[0], pts[1], pts[2], pts[3]
+		dx = float(p1[0] - p0[0] + p2[0] - p3[0]) / 2.0
+		dy = float(p1[1] - p0[1] + p2[1] - p3[1]) / 2.0
+		if dx == 0 and dy == 0:
+			return 0.0
+		angle_rad = np.arctan2(dy, dx)
+		angle_deg = float(np.degrees(angle_rad))
+	else:
+		rect = cv2.minAreaRect(pts)
+		(cx, cy), (rw, rh), rect_angle = rect
+		if rw < rh:
+			rect_angle += 90.0
+		angle_deg = float(rect_angle)
 
 	while angle_deg > 90.0:
 		angle_deg -= 180.0

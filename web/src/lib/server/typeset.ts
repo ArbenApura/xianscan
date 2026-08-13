@@ -324,7 +324,17 @@ export function sanitizeForFont(text: string): string {
 		.replace(/[《「『]/g, '"')
 		.replace(/[》」』]/g, '"')
 		.replace(/[“”„‟]/g, '"')
-		.replace(/[‘’‚‛]/g, "'");
+		.replace(/[‘’‚‛]/g, "'")
+		.replace(/\s*[—–]+\s*/g, ', ')
+		.replace(/,\s*,/g, ', ')
+		.replace(/\.\s*,/g, '. ')
+		.replace(/!\s*,/g, '! ')
+		.replace(/\?\s*,/g, '? ')
+		.replace(/…\s*,/g, '… ')
+		.replace(/,\s*([.!?…])/g, '$1')
+		.replace(/,\s*$/g, '')
+		.replace(/[ \t]{2,}/g, ' ')
+		.trim();
 }
 
 export function renderText(r: TypesetRegion): string {
