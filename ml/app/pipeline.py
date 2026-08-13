@@ -101,6 +101,22 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			matched.sort(key=lambda m: (m[0][:, 1].min(), m[0][:, 0].min()))
 			region.text = "\n".join(t for _l, t, _s in matched if t.strip())
 			region.confidence = float(max(s for _l, _t, s in matched)) if matched else 0.0
+			# USE THE CONVEX HULL OF ALL MATCHED RAPID-LINE CORNER POINTS AS:
+			#   1) THE INPAINT POLYGON — TIGHTER THAN THE GROUPED AABB UNION.
+			#   2) THE BASIS FOR region.box AND region.category — THE RAPIDOCR LINE POLYGONS
+			#      ARE TIGHT AROUND ACTUAL TEXT, SO THEIR HULL'S BOUNDING BOX IS THE REAL TEXT
+			#      EXTENT. THE ORIGINAL GROUPED BOX IS THE AABB UNION (OFTEN MUCH WIDER), WHICH
+			#      CAUSES classify_region TO MISFIRE AND THE TYPESETTER TO PICK ENORMOUS FONTS.
+			all_pts = np.vstack([line.reshape(-1, 2) for line, _, _ in matched]).astype(np.float32)
+			hull = cv2.convexHull(all_pts)
+			if hull is not None and len(hull) >= 3:
+				hull_pts = hull.reshape(-1, 2).astype(np.float64)
+				region.polygon = [[int(p[0]), int(p[1])] for p in hull_pts]
+				# REDERIVE BOX AND CATEGORY FROM THE HULL'S BOUNDING BOX
+				hx, hy, hw, hh = detect.box_to_xywh(hull_pts)
+				region.box = Box(x=hx, y=hy, w=max(1, hw), h=max(1, hh))
+				region.category = detect.classify_region(hull_pts, page_w, page_h)  # type: ignore[arg-type]
+				region.vertical = detect.is_vertical_box(hull_pts)
 		else:
 			ocr_result = ocr.recognize_crop(ocr.crop_region(img_bgr, box))
 			if ocr_result:
@@ -130,3 +146,20 @@ def encode_png(img_bgr: np.ndarray) -> bytes:
     if not ok:
         raise RuntimeError("failed to encode output image")
     return buf.tobytes()
+
+
+
+def stitch_vertical_images(img_top: np.ndarray, img_bottom: np.ndarray) -> np.ndarray:
+    """STITCH TWO BGR NUMPY IMAGES VERTICALLY.
+    IF WIDTHS DIFFER, RESIZE THE BOTTOM IMAGE TO MATCH THE TOP IMAGE'S WIDTH.
+    """
+    top_h, top_w = img_top.shape[:2]
+    bot_h, bot_w = img_bottom.shape[:2]
+
+    if bot_w != top_w:
+        new_bot_h = max(1, int(bot_h * (top_w / bot_w)))
+        img_bottom = cv2.resize(img_bottom, (top_w, new_bot_h), interpolation=cv2.INTER_AREA)
+
+    return np.vstack([img_top, img_bottom])
+
+

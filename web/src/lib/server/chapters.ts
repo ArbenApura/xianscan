@@ -1,16 +1,20 @@
 // CHAPTER / PAGE CREATION HELPERS — SHARED BY THE API ROUTES.
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join, extname } from 'node:path';
 // IMPORTED DEP-MODULES
 import { error } from '@sveltejs/kit';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
+
 // IMPORTED MODULES
 import { db } from './db';
-import { chapters, pages } from './db/schema';
+import { chapters, pages, regions } from './db/schema';
+
 import { DATA_ROOT } from './paths';
+import type { PipelineClient } from './pipeline-client';
 
 // -- CONSTANTS -- //
+
 
 // ACCEPTED PAGE IMAGE FORMATS (MAGIC-BYTE CHECKED IN uploadImages)
 const ALLOWED_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.avif']);
@@ -92,3 +96,67 @@ export function reorderPages(chapterId: number, pageIds: number[]): void {
 		}
 	});
 }
+
+// MANUALLY STITCH A PAGE WITH THE NEXT PAGE IN THE CHAPTER SEQUENCE.
+export async function stitchPageWithNext(
+	pageId: number,
+	pipeline: PipelineClient,
+	dataRoot: string = DATA_ROOT,
+): Promise<void> {
+	if (!pipeline.stitch) throw new Error('Sidecar stitch operation unavailable.');
+	const [topPage] = db.select().from(pages).where(eq(pages.id, pageId)).all();
+	if (!topPage) throw new Error('Page not found.');
+
+	const [botPage] = db
+		.select()
+		.from(pages)
+		.where(and(eq(pages.chapterId, topPage.chapterId), eq(pages.seq, topPage.seq + 1)))
+		.all();
+
+	if (!botPage) throw new Error('No next page in sequence to stitch with.');
+
+	const topAbs = join(dataRoot, topPage.filePath);
+	const botAbs = join(dataRoot, botPage.filePath);
+
+	const topBytes = readFileSync(topAbs);
+	const botBytes = readFileSync(botAbs);
+
+	const stitched = await pipeline.stitch(topBytes, botBytes);
+	writeFileSync(topAbs, stitched);
+
+	// RESET TOP PAGE PIPELINE STATE & CLEAR OBSOLETE OUTPUTS
+	db.update(pages)
+		.set({
+			status: 'pending',
+			cleanedPath: null,
+			outputPath: null,
+			error: null,
+			width: null,
+			height: null,
+		})
+		.where(eq(pages.id, topPage.id))
+		.run();
+	db.delete(regions).where(eq(regions.pageId, topPage.id)).run();
+
+	// DELETE BOTTOM PAGE FROM DB & DISK
+	db.delete(regions).where(eq(regions.pageId, botPage.id)).run();
+	db.delete(pages).where(eq(pages.id, botPage.id)).run();
+	try {
+		unlinkSync(botAbs);
+	} catch {
+		// ignore if file missing
+	}
+
+	const remainingIds = db
+		.select({ id: pages.id })
+		.from(pages)
+		.where(eq(pages.chapterId, topPage.chapterId))
+		.orderBy(pages.seq)
+		.all()
+		.map((p) => p.id);
+
+	reorderPages(topPage.chapterId, remainingIds);
+}
+
+
+

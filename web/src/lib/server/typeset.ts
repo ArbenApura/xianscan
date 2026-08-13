@@ -47,6 +47,14 @@ const BOX_INSET = 0.10;
 const MAX_LINES = 8;
 const MIN_FONT_SIZE = 8;
 const LINE_HEIGHT = 1.2;
+// ABSOLUTE FONT-SIZE CAP FOR DIALOGUE / MONO REGIONS — PREVENTS A LARGE DETECTED BOX
+// (e.g. A MULTI-LINE BUBBLE WHOSE UNION BOX SPANS MOST OF THE PAGE WIDTH) FROM INFLATING
+// THE TEXT TO FILL THE BOX. SFX IS DELIBERATELY EXCLUDED — BIG SFX IS INTENTIONAL.
+const MAX_DIALOGUE_FONT_SIZE = 42;
+// SFX CAN LEGITIMATELY BE LARGE (IMPACT TEXT), BUT AN UNCAPPED BOX-DERIVED SIZE PRODUCES
+// ABSURD RESULTS WHEN THE REGION BOX IS OVERSIZED (e.g. A WIDE GROUPED PARAGRAPH THAT
+// CLASSIFY_REGION MISLABELS AS SFX). CAP AT A GENEROUS BUT SANE MAXIMUM.
+const MAX_SFX_FONT_SIZE = 100;
 
 // KEYWORDS THAT MARK A LINE AS A RARITY+TYPE LINE
 const RARITY_KEYWORDS = new Set([
@@ -467,7 +475,11 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		const startSize = Math.max(MIN_FONT_SIZE, Math.min(w, h) * (r.category === 'sfx' ? 0.6 : 0.45) * scale);
 
 		// CAP DIALOGUE MAX FONT SIZE SO IT SITS NATURALLY INSIDE THE BUBBLE CONTOUR
-		const maxSize = r.category === 'sfx' ? startSize : Math.max(startSize, Math.min(h * 0.6, startSize * 1.25));
+		// For dialogue/mono: also cap at MAX_DIALOGUE_FONT_SIZE so an oversized bounding box
+		// (e.g. a wide paragraph union box) doesn't inflate text to fill the whole region.
+		const rawMax = r.category === 'sfx' ? startSize : Math.max(startSize, Math.min(h * 0.6, startSize * 1.25));
+		const categoryCap = r.category === 'sfx' ? MAX_SFX_FONT_SIZE : MAX_DIALOGUE_FONT_SIZE;
+		const maxSize = Math.min(rawMax, categoryCap);
 		const size = fitFontSize(ctx, text, font, w, h, startSize, maxSize);
 		ctx.font = `${size}px ${font}`;
 		const maxW = Math.max(10, w * (1 - 2 * BOX_INSET));

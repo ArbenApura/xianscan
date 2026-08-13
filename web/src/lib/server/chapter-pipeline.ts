@@ -15,14 +15,17 @@ import { and, eq } from 'drizzle-orm';
 // IMPORTED TYPES
 import type { TranslationUsage } from '$lib/types';
 // IMPORTED MODULES
-import { bookPair, getEffectiveGlossary } from './glossary';
+import { addNewTerms, bookPair, getEffectiveGlossary } from './glossary';
+import { matchTerms } from './glossary-match';
 import { getCachedPageTranslation, pageCacheKey, savePageTranslation } from './cache';
+
 import type { JobEvent } from './translation-service';
 import type { PipelineClient, PipelineRegion } from './pipeline-client';
 import { db } from './db';
 import { chapters, pages, regions } from './db/schema';
-import { translatePage } from './translate';
+import { extractTerms, translatePage } from './translate';
 import { typesetPage } from './typeset';
+
 
 import { filterWatermarkRegions } from './watermark';
 
@@ -87,12 +90,15 @@ export async function runChapterPipeline(
 
 	const pair = await bookPair(chapter.bookId);
 	const terms = await getEffectiveGlossary(chapter.bookId);
+
 	const pageRows = db
 		.select()
 		.from(pages)
 		.where(eq(pages.chapterId, chapterId))
 		.orderBy(pages.seq)
 		.all();
+
+
 	const model = deps.model;
 
 	for (let i = 0; i < pageRows.length; i++) {
@@ -130,14 +136,37 @@ export async function runChapterPipeline(
 				.map((r) => ({ id: r.id, text: r.text, category: r.category }));
 			const byRegion = new Map<string, string>();
 			if (sources.length > 0) {
-				const cacheKey = pageCacheKey(sources, terms, model ?? 'default', pair, deps.cacheSalt);
+				const pageText = sources.map((s) => s.text).join('\n');
+
+				// 3a) AI AUTO-DETECTION & EXTRACTION OF NEW TERMS
+				try {
+					const { terms: extracted, usage: extUsage } = await extractTerms(pageText, pair, {
+						client: deps.llm,
+						model,
+						signal,
+					});
+					if (extracted.length > 0) {
+						await addNewTerms(chapter.bookId, extracted, chapterId);
+					}
+					if (extUsage && deps.onUsage) deps.onUsage(extUsage);
+				} catch {
+					// AUTO-EXTRACTION IS NON-BLOCKING FOR TRANSLATION
+				}
+
+				// 3b) AHO-CORASICK TERM MATCHING — FILTER TO TERMS PRESENT ON THIS PAGE (+ PINNED)
+				const matched = await matchTerms(chapter.bookId, pageText);
+				const matchedSources = new Set(matched.map((m) => m.source));
+				const currentEffective = await getEffectiveGlossary(chapter.bookId);
+				const pageTerms = currentEffective.filter((t) => t.pinned || matchedSources.has(t.source));
+
+				const cacheKey = pageCacheKey(sources, pageTerms, model ?? 'default', pair, deps.cacheSalt);
 				const cached = getCachedPageTranslation(page.id, cacheKey);
 				let usage: TranslationUsage | null = null;
 				if (cached) {
 					for (const [id, text] of cached.byRegion) byRegion.set(id, text);
 					usage = cached.usage;
 				} else {
-					const translated = await translatePage(sources, terms, pair, {
+					const translated = await translatePage(sources, pageTerms, pair, {
 						client: deps.llm,
 						model,
 						signal,
@@ -148,6 +177,7 @@ export async function runChapterPipeline(
 				}
 				if (usage && deps.onUsage) deps.onUsage(usage);
 			}
+
 
 			// 4) WRITE THE TRANSLATIONS BACK TO THE REGION ROWS
 			const seqById = new Map(analyzed.regions.map((r, idx) => [r.id, idx]));

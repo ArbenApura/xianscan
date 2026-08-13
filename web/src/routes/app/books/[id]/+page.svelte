@@ -158,6 +158,9 @@
 				</div>
 
 				<div class="flex flex-wrap items-center gap-3">
+					<Button variant="outline" on:click={() => goto(`/app/glossary?bookId=${book?.id}`)}>
+						<BookOpen size={16} /> Book Glossary
+					</Button>
 					<Button variant="primary" on:click={() => (createModalOpen = true)}>
 						<Plus size={16} /> New Chapter
 					</Button>

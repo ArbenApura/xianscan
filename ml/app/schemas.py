@@ -61,3 +61,9 @@ class CleanRequestRegion(BaseModel):
             if len(pt) != 2:
                 raise ValueError("polygon points must be [x, y] pairs")
         return v
+
+
+class SeamCheckResponse(BaseModel):
+    split_detected: bool
+    overlap_ratio: float = 0.0
+

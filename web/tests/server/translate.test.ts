@@ -227,3 +227,35 @@ describe('translatePage', () => {
 		expect(seenModel).not.toBe('gpt-4'); // resolveModel FALLS BACK TO THE DEFAULT
 	});
 });
+
+describe('parseExtractedTerms & extractTerms', () => {
+	it('parses valid AI extracted terms JSON array', async () => {
+		const { parseExtractedTerms } = await import('$lib/server/translate');
+		const json = `[
+			{ "source": "叶凡", "target": "Ye Fan", "category": "character", "gender": "masculine", "context": "Protagonist" },
+			{ "source": "紫山", "target": "Purple Mountain", "category": "location", "gender": "neuter" }
+		]`;
+		const terms = parseExtractedTerms(json);
+		expect(terms).toHaveLength(2);
+		expect(terms[0].source).toBe('叶凡');
+		expect(terms[0].target).toBe('Ye Fan');
+		expect(terms[0].category).toBe('character');
+		expect(terms[0].gender).toBe('masculine');
+		expect(terms[0].status).toBe('ai');
+		expect(terms[1].category).toBe('location');
+	});
+
+	it('extractTerms calls client and returns extracted drafts', async () => {
+		const { extractTerms } = await import('$lib/server/translate');
+		const { client } = fakeClient([
+			'[{"source": "姬紫月", "target": "Ji Ziyue", "category": "character", "gender": "feminine"}]'
+		]);
+		const { terms, usage } = await extractTerms('姬紫月来到了紫山', PAIR, { client });
+		expect(terms).toHaveLength(1);
+		expect(terms[0].source).toBe('姬紫月');
+		expect(terms[0].target).toBe('Ji Ziyue');
+		expect(terms[0].gender).toBe('feminine');
+		expect(usage.promptTokens).toBeGreaterThan(0);
+	});
+});
+

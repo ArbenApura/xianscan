@@ -86,7 +86,24 @@ async def clean(image: UploadFile = File(...), regions: str = Form(...)) -> Resp
     return Response(content=pipeline.encode_png(cleaned), media_type="image/png")
 
 
+@app.post("/pages/stitch")
+
+async def stitch(image_top: UploadFile = File(...), image_bottom: UploadFile = File(...)) -> Response:
+    data_top = await image_top.read()
+    data_bot = await image_bottom.read()
+    if not data_top or not data_bot:
+        raise HTTPException(status_code=400, detail="empty upload")
+    try:
+        img_top = pipeline.decode_image(data_top)
+        img_bot = pipeline.decode_image(data_bot)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    stitched = pipeline.stitch_vertical_images(img_top, img_bot)
+    return Response(content=pipeline.encode_png(stitched), media_type="image/png")
+
+
 if __name__ == "__main__":
+
     import uvicorn
 
     uvicorn.run(app, host="127.0.0.1", port=8001)

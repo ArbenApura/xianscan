@@ -90,12 +90,15 @@
 	// REGION INSPECTOR MODAL
 	let inspectPage: Page | null = null;
 	let inspectModalOpen = false;
-	let inspectTab: 'output' | 'cleaned' | 'original' = 'output';
+	let inspectTab: 'output' | 'cleaned' | 'original' | 'bbox' = 'output';
+	/** Seq of the region card currently hovered — highlighted in the Region Map overlay. */
+	let hoveredRegionId: number | null = null;
 
 	// PAGE DELETION
 	let pageToDelete: Page | null = null;
 	let deletePageConfirmOpen = false;
 	let deletingPage = false;
+	let reloadKey = Date.now();
 
 	// -- LIFECYCLES -- //
 
@@ -111,6 +114,7 @@
 			if (!resp.ok) throw new Error('load failed');
 			const data = await resp.json();
 			pages = data.pages;
+			reloadKey = Date.now();
 		} catch {
 			toast.error('Could not load the chapter.');
 		} finally {
@@ -217,9 +221,10 @@
 		viewMode.set(pageId, viewMode.get(pageId) === 'output' ? 'original' : 'output');
 	}
 
-	function openInspector(pg: Page, tab?: 'output' | 'cleaned' | 'original') {
+	function openInspector(pg: Page, tab?: 'output' | 'cleaned' | 'original' | 'bbox') {
 		inspectPage = pg;
 		inspectTab = tab ?? (pg.outputPath ? 'output' : 'original');
+		hoveredRegionId = null;
 		inspectModalOpen = true;
 	}
 
@@ -245,7 +250,26 @@
 		}
 	}
 
+	let stitchingPageId: number | null = null;
+	async function stitchPageWithNext(pageId: number, seq: number) {
+		stitchingPageId = pageId;
+		try {
+			const resp = await fetch(`/api/pages/${pageId}/stitch`, { method: 'POST' });
+			if (!resp.ok) {
+				const err = await resp.json().catch(() => ({ message: 'Stitch failed' }));
+				throw new Error(err.message || 'Stitch failed');
+			}
+			toast.success(`Stitched page ${seq + 1} with page ${seq + 2}.`);
+			await reload();
+		} catch (e) {
+			toast.error((e as Error).message || 'Could not stitch pages.');
+		} finally {
+			stitchingPageId = null;
+		}
+	}
+
 	let currentScrollPage = 1;
+
 
 	function updateCurrentPageOnScroll() {
 		if (activeViewMode !== 'reader' || pages.length === 0 || typeof document === 'undefined') return;
@@ -321,6 +345,19 @@
 
 	$: totalRegions = pages.reduce((sum, p) => sum + p.regions.length, 0);
 	$: translatedPages = pages.filter((p) => p.status === 'done').length;
+
+	/** Extract typed box coords from the region.box field (typed as unknown in the interface). */
+	function getBox(raw: unknown): { x: number; y: number; w: number; h: number } | null {
+		if (!raw || typeof raw !== 'object') return null;
+		const b = raw as Record<string, unknown>;
+		if (!('x' in b)) return null;
+		return {
+			x: Number(b.x ?? 0),
+			y: Number(b.y ?? 0),
+			w: Number(b.w ?? 0),
+			h: Number(b.h ?? 0),
+		};
+	}
 </script>
 
 <svelte:head>
@@ -559,7 +596,7 @@
 						>
 							<!-- IMAGE -->
 							<img
-								src={`/api/pages/${page.id}/file?kind=${webtoonKind === 'output' && page.outputPath ? 'output' : 'original'}`}
+								src={`/api/pages/${page.id}/file?kind=${webtoonKind === 'output' && page.outputPath ? 'output' : 'original'}&v=${reloadKey}`}
 								alt={`Page ${page.seq + 1}`}
 								draggable="false"
 								class="w-full block h-auto object-contain leading-none border-0 p-0 m-0 select-none pointer-events-none"
@@ -578,6 +615,17 @@
 							</div>
 
 							<div class="absolute bottom-3 right-3 flex items-center gap-1.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+								{#if idx < pages.length - 1}
+									<button
+										type="button"
+										on:click={() => stitchPageWithNext(page.id, page.seq)}
+										disabled={stitchingPageId === page.id}
+										class="flex items-center gap-1 rounded-md bg-blue-600/80 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-blue-600 pointer-events-auto disabled:opacity-50"
+										title="Stitch with page {page.seq + 2}"
+									>
+										{stitchingPageId === page.id ? 'Stitching...' : 'Merge Next'}
+									</button>
+								{/if}
 								<button
 									type="button"
 									on:click={() => openInspector(page)}
@@ -647,6 +695,17 @@
 								<Badge variant={statusVariant[page.status]}>
 									{statusLabel[page.status]}
 								</Badge>
+								{#if idx < pages.length - 1}
+									<button
+										type="button"
+										on:click={() => stitchPageWithNext(page.id, page.seq)}
+										disabled={stitchingPageId === page.id}
+										class="rounded px-1.5 py-0.5 text-[10px] font-semibold bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 disabled:opacity-50"
+										title="Stitch with page {page.seq + 2}"
+									>
+										{stitchingPageId === page.id ? 'Stitching...' : 'Merge Next'}
+									</button>
+								{/if}
 								<button
 									type="button"
 									on:click={() => promptDeletePage(page)}
@@ -662,7 +721,7 @@
 						<div class="relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10">
 							{#if page.status === 'done' && page.outputPath}
 								<img
-									src={`/api/pages/${page.id}/file?kind=${viewMode.get(page.id) === 'output' ? 'output' : 'original'}`}
+									src={`/api/pages/${page.id}/file?kind=${viewMode.get(page.id) === 'output' ? 'output' : 'original'}&v=${reloadKey}`}
 									alt={`Page ${page.seq + 1}`}
 									draggable="false"
 									class="w-full object-cover transition-opacity duration-200 select-none"
@@ -677,7 +736,7 @@
 								</button>
 							{:else}
 								<img
-									src={`/api/pages/${page.id}/file?kind=original`}
+									src={`/api/pages/${page.id}/file?kind=original&v=${reloadKey}`}
 									alt={`Page ${page.seq + 1}`}
 									draggable="false"
 									class="w-full object-cover select-none"
@@ -746,6 +805,17 @@
 						</div>
 
 						<div class="flex items-center gap-1.5">
+							{#if idx < pages.length - 1}
+								<button
+									type="button"
+									on:click={() => stitchPageWithNext(page.id, page.seq)}
+									disabled={stitchingPageId === page.id}
+									class="flex items-center gap-1 rounded-md bg-blue-500/10 px-2 py-1 text-xs font-semibold text-blue-600 hover:bg-blue-500/20 disabled:opacity-50"
+									title="Stitch with page {page.seq + 2}"
+								>
+									{stitchingPageId === page.id ? 'Stitching...' : 'Merge Next'}
+								</button>
+							{/if}
 							<button
 								type="button"
 								on:click={() => openInspector(page)}
@@ -773,7 +843,7 @@
 							</div>
 							<div class="group/img relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10">
 								<img
-									src={`/api/pages/${page.id}/file?kind=original`}
+									src={`/api/pages/${page.id}/file?kind=original&v=${reloadKey}`}
 									alt={`Page ${page.seq + 1} Original`}
 									draggable="false"
 									class="w-full h-auto block object-contain select-none"
@@ -811,7 +881,7 @@
 							{#if page.outputPath}
 								<div class="group/img relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10">
 									<img
-										src={`/api/pages/${page.id}/file?kind=output`}
+										src={`/api/pages/${page.id}/file?kind=output&v=${reloadKey}`}
 										alt={`Page ${page.seq + 1} Output`}
 										draggable="false"
 										class="w-full h-auto block object-contain select-none"
@@ -853,17 +923,27 @@
 </div>
 
 <!-- PAGE REGION INSPECTOR MODAL -->
-<Modal open={inspectModalOpen} title={inspectPage ? `Page ${inspectPage.seq + 1} Region Inspector` : 'Inspector'} size="xl" on:close={() => (inspectModalOpen = false)}>
+<Modal
+	open={inspectModalOpen}
+	title={inspectPage ? `Page ${inspectPage.seq + 1} Region Inspector` : 'Inspector'}
+	size="xl"
+	on:close={() => {
+		inspectModalOpen = false;
+		hoveredRegionId = null;
+	}}
+>
 	{#if inspectPage}
+		{@const pw = inspectPage.width}
+		{@const ph = inspectPage.height}
 		<div class="grid grid-cols-1 gap-6 lg:grid-cols-12">
-			<!-- IMAGE PREVIEW COLUMN -->
-			<div class="lg:col-span-7 flex flex-col gap-3">
-				<!-- TAB SWITCHER -->
-				<div class="flex items-center gap-2 text-xs">
+			<!-- IMAGE / OVERLAY COLUMN -->
+			<div class="flex flex-col gap-3 lg:col-span-7">
+				<!-- TAB STRIP -->
+				<div class="flex flex-wrap items-center gap-1.5 text-xs">
 					{#if inspectPage.outputPath}
 						<button
 							type="button"
-							class={`rounded-lg px-3 py-1.5 font-medium transition ${inspectTab === 'output' ? 'bg-[#b23a2e] text-white' : 'bg-black/5 dark:bg-white/5'}`}
+							class={`rounded-lg px-3 py-1.5 font-medium transition ${inspectTab === 'output' ? 'bg-[#b23a2e] text-white' : 'bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10'}`}
 							on:click={() => (inspectTab = 'output')}
 						>
 							Typeset Output
@@ -873,59 +953,226 @@
 					{#if inspectPage.cleanedPath}
 						<button
 							type="button"
-							class={`rounded-lg px-3 py-1.5 font-medium transition ${inspectTab === 'cleaned' ? 'bg-[#b23a2e] text-white' : 'bg-black/5 dark:bg-white/5'}`}
+							class={`rounded-lg px-3 py-1.5 font-medium transition ${inspectTab === 'cleaned' ? 'bg-[#b23a2e] text-white' : 'bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10'}`}
 							on:click={() => (inspectTab = 'cleaned')}
 						>
 							LaMa Cleaned
 						</button>
 					{/if}
 
+					<!-- BUG FIX: was `text-[#b23a2e]` (red text on red bg = invisible). Now `text-white`. -->
 					<button
 						type="button"
-						class={`rounded-lg px-3 py-1.5 font-medium transition ${inspectTab === 'original' ? 'bg-[#b23a2e] text-[#b23a2e]' : 'bg-black/5 dark:bg-white/5'}`}
+						class={`rounded-lg px-3 py-1.5 font-medium transition ${inspectTab === 'original' ? 'bg-[#b23a2e] text-white' : 'bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10'}`}
 						on:click={() => (inspectTab = 'original')}
 					>
 						Original Image
 					</button>
+
+					<!-- REGION MAP — detection bounding boxes overlaid on the original -->
+					<button
+						type="button"
+						class={`rounded-lg px-3 py-1.5 font-medium transition ${inspectTab === 'bbox' ? 'bg-emerald-600 text-white' : 'bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10'}`}
+						on:click={() => (inspectTab = 'bbox')}
+					>
+						🎯 Region Map
+					</button>
 				</div>
 
-				<div class="overflow-hidden rounded-xl border border-black/10 bg-black/5 dark:border-white/10">
-					<img
-						src={`/api/pages/${inspectPage.id}/file?kind=${inspectTab}`}
-						alt={`Page ${inspectPage.seq + 1}`}
-						class="w-full object-contain max-h-[60vh]"
-					/>
-				</div>
+				<!-- PANEL: bbox overlay -->
+				{#if inspectTab === 'bbox'}
+					<div class="relative overflow-hidden rounded-xl border border-black/10 bg-black/5 dark:border-white/10">
+						<img
+							src={`/api/pages/${inspectPage.id}/file?kind=original&v=${reloadKey}`}
+							alt={`Page ${inspectPage.seq + 1} original`}
+							class="block h-auto w-full object-contain"
+							style="max-height: 60vh;"
+						/>
+						{#if pw && ph}
+							<!-- SVG coord space = original pixel dimensions; preserveAspectRatio mirrors object-contain -->
+							<svg
+								class="pointer-events-none absolute inset-0 h-full w-full"
+								viewBox="0 0 {pw} {ph}"
+								preserveAspectRatio="xMidYMid meet"
+								xmlns="http://www.w3.org/2000/svg"
+							>
+								{#each inspectPage.regions as region (region.id)}
+									{@const b = getBox(region.box)}
+									{@const bx = b?.x ?? 0}
+									{@const by = b?.y ?? 0}
+									{@const bw = b?.w ?? 0}
+									{@const bh = b?.h ?? 0}
+									{@const stroke =
+										region.category === 'sfx'
+											? '#f97316'
+											: region.category === 'mono'
+												? '#3b82f6'
+												: region.category === 'other'
+													? '#9ca3af'
+													: '#ef4444'}
+									{@const active = hoveredRegionId === region.id}
+									<!-- Bounding box rect -->
+									<rect
+										x={bx}
+										y={by}
+										width={bw}
+										height={bh}
+										fill={active ? `${stroke}26` : 'none'}
+										stroke={stroke}
+										stroke-width={active ? 6 : 3}
+										rx="6"
+										opacity={active ? 1 : 0.7}
+									/>
+									<!-- Region label: outlined text for readability on any background -->
+									<text
+										x={bx + 6}
+										y={by + 20}
+										font-size="18"
+										font-weight="bold"
+										fill={stroke}
+										stroke="#000"
+										stroke-width="4"
+										paint-order="stroke"
+									>#{region.seq + 1}</text>
+									<!-- Category label -->
+									<text
+										x={bx + 6}
+										y={by + 38}
+										font-size="13"
+										fill={stroke}
+										stroke="#000"
+										stroke-width="3"
+										paint-order="stroke"
+										opacity="0.9"
+									>{region.category}</text>
+								{/each}
+							</svg>
+						{:else}
+							<div class="absolute inset-x-0 bottom-3 flex justify-center">
+								<span class="rounded-lg bg-black/70 px-3 py-1.5 text-[11px] font-medium text-white backdrop-blur">
+									Run the pipeline first to see bounding boxes
+								</span>
+							</div>
+						{/if}
+					</div>
+
+				<!-- PANEL: standard image tab -->
+				{:else}
+					<div class="overflow-hidden rounded-xl border border-black/10 bg-black/5 dark:border-white/10">
+						<img
+							src={`/api/pages/${inspectPage.id}/file?kind=${inspectTab}&v=${reloadKey}`}
+							alt={`Page ${inspectPage.seq + 1}`}
+							class="block h-auto w-full object-contain"
+							style="max-height: 60vh;"
+						/>
+					</div>
+				{/if}
+
+				<!-- PAGE DIMENSIONS CHIP -->
+				{#if pw && ph}
+					<p class="text-[10px] opacity-40 font-mono">{pw} × {ph} px · {inspectPage.regions.length} regions</p>
+				{/if}
 			</div>
 
 			<!-- REGIONS LIST COLUMN -->
-			<div class="lg:col-span-5 flex flex-col gap-3">
-				<h3 class="text-sm font-bold">Detected Text Regions ({inspectPage.regions.length})</h3>
+			<div class="flex flex-col gap-3 lg:col-span-5">
+				<div class="flex items-center justify-between gap-2">
+					<h3 class="text-sm font-bold">
+						Detected Regions ({inspectPage.regions.length})
+					</h3>
+					<!-- CATEGORY LEGEND -->
+					{#if inspectPage.regions.length > 0}
+						<div class="flex flex-wrap items-center gap-1 text-[9px] font-bold">
+							<span class="rounded px-1.5 py-0.5 bg-red-500/10 text-red-600">● dialogue</span>
+							<span class="rounded px-1.5 py-0.5 bg-orange-500/10 text-orange-600">● sfx</span>
+							<span class="rounded px-1.5 py-0.5 bg-blue-500/10 text-blue-600">● mono</span>
+							<span class="rounded px-1.5 py-0.5 bg-gray-500/10 text-gray-500">● other</span>
+						</div>
+					{/if}
+				</div>
 
 				{#if inspectPage.regions.length === 0}
 					<p class="text-xs opacity-60">No text regions detected on this page yet.</p>
 				{:else}
-					<div class="max-h-[60vh] space-y-2.5 overflow-y-auto pr-1">
+					<div class="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
 						{#each inspectPage.regions as region (region.id)}
-							<div class="rounded-lg border border-black/10 bg-black/[0.02] p-3 text-xs dark:border-white/10 dark:bg-white/[0.02]">
-								<div class="flex items-center justify-between font-semibold">
-									<span class="rounded bg-[#b23a2e]/10 px-1.5 py-0.5 text-[10px] text-[#b23a2e] dark:text-[#e08a63]">
+							{@const b = getBox(region.box)}
+							{@const catCls =
+								region.category === 'sfx'
+									? 'text-orange-600 bg-orange-500/10'
+									: region.category === 'mono'
+										? 'text-blue-600 bg-blue-500/10'
+										: region.category === 'other'
+											? 'text-gray-500 bg-gray-500/10'
+											: 'text-[#b23a2e] bg-[#b23a2e]/10 dark:text-[#e08a63]'}
+							<!-- svelte-ignore a11y-no-static-element-interactions -->
+							<div
+								class={`rounded-lg border p-3 text-xs transition-all ${
+									hoveredRegionId === region.id
+										? 'border-[#b23a2e]/50 bg-[#b23a2e]/5 dark:border-[#e08a63]/40 dark:bg-[#e08a63]/5'
+										: 'border-black/10 bg-black/[0.02] dark:border-white/10 dark:bg-white/[0.02] hover:border-black/20 dark:hover:border-white/20'
+								}`}
+								on:mouseenter={() => {
+									hoveredRegionId = region.id;
+									if (inspectTab !== 'bbox') inspectTab = 'bbox';
+								}}
+								on:mouseleave={() => (hoveredRegionId = null)}
+							>
+								<!-- HEADER ROW: category badge + confidence + box size -->
+								<div class="flex items-center justify-between">
+									<span class={`rounded px-1.5 py-0.5 text-[10px] font-bold ${catCls}`}>
 										#{region.seq + 1} {region.category}
 									</span>
-									{#if region.conf !== null}
-										<span class="opacity-50 text-[10px]">Conf: {(region.conf * 100).toFixed(0)}%</span>
-									{/if}
+									<div class="flex items-center gap-2 font-mono text-[10px] opacity-50">
+										{#if region.conf !== null}
+											<span>{(region.conf * 100).toFixed(0)}% conf</span>
+										{/if}
+										{#if b}
+											<span>{b.w}×{b.h}</span>
+										{/if}
+									</div>
 								</div>
 
+								<!-- BOX COORDINATES -->
+								{#if b}
+									<div class="mt-1 font-mono text-[9px] opacity-30">
+										({b.x}, {b.y}) {b.w}×{b.h} px
+									</div>
+								{/if}
+
+								<!-- SOURCE OCR -->
 								<div class="mt-2">
-									<div class="text-[11px] opacity-60">Source OCR:</div>
-									<div class="font-mono text-xs">{region.textSource || '—'}</div>
+									<div class="mb-0.5 text-[10px] opacity-50">Source OCR</div>
+									<div class="flex items-start gap-1">
+										<span class="flex-1 break-words font-mono leading-snug">
+											{region.textSource || '—'}
+										</span>
+										{#if region.textSource}
+											<button
+												type="button"
+												title="Copy source text"
+												class="mt-0.5 flex-shrink-0 rounded p-0.5 opacity-30 transition hover:bg-black/10 hover:opacity-80 dark:hover:bg-white/10"
+												on:click={() => navigator.clipboard?.writeText(region.textSource)}
+											>📋</button>
+										{/if}
+									</div>
 								</div>
 
+								<!-- DEEPSEEK TARGET -->
 								{#if region.textTarget}
-									<div class="mt-2 border-t border-black/[0.04] pt-1.5 dark:border-white/[0.04]">
-										<div class="text-[11px] text-[#b23a2e] dark:text-[#e08a63] font-semibold">DeepSeek Target:</div>
-										<div class="text-xs">{region.textTarget}</div>
+									<div class="mt-2 border-t border-black/[0.05] pt-1.5 dark:border-white/[0.05]">
+										<div class="mb-0.5 text-[10px] font-semibold text-[#b23a2e] dark:text-[#e08a63]">
+											DeepSeek Translation
+										</div>
+										<div class="flex items-start gap-1">
+											<span class="flex-1 break-words leading-snug">{region.textTarget}</span>
+											<button
+												type="button"
+												title="Copy translation"
+												class="mt-0.5 flex-shrink-0 rounded p-0.5 opacity-30 transition hover:bg-black/10 hover:opacity-80 dark:hover:bg-white/10"
+												on:click={() => navigator.clipboard?.writeText(region.textTarget ?? '')}
+											>📋</button>
+										</div>
 									</div>
 								{/if}
 							</div>
@@ -940,6 +1187,7 @@
 		<Button on:click={() => (inspectModalOpen = false)}>Close</Button>
 	</svelte:fragment>
 </Modal>
+
 
 <!-- DELETE PAGE CONFIRMATION -->
 <ConfirmDialog

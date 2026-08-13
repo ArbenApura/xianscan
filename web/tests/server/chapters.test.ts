@@ -78,4 +78,40 @@ describe('nextPageSeq & reorderPages', () => {
 		expect(rows[2].id).toBe(p0.id);
 		expect(rows[2].seq).toBe(2);
 	});
+
+	it('stitchPageWithNext manually merges a page with the next page', async () => {
+		const fs = await import('node:fs');
+		const path = await import('node:path');
+		const os = await import('node:os');
+		const { stitchPageWithNext } = await import('$lib/server/chapters');
+
+		const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'manua-test-'));
+		fs.mkdirSync(path.join(dataRoot, 'uploads', '1'), { recursive: true });
+		fs.writeFileSync(path.join(dataRoot, 'uploads/1/0.png'), Buffer.from('page0'));
+		fs.writeFileSync(path.join(dataRoot, 'uploads/1/1.png'), Buffer.from('page1'));
+
+		seedBook(db, { id: 'b1' });
+		const chapter = seedChapter(db, { id: 1, bookId: 'b1', seq: 0 });
+		const p0 = seedPage(db, { chapterId: chapter.id, seq: 0, filePath: 'uploads/1/0.png' });
+		seedPage(db, { chapterId: chapter.id, seq: 1, filePath: 'uploads/1/1.png' });
+
+		const fakePipeline = {
+			preprocess: async (b: Buffer) => b,
+			analyze: async () => ({ width: 100, height: 100, backend: 'comic-ctd', regions: [] }),
+			clean: async (b: Buffer) => b,
+			health: async () => ({ status: 'ok', detector: 'comic-ctd', inpainter: 'lama' }),
+			stitch: async (top: Buffer, bot: Buffer) => Buffer.concat([top, bot]),
+		};
+
+		await stitchPageWithNext(p0.id, fakePipeline, dataRoot);
+
+		const remaining = db.select().from(pages).where(eq(pages.chapterId, chapter.id)).all();
+		expect(remaining).toHaveLength(1);
+		expect(remaining[0].seq).toBe(0);
+		expect(fs.readFileSync(path.join(dataRoot, remaining[0].filePath)).toString()).toBe('page0page1');
+
+		fs.rmSync(dataRoot, { recursive: true, force: true });
+	});
 });
+
+

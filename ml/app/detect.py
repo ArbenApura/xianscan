@@ -177,14 +177,18 @@ def is_vertical_box(box: np.ndarray) -> bool:
 
 
 def classify_region(box: np.ndarray, page_w: int, page_h: int) -> str:
-	"""CATEGORY HEURISTIC — SFX/IMPACT TEXT HAS BIG GLYPHS: A SINGLE TALL BLOCK OR A WIDE **AND**
-	VERY TALL BLOCK. A MULTI-LINE PARAGRAPH IS TALL BUT ITS LINES ARE SMALL — IT MUST STAY DIALOGUE
-	(THE OLD `h > page_h * 0.1` RULE MISLABELED 3-LINE BUBBLES AS SFX).
+	"""CATEGORY HEURISTIC — SFX/IMPACT TEXT HAS BIG GLYPHS THAT DOMINATE A LARGE AREA.
+	A MULTI-LINE DIALOGUE PARAGRAPH CAN BE TALL BUT IS NARROW — IT MUST STAY 'dialogue'.
+
+	RULE: sfx ONLY WHEN THE BOX IS BOTH TALL AND WIDE:
+	  - h > 30% page_h  AND  w > 20% page_w  (large square-ish impact block), OR
+	  - w > 45% page_w  AND  h > 20% page_h  (wide banner SFX)
+	NARROW+TALL BOXES (multi-line bubbles) ARE ALWAYS 'dialogue'.
 
 	PURE + TESTED; THE WEB APP CAN OVERRIDE PER-REGION LATER.
 	"""
 	_x, _y, w, h = box_to_xywh(box)
-	if h > page_h * 0.3 or (w > page_w * 0.45 and h > page_h * 0.2):
+	if (h > page_h * 0.3 and w > page_w * 0.20) or (w > page_w * 0.45 and h > page_h * 0.2):
 		return "sfx"
 	return "dialogue"
 

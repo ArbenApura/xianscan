@@ -218,3 +218,112 @@ function mergeUsage(acc: TranslationUsage, u: TranslationUsage): void {
 	acc.completionTokens += u.completionTokens;
 	acc.costUsd += u.costUsd;
 }
+
+// -- AI TERM EXTRACTION -- //
+
+export function extractionSystemPrompt(src: string, tgt: string): string {
+	return `You are a professional localizer specializing in ${src} manhua (comics).
+Identify key proper nouns, character names, locations, organizations/sects, martial techniques, items/weapons, cultivation realms, creatures, titles, and concepts from the provided source text.
+
+Rules:
+- Extract terms in source language (${src}) and suggest natural ${tgt} translations.
+- For character names, identify gender ('masculine', 'feminine', or 'neuter').
+- Categorize each term as one of: 'character', 'location', 'organization', 'technique', 'item', 'realm', 'creature', 'title', 'concept', 'other'.
+- Provide a brief context note if helpful.
+
+Return ONLY a JSON array of objects:
+[
+  {
+    "source": "叶凡",
+    "target": "Ye Fan",
+    "category": "character",
+    "gender": "masculine",
+    "context": "Main protagonist"
+  }
+]
+No markdown fences, no extra text.`;
+}
+
+export function parseExtractedTerms(raw: string): TermDraft[] {
+	const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
+	try {
+		const parsed = JSON.parse(cleaned);
+		if (!Array.isArray(parsed)) return [];
+		const validCategories = new Set([
+			'character',
+			'location',
+			'organization',
+			'technique',
+			'item',
+			'realm',
+			'creature',
+			'title',
+			'concept',
+			'other',
+		]);
+		const validGenders = new Set(['neuter', 'masculine', 'feminine']);
+		return parsed
+			.filter(
+				(item) =>
+					item &&
+					typeof item.source === 'string' &&
+					typeof item.target === 'string' &&
+					item.source.trim() &&
+					item.target.trim(),
+			)
+			.map((item) => ({
+				source: item.source.trim(),
+				target: item.target.trim(),
+				category: validCategories.has(item.category) ? item.category : 'other',
+				gender: validGenders.has(item.gender) ? item.gender : 'neuter',
+				context: typeof item.context === 'string' ? item.context.trim() : null,
+				status: 'ai' as const,
+			}));
+	} catch {
+		return [];
+	}
+}
+
+export async function extractTerms(
+	content: string,
+	pair: LangPair,
+	opts: PageTranslationOptions = {},
+): Promise<{ terms: TermDraft[]; usage: TranslationUsage }> {
+	const client = opts.client ?? deepseek;
+	const model = resolveModel(opts.model);
+	const usage = { model, promptTokens: 0, cachedTokens: 0, completionTokens: 0, costUsd: 0 } as TranslationUsage;
+
+	if (!content.trim()) return { terms: [], usage };
+
+	const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+		{ role: 'system', content: extractionSystemPrompt(pair.sourceLang, pair.targetLang) },
+		{ role: 'user', content: `Extract terms from the following text:\n\n${content}` },
+	];
+
+	try {
+		const resp = await queued(() =>
+			withRetry(async () => {
+				return await client.chat.completions.create(
+					{
+						model,
+						messages,
+						temperature: 0.2,
+						max_tokens: 1024,
+						...thinkingParam(),
+					},
+					{ signal: opts.signal },
+				);
+			}),
+		);
+
+		const raw = resp.choices[0]?.message?.content ?? '';
+		const u = computeUsage(resp.usage, model);
+		mergeUsage(usage, u);
+
+		const terms = parseExtractedTerms(raw);
+		return { terms, usage };
+	} catch {
+		return { terms: [], usage };
+	}
+}
+

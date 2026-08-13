@@ -41,6 +41,7 @@ export interface PipelineClient {
 	analyze(image: Buffer, signal?: AbortSignal): Promise<AnalyzeResult>;
 	clean(image: Buffer, regions: CleanRegionInput[], signal?: AbortSignal): Promise<Buffer>;
 	health(): Promise<{ status: string; detector: string; inpainter: string }>;
+	stitch?(imageTop: Buffer, imageBottom: Buffer, signal?: AbortSignal): Promise<Buffer>;
 }
 
 // -- ERRORS -- //
@@ -101,6 +102,16 @@ export class HttpPipelineClient implements PipelineClient {
 		if (!resp.ok) throw new PipelineError(`clean failed (${resp.status}): ${await resp.text()}`, resp.status);
 		return Buffer.from(await resp.arrayBuffer());
 	}
+
+	async stitch(imageTop: Buffer, imageBottom: Buffer, signal?: AbortSignal): Promise<Buffer> {
+		const form = new FormData();
+		form.append('image_top', new Blob([new Uint8Array(imageTop)]), 'top.png');
+		form.append('image_bottom', new Blob([new Uint8Array(imageBottom)]), 'bottom.png');
+		const resp = await this.request('/pages/stitch', { method: 'POST', body: form }, signal);
+		if (!resp.ok) throw new PipelineError(`stitch failed (${resp.status}): ${await resp.text()}`, resp.status);
+		return Buffer.from(await resp.arrayBuffer());
+	}
+
 
 	async health(): Promise<{ status: string; detector: string; inpainter: string }> {
 		const resp = await this.request('/health', { method: 'GET' });
