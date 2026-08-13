@@ -317,7 +317,7 @@ describe('runChapterPipeline', () => {
 		expect(rows[1].textTarget).toBe('BOOM');
 	});
 
-	it('detects & erases watermarks during clean, but excludes them from LLM translation', async () => {
+	it('ignores watermarks and preserves them untouched without inpainting or translation', async () => {
 		const { chapter, page } = seedChapterWithPage('c1-p0.png');
 		let cleanedRegionsPassed: unknown[] = [];
 		const wmPipeline = new FakePipeline();
@@ -342,7 +342,7 @@ describe('runChapterPipeline', () => {
 					create: async (params: { messages: { content: string }[] }) => {
 						llmReceivedSources.push(params.messages[1]?.content || '');
 						return {
-							choices: [{ message: { content: JSON.stringify({ r0: 'Hello' }) } }],
+							choices: [{ message: { content: JSON.stringify({ r0: 'Hello', r1: '' }) } }],
 							usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
 						};
 					},
@@ -355,40 +355,13 @@ describe('runChapterPipeline', () => {
 			() => {},
 		);
 
-		// UNIVERSAL CLEAN PASSES ALL DETECTED REGIONS (2 TOTAL) TO ERASE BOTH DIALOGUE AND WATERMARKS
-		expect(cleanedRegionsPassed).toHaveLength(2);
+		// CLEAN ONLY RECEIVES REGIONS WITH VALID TRANSLATIONS (1 TOTAL — WATERMARK r1 IS LEFT UNTOUCHED)
+		expect(cleanedRegionsPassed).toHaveLength(1);
 
 		const rows = db.select().from(regions).where(eq(regions.pageId, page.id)).orderBy(regions.seq).all();
 		expect(rows).toHaveLength(2);
 		expect(rows[0].textTarget).toBe('Hello');
 		expect(rows[1].textTarget).toBeNull(); // WATERMARK HAS NO TRANSLATED TARGET
-	});
-
-	it('universally inprints all detected text and watermark regions', async () => {
-		const { chapter, page } = seedChapterWithPage('c1-p0.png');
-		let cleanedRegionsPassed: unknown[] = [];
-		const wmPipeline = new FakePipeline();
-		wmPipeline.analyze = async () => ({
-			width: 200,
-			height: 300,
-			backend: 'comic-ctd',
-			regions: [
-				{ id: 'r0', box: { x: 10, y: 10, w: 50, h: 20 }, polygon: [[10, 10]], category: 'dialogue', text: '你好', confidence: 0.9, vertical: false },
-				{ id: 'r1', box: { x: 100, y: 10, w: 90, h: 20 }, polygon: [[100, 10]], category: 'other', text: 'www.baozimh.com', confidence: 0.9, vertical: false },
-			],
-		});
-		wmPipeline.clean = async (_image: Buffer, regionsPassed: unknown[]) => {
-			cleanedRegionsPassed = regionsPassed;
-			return PAGE_PNG;
-		};
-
-		await chapterWork(chapter.id, { pipeline: wmPipeline, dataRoot, llm: fakeLlm({ r0: 'Hello' }) })(
-			new AbortController().signal,
-			() => {},
-		);
-
-		// ALL DETECTED REGIONS ARE PASSED TO CLEAN
-		expect(cleanedRegionsPassed).toHaveLength(2);
 	});
 
 	it('does not re-record spend on translation cache hits', async () => {

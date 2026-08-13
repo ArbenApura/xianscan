@@ -281,9 +281,12 @@ export async function runChapterPipeline(
 						.run();
 				}
 
-				// 5) CLEAN — UNIVERSALLY ERASE ALL DETECTED TEXT & WATERMARK REGIONS WITH LAMA INPAINTING
-				const cleanRegions = analyzed.regions.map((r) => ({ id: r.id, box: r.box, polygon: r.polygon }));
-				const cleaned = await deps.pipeline.clean(image, cleanRegions, signal);
+				// 5) CLEAN — ONLY INPAINT REGIONS WITH TRANSLATIONS TO TYPESET (PRESERVE WATERMARKS UNTOUCHED IN ARTWORK)
+				const cleanRegions = analyzed.regions
+					.filter((r) => Boolean(byRegion.get(r.id)?.trim()))
+					.map((r) => ({ id: r.id, box: r.box, polygon: r.polygon }));
+				const cleaned =
+					cleanRegions.length > 0 ? await deps.pipeline.clean(image, cleanRegions, signal) : image;
 				const cleanPath = `clean/${chapterId}/${page.seq}.png`;
 				const cleanAbs = join(deps.dataRoot, cleanPath);
 				cleanDir(join(deps.dataRoot, 'clean', String(chapterId)));

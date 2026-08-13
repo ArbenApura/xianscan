@@ -410,13 +410,11 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					region.box = Box(x=hx, y=hy, w=max(1, hw), h=max(1, hh))
 				region.category = detect.classify_region(hull_pts, page_w, page_h)  # type: ignore[arg-type]
 				region.vertical = detect.is_vertical_box(hull_pts)
-			# 3. COMPUTE ORIENTATION ANGLE FROM MATCHED OCR LINE ANGLES
+			# 3. COMPUTE ORIENTATION ANGLE FROM MATCHED OCR LINE ANGLES (PARAGRAPH MEDIAN)
 			line_angles = [line_ang for _l, _t, _s, line_ang in matched]
-			non_zero = [a for a in line_angles if abs(a) >= 2.0]
-			if non_zero:
-				region.angle = round(float(np.median(non_zero)), 2)
-			elif line_angles:
-				region.angle = round(float(np.median(line_angles)), 2)
+			if line_angles:
+				med = float(np.median(line_angles))
+				region.angle = 0.0 if abs(med) < 3.0 else round(med, 2)
 		else:
 			ocr_result = ocr.recognize_crop(ocr.crop_region(img_bgr, box))
 			if ocr_result:
@@ -448,8 +446,8 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		# MASK-GUIDED GROWTH: TEXT PIXELS THE BOX EXTRACTION MISSED (e.g. A "......" LINE AT THE
 		# BOTTOM OF A BUBBLE THAT PRODUCED NO BOX) STILL SHOW IN THE DETECTOR'S PROBABILITY MASK —
 		# GROW THE INPAINT POLYGON (AND THE TYPESET BOX) TO COVER THEM, AND REFLECT A GROWN DOTS
-		# LINE IN THE EXTRACTED TEXT.
-		if comic_mask is not None and region.polygon:
+		# LINE IN THE EXTRACTED TEXT. NEVER GROW WATERMARK OR SCANLATION REGIONS INTO STORY TEXT.
+		if comic_mask is not None and region.polygon and not detect._is_watermark_line(region.text):
 			prev_bottom = max(p[1] for p in region.polygon)
 			prev_right = max(p[0] for p in region.polygon)
 			grown = _grow_polygon_by_mask(region.polygon, comic_mask)
@@ -551,6 +549,9 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			area = w * h
 			duplicate = False
 			for k in kept_final:
+				# NEVER LET A WATERMARK OR SCANLATION REGION SUPPRESS A LEGITIMATE STORY DIALOGUE REGION
+				if detect._is_watermark_line(k.text) != detect._is_watermark_line(r.text):
+					continue
 				kx0, ky0, kw, kh = k.box.x, k.box.y, k.box.w, k.box.h
 				karea = kw * kh
 				ix = max(0, min(x0 + w, kx0 + kw) - max(x0, kx0))

@@ -180,7 +180,7 @@ def is_vertical_box(box: np.ndarray) -> bool:
 
 def calculate_box_angle(box: np.ndarray | list[list[int | float]]) -> float:
 	"""CALCULATE ORIENTATION ANGLE IN DEGREES [-90, 90] OF A 4-POINT POLYGON / BOX OR CONTOUR.
-	ANGLES WITH MAGNITUDE < 2.0 DEGREES ARE ROUNDED TO 0.0 TO PREVENT SUBPIXEL BLUR ON HORIZONTAL TEXT.
+	ANGLES WITH MAGNITUDE < 3.0 DEGREES ARE ROUNDED TO 0.0 TO PREVENT SUBPIXEL BLUR ON HORIZONTAL TEXT.
 	"""
 	pts = np.array(box, dtype=np.float32).reshape(-1, 2)
 	if len(pts) < 3:
@@ -206,7 +206,7 @@ def calculate_box_angle(box: np.ndarray | list[list[int | float]]) -> float:
 	while angle_deg < -90.0:
 		angle_deg += 180.0
 
-	if abs(angle_deg) < 2.0:
+	if abs(angle_deg) < 3.0:
 		return 0.0
 
 	return round(angle_deg, 2)
@@ -253,9 +253,11 @@ def line_center_inside(line: np.ndarray, region: np.ndarray) -> bool:
 _URL_RE = re.compile(r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|http)', re.IGNORECASE)
 _CHINESE_RE = re.compile(r'[\u4e00-\u9fa5\u3400-\u4dbf\U00020000-\U0002A6DF\u3000-\u303f\uff00-\uffef\u2026]')
 _WATERMARK_RE = re.compile(
-	r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|http|'
+	r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|\.me|\.tv|\.app|http|'
 	r'速漫|漫库|qumanku|包子|baozimh|colamanga|colamanhua|acloudmerge|oamanhua|'
-	r'yumanhua|mangabox|comick|腾讯|微信|公众号|qq群|严禁转载|独家|扫图|录入|修图)',
+	r'yumanhua|mangabox|comick|腾讯|微信|公众号|qq群|企鹅群|群号|'
+	r'严禁转载|独家|扫图|录入|修图|嵌字|翻译|汉化组|'
+	r'免费漫画|最新免费|漫画网|看漫画|首发|独家首发)',
 	re.IGNORECASE,
 )
 
@@ -341,15 +343,8 @@ def merge_text_lines(
 
 
 def _is_url_or_non_chinese(text: str | None) -> bool:
-	"""Check if text is an English URL or contains zero Chinese characters (e.g. scanlation watermarks)."""
-	if not text:
-		return False
-	trimmed = text.strip()
-	if not trimmed:
-		return False
-	if _URL_RE.search(trimmed):
-		return True
-	return not bool(_CHINESE_RE.search(trimmed))
+	"""Check if text is a watermark, URL, or contains zero Chinese characters (e.g. scanlation watermarks)."""
+	return _is_watermark_line(text)
 
 
 def group_paragraphs(
