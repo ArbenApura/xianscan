@@ -190,5 +190,78 @@ export function resetChapterProgress(chapterId: number): number {
 	return rows.length;
 }
 
+// SMART RE-SLICE CHAPTER PAGES: COMBINE ALL SLICES, CUT AT NATURAL GUTTERS, AND ATOMICALLY SWAP
+export async function resliceChapterPages(
+	chapterId: number,
+	pipeline: PipelineClient,
+	onProgress?: (step: string, message: string, pct: number) => void,
+	signal?: AbortSignal,
+	dataRoot: string = DATA_ROOT,
+): Promise<{ originalCount: number; newCount: number }> {
+	if (!pipeline.reslice) throw new Error('Sidecar reslice operation unavailable.');
+	const pageRows = db
+		.select()
+		.from(pages)
+		.where(eq(pages.chapterId, chapterId))
+		.orderBy(pages.seq)
+		.all();
 
+	if (pageRows.length === 0) throw error(400, 'Chapter has no pages to reslice.');
 
+	onProgress?.('read', `Reading ${pageRows.length} chapter image slices...`, 15);
+	const imageBuffers: Buffer[] = [];
+	for (const p of pageRows) {
+		signal?.throwIfAborted();
+		const absPath = join(dataRoot, p.filePath);
+		imageBuffers.push(readFileSync(absPath));
+	}
+
+	onProgress?.('reslice', 'Stitching continuous canvas & finding optimal non-text gutters...', 45);
+	signal?.throwIfAborted();
+	const slicedBuffers = await pipeline.reslice(imageBuffers, signal);
+	if (slicedBuffers.length === 0) throw new Error('Reslice produced zero pages.');
+
+	onProgress?.('save', `Writing ${slicedBuffers.length} clean pages and rebuilding database...`, 85);
+
+	const uploadDir = join(dataRoot, 'uploads', String(chapterId));
+	mkdirSync(uploadDir, { recursive: true });
+
+	// OLD FILES TO REMOVE AFTER SUCCESS
+	const oldFilePaths = pageRows.map((p) => join(dataRoot, p.filePath));
+
+	const newPageRows: { chapterId: number; seq: number; filePath: string }[] = [];
+	for (let seq = 0; seq < slicedBuffers.length; seq++) {
+		signal?.throwIfAborted();
+		const fileName = `${randomUUID()}.png`;
+		const absPath = join(uploadDir, fileName);
+		writeFileSync(absPath, slicedBuffers[seq]);
+		newPageRows.push({
+			chapterId,
+			seq,
+			filePath: `uploads/${chapterId}/${fileName}`,
+		});
+	}
+
+	// ATOMIC SWAP IN DB
+	db.transaction(() => {
+		for (const p of pageRows) {
+			db.delete(translations).where(eq(translations.pageId, p.id)).run();
+			db.delete(regions).where(eq(regions.pageId, p.id)).run();
+		}
+		db.delete(pages).where(eq(pages.chapterId, chapterId)).run();
+		for (const nr of newPageRows) {
+			db.insert(pages).values(nr).run();
+		}
+	});
+
+	// CLEAN UP OLD UPLOADED IMAGE FILES
+	for (const oldPath of oldFilePaths) {
+		try {
+			unlinkSync(oldPath);
+		} catch {
+			// ignore missing files
+		}
+	}
+
+	return { originalCount: pageRows.length, newCount: slicedBuffers.length };
+}

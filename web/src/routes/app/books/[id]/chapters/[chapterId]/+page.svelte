@@ -24,6 +24,8 @@
 	import ArrowUp from 'lucide-svelte/icons/arrow-up';
 	import GripVertical from 'lucide-svelte/icons/grip-vertical';
 	import Copy from 'lucide-svelte/icons/copy';
+	import Scissors from 'lucide-svelte/icons/scissors';
+	import ResliceModal from '$lib/components/ResliceModal.svelte';
 	import { settings } from '$lib/stores/settings';
 
 	// -- TYPES -- //
@@ -99,6 +101,7 @@
 	let pageToDelete: Page | null = null;
 	let deletePageConfirmOpen = false;
 	let deletingPage = false;
+	let resliceModalOpen = false;
 	let reloadKey = Date.now();
 
 	// -- LIFECYCLES -- //
@@ -606,6 +609,15 @@
 			</div>
 
 			<div class="flex items-center gap-2">
+				<Button
+					variant="secondary"
+					size="sm"
+					disabled={pages.length === 0 || running}
+					on:click={() => (resliceModalOpen = true)}
+				>
+					<Scissors size={14} /> Smart Re-slice
+				</Button>
+
 				<Button
 					variant="secondary"
 					size="sm"
@@ -1316,4 +1328,14 @@
 	variant="danger"
 	on:confirm={confirmClearChapter}
 	on:cancel={() => (clearChapterConfirmOpen = false)}
+/>
+
+<!-- SMART RE-SLICE MODAL -->
+<ResliceModal
+	bind:open={resliceModalOpen}
+	chapterId={Number($page.params.chapterId)}
+	pageCount={pages.length}
+	on:complete={async () => {
+		await reload();
+	}}
 />

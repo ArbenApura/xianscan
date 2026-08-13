@@ -22,6 +22,7 @@
 	export let open = false;
 	export let title = '';
 	export let size: 'sm' | 'md' | 'lg' | 'xl' = 'md';
+	export let closable = true;
 	// PADDING OF THE SCROLLABLE BODY. OVERRIDE (E.G. DROP THE TOP PAD) WHEN THE SLOT HAS ITS OWN STICKY HEADER.
 	export let bodyClass = 'p-5';
 
@@ -46,11 +47,12 @@
 	// -- FUNCTIONS -- //
 
 	function close() {
+		if (!closable) return;
 		dispatch('close');
 	}
 </script>
 
-<svelte:window on:keydown={(e) => open && e.key === 'Escape' && close()} />
+<svelte:window on:keydown={(e) => open && closable && e.key === 'Escape' && close()} />
 
 {#if open}
 	<!-- DIALOG: BOTTOM SHEET ON MOBILE, CENTERED CARD ON DESKTOP. use:scrollLock FREEZES THE PAGE BEHIND. -->
@@ -64,7 +66,7 @@
 		<!-- BACKDROP OVERLAY — NO RIPPLE (A FULL-SCREEN DISMISS SHOULDN'T FLASH A RIPPLE ON CLICK) -->
 		<button
 			class="absolute inset-0 bg-black/40 backdrop-blur-sm"
-			on:click={close}
+			on:click={() => closable && close()}
 			aria-label="Close dialog"
 			tabindex="-1"
 			transition:fade={{ duration: 150 }}
@@ -92,15 +94,17 @@
 				>
 					<h2 id={titleId} class="text-base font-semibold">{title}</h2>
 					<slot name="header" />
-					<!-- CLOSE BUTTON — TRANSLUCENT HOVER READS ON EVERY THEME PANEL -->
-					<button
-						on:click={close}
-						use:ripple
-						class="rounded-lg p-1.5 opacity-50 transition-colors hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"
-						aria-label="Close"
-					>
-						<X size={18} />
-					</button>
+					{#if closable}
+						<!-- CLOSE BUTTON — TRANSLUCENT HOVER READS ON EVERY THEME PANEL -->
+						<button
+							on:click={close}
+							use:ripple
+							class="rounded-lg p-1.5 opacity-50 transition-colors hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/10"
+							aria-label="Close"
+						>
+							<X size={18} />
+						</button>
+					{/if}
 				</header>
 			{/if}
 			<!-- MODAL BODY -->

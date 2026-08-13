@@ -249,6 +249,34 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 	# RAPIDOCR FULL-PAGE DET+REC — ALWAYS RUN (THE UNION'S SECOND OPINION + TEXT SOURCE)
 	rapid_lines = ocr.recognize_full(img_bgr)
+
+	# RECOVER CHINESE TEXT OBSCURED OR COVERED BY COLORED WATERMARK STAMPS (e.g. "点将:" UNDER "COLAMANHUA.com")
+	try:
+		hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+		mask_red1 = cv2.inRange(hsv, np.array([0, 40, 50]), np.array([15, 255, 255]))
+		mask_red2 = cv2.inRange(hsv, np.array([165, 40, 50]), np.array([180, 255, 255]))
+		mask_blue = cv2.inRange(hsv, np.array([85, 40, 50]), np.array([130, 255, 255]))
+		color_wm = mask_red1 | mask_red2 | mask_blue
+		if np.count_nonzero(color_wm) > 500:
+			clean_wm_img = cv2.inpaint(img_bgr, color_wm, 3, cv2.INPAINT_TELEA)
+			clean_lines = ocr.recognize_full(clean_wm_img)
+			for pts, t, s in clean_lines:
+				if detect._CHINESE_RE.search(t) and not detect._is_watermark_line(t):
+					x, y, w, h = detect.box_to_xywh(pts)
+					covered = False
+					for rpts, rt, _rs in rapid_lines:
+						if detect._CHINESE_RE.search(rt) and not detect._is_watermark_line(rt):
+							rx, ry, rw, rh = detect.box_to_xywh(rpts)
+							ix = max(0, min(x + w, rx + rw) - max(x, rx))
+							iy = max(0, min(y + h, ry + rh) - max(y, ry))
+							if ix * iy >= 0.5 * w * h:
+								covered = True
+								break
+					if not covered:
+						rapid_lines.append((pts, t, s))
+	except Exception:
+		pass
+
 	rapid_boxes = [pts for pts, _t, _s in rapid_lines]
 	rapid_scores = [float(s) for _pts, _t, s in rapid_lines]
 

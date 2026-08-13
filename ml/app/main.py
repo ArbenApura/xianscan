@@ -106,6 +106,45 @@ def stitch(image_top: UploadFile = File(...), image_bottom: UploadFile = File(..
     return Response(content=pipeline.encode_png(stitched), media_type="image/png")
 
 
+@app.post("/pages/reslice")
+def reslice_pages(files: list[UploadFile] = File(...)) -> Response:
+    """STITCH MULTIPLE WEBTOON SLICES AND RE-SLICE AT NATURAL NON-TEXT GUTTERS."""
+    import io
+    import zipfile
+    from . import reslice
+
+    if not files:
+        raise HTTPException(status_code=400, detail="no files provided")
+
+    images = []
+    for f in files:
+        data = f.file.read()
+        if not data:
+            continue
+        try:
+            img = pipeline.decode_image(data)
+            images.append(img)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if not images:
+        raise HTTPException(status_code=400, detail="no valid images provided")
+
+    sliced = reslice.smart_reslice_chapter(images)
+
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for idx, page in enumerate(sliced):
+            png_bytes = pipeline.encode_png(page)
+            zf.writestr(f"{idx}.png", png_bytes)
+
+    return Response(
+        content=zip_buf.getvalue(),
+        media_type="application/zip",
+        headers={"X-Slice-Count": str(len(sliced))},
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
 

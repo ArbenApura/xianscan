@@ -1,8 +1,5 @@
-// ML SIDECAR HTTP CLIENT — THE WEB APP'S ONLY TOUCHPOINT WITH THE PYTHON SERVICE.
-//
-// DESIGN: THE PipelineClient INTERFACE IS WHAT THE CHAPTER RUNNER DEPENDS ON — TESTS INJECT A FAKE;
-// PRODUCTION USES HttpPipelineClient (ML_BASE_URL FROM ENV). THE FAKE NEEDS NO MOCKS AT ALL.
 import { env } from '$env/dynamic/private';
+import { unzipSync } from 'fflate';
 
 // -- TYPES -- //
 
@@ -42,6 +39,7 @@ export interface PipelineClient {
 	clean(image: Buffer, regions: CleanRegionInput[], signal?: AbortSignal): Promise<Buffer>;
 	health(): Promise<{ status: string; detector: string; inpainter: string }>;
 	stitch?(imageTop: Buffer, imageBottom: Buffer, signal?: AbortSignal): Promise<Buffer>;
+	reslice?(images: Buffer[], signal?: AbortSignal): Promise<Buffer[]>;
 }
 
 // -- ERRORS -- //
@@ -112,6 +110,24 @@ export class HttpPipelineClient implements PipelineClient {
 		return Buffer.from(await resp.arrayBuffer());
 	}
 
+	async reslice(images: Buffer[], signal?: AbortSignal): Promise<Buffer[]> {
+		const form = new FormData();
+		for (let i = 0; i < images.length; i++) {
+			form.append('files', new Blob([new Uint8Array(images[i])]), `slice_${i}.png`);
+		}
+		const resp = await this.request('/pages/reslice', { method: 'POST', body: form }, signal);
+		if (!resp.ok) throw new PipelineError(`reslice failed (${resp.status}): ${await resp.text()}`, resp.status);
+		const zipBuf = Buffer.from(await resp.arrayBuffer());
+		const unzipped = unzipSync(new Uint8Array(zipBuf));
+		const keys = Object.keys(unzipped)
+			.filter((k) => k.endsWith('.png'))
+			.sort((a, b) => {
+				const numA = parseInt(a.replace(/\.png$/, ''), 10);
+				const numB = parseInt(b.replace(/\.png$/, ''), 10);
+				return numA - numB;
+			});
+		return keys.map((k) => Buffer.from(unzipped[k]));
+	}
 
 	async health(): Promise<{ status: string; detector: string; inpainter: string }> {
 		const resp = await this.request('/health', { method: 'GET' });

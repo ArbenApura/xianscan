@@ -210,6 +210,59 @@ describe('nextPageSeq & reorderPages', () => {
 		const rows = db.select().from(pages).where(eq(pages.chapterId, chapter.id)).orderBy(pages.seq).all();
 		expect(rows.every((r) => r.status === 'pending' && r.outputPath === null && r.error === null)).toBe(true);
 	});
+
+	it('resliceChapterPages combines slices and swaps them for newly sliced pages', async () => {
+		const fs = await import('node:fs');
+		const path = await import('node:path');
+		const os = await import('node:os');
+		const { resliceChapterPages } = await import('$lib/server/chapters');
+
+		const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'manua-reslice-'));
+		fs.mkdirSync(path.join(dataRoot, 'uploads', '1'), { recursive: true });
+		fs.writeFileSync(path.join(dataRoot, 'uploads/1/s0.png'), Buffer.from('slice0'));
+		fs.writeFileSync(path.join(dataRoot, 'uploads/1/s1.png'), Buffer.from('slice1'));
+		fs.writeFileSync(path.join(dataRoot, 'uploads/1/s2.png'), Buffer.from('slice2'));
+
+		seedBook(db, { id: 'b1' });
+		const chapter = seedChapter(db, { id: 1, bookId: 'b1', seq: 0 });
+		seedPage(db, { chapterId: chapter.id, seq: 0, filePath: 'uploads/1/s0.png' });
+		seedPage(db, { chapterId: chapter.id, seq: 1, filePath: 'uploads/1/s1.png' });
+		seedPage(db, { chapterId: chapter.id, seq: 2, filePath: 'uploads/1/s2.png' });
+
+		const fakePipeline = {
+			preprocess: async (b: Buffer) => b,
+			analyze: async () => ({ width: 100, height: 100, backend: 'comic-ctd', regions: [] }),
+			clean: async (b: Buffer) => b,
+			health: async () => ({ status: 'ok', detector: 'mock', inpainter: 'mock' }),
+			reslice: async (images: Buffer[]) => {
+				expect(images).toHaveLength(3);
+				return [Buffer.from('pageA'), Buffer.from('pageB')]; // 3 SLICES -> 2 CLEAN PAGES
+			},
+		};
+
+		const stepsLogged: string[] = [];
+		const result = await resliceChapterPages(
+			chapter.id,
+			fakePipeline,
+			(step) => stepsLogged.push(step),
+			undefined,
+			dataRoot,
+		);
+
+		expect(result).toEqual({ originalCount: 3, newCount: 2 });
+		expect(stepsLogged).toContain('read');
+		expect(stepsLogged).toContain('reslice');
+		expect(stepsLogged).toContain('save');
+
+		const newPages = db.select().from(pages).where(eq(pages.chapterId, chapter.id)).orderBy(pages.seq).all();
+		expect(newPages).toHaveLength(2);
+		expect(newPages[0].seq).toBe(0);
+		expect(newPages[1].seq).toBe(1);
+
+		// DISK FILES CREATED
+		expect(fs.readFileSync(path.join(dataRoot, newPages[0].filePath)).toString()).toBe('pageA');
+		expect(fs.readFileSync(path.join(dataRoot, newPages[1].filePath)).toString()).toBe('pageB');
+
+		fs.rmSync(dataRoot, { recursive: true, force: true });
+	});
 });
-
-
