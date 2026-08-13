@@ -23,18 +23,24 @@ describe('watermark detection & filtering', () => {
 		expect(isWatermarkText('QQ群: 12345678')).toBe(true);
 	});
 
-	it('does not flag normal dialogue as watermarks', () => {
+	it('does not flag Chinese dialogue as watermarks', () => {
 		expect(isWatermarkText('你好，少年！')).toBe(false);
 		expect(isWatermarkText('这一剑，斩断过去！')).toBe(false);
-		expect(isWatermarkText('Wait for me!')).toBe(false);
-		expect(isWatermarkText('Boom!!')).toBe(false);
+		expect(isWatermarkText('爹爹！爹爹！')).toBe(false);
+		expect(isWatermarkText('起床啦！')).toBe(false);
+	});
+
+	it('flags non-Chinese / English texts and domain watermarks as non-translatable watermarks', () => {
+		expect(isWatermarkText('yumanhuaku.com')).toBe(true);
+		expect(isWatermarkText('SPEED MANGA LIBRARY')).toBe(true);
+		expect(isWatermarkText('漫库')).toBe(true);
 	});
 
 	it('supports custom user-defined watermark patterns', () => {
 		const custom = ['custom-scan', 'xian-site'];
 		expect(isWatermarkText('Downloaded from custom-scan', custom)).toBe(true);
 		expect(isWatermarkText('Visit xian-site today', custom)).toBe(true);
-		expect(isWatermarkText('Normal text', custom)).toBe(false);
+		expect(isWatermarkText('这是普通文本', custom)).toBe(false);
 	});
 
 	it('correctly partitions pipeline regions into translation vs watermark regions', () => {

@@ -238,6 +238,34 @@ class TestGroupParagraphs:
 		merged, _ = group_paragraphs([l1, l2], [0.8, 0.7])
 		assert len(merged) == 2
 
+	def test_keeps_stacked_bubbles_with_different_font_sizes_separate(self):
+		# A DIALOGUE BUBBLE (h=50) DIRECTLY ABOVE AN SFX BUBBLE (h=110): X-OVERLAPPING AND A TIGHT
+		# GAP (10 ≤ 0.3×50) — THE OLD GEOMETRY RULES MERGED THEM INTO ONE PARAGRAPH. THE FONT-SIZE
+		# GATE MUST KEEP THEM APART (MERGING TWO DIFFERENT-SIZED STACKED BUBBLES IS AN ERROR).
+		l1 = self.box(150, 100, 300, 50)
+		l2 = self.box(160, 160, 280, 110)
+		merged, _ = group_paragraphs([l1, l2], [0.8, 0.7])
+		assert len(merged) == 2
+
+	def test_groups_stacked_lines_with_similar_font_sizes(self):
+		# SAME BUBBLE, TWO LINES: HEIGHTS 50 VS 52 (RATIO 1.04 ≤ 1.35) → ONE PARAGRAPH
+		l1 = self.box(150, 100, 300, 50)
+		l2 = self.box(200, 160, 200, 52)
+		merged, _ = group_paragraphs([l1, l2], [0.8, 0.7])
+		assert len(merged) == 1
+
+	def test_groups_narration_lines_spanning_background_transitions(self):
+		# NARRATION PARAGRAPH (5 LINES) WITH TIGHT INSIDE-BUBBLE LEADING (gap=5 ≤ 0.45×16).
+		# ALL 5 LINES MUST GROUP INTO ONE UNIFIED PARAGRAPH REGION.
+		l1 = self.box(80, 500, 320, 24)
+		l2 = self.box(80, 528, 340, 24)
+		l3 = self.box(80, 556, 350, 24)
+		l4 = self.box(80, 584, 310, 24)
+		l5 = self.box(80, 612, 120, 24)
+		merged, _ = group_paragraphs([l1, l2, l3, l4, l5], [0.8, 0.8, 0.8, 0.8, 0.8])
+		assert len(merged) == 1
+		assert box_to_xywh(merged[0]) == (80, 500, 350, 136)
+
 	def test_never_groups_vertical_columns(self):
 		c1 = self.box(100, 50, 20, 120)
 		c2 = self.box(120, 180, 20, 120)

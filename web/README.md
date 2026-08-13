@@ -52,6 +52,8 @@ cd ../web && npm run dev                                                 # app �
 
 `.env` (web/): `ML_BASE_URL=http://127.0.0.1:8001`, `DEEPSEEK_API_KEY=sk-…`,
 `DEEPSEEK_MODEL=deepseek-v4-flash` (or `-pro`), `DATA_ROOT=./data` (optional).
+`PIPELINE_PAGE_CONCURRENCY=3` (optional) — pages processed concurrently per pipeline phase;
+raise it on high-core machines (the sidecar serves each request on a threadpool thread).
 
 No API key? Set `DEEPSEEK_BASE_URL=http://127.0.0.1:8010` and run
 `node scripts/mock-llm.mjs` for a local fake translator — the full pipeline works end to end.

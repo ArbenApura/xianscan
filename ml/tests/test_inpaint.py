@@ -1,11 +1,16 @@
-# INPAINTING TESTS — MASK BUILDING (PURE) + THE OPENCV BACKEND ACTUALLY ERASING SYNTHETIC TEXT.
+# INPAINTING TESTS — MASK BUILDING + LAMA ONNX SESSION + FACTORY AND ERROR HANDLING.
 from __future__ import annotations
+
+import threading
+import time
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from app import config
+from app import config, inpaint
 from app.inpaint import Inpainter, build_mask, get_inpainter, polygon_from_box
+from app.lama import LamaInpainter
 
 
 class TestBuildMask:
@@ -37,36 +42,84 @@ class TestPolygonFromBox:
 		assert poly.tolist() == [[10, 20], [110, 20], [110, 70], [10, 70]]
 
 
-class TestOpenCvBackend:
-	def test_erases_dark_text_on_white(self):
-		# SYNTHETIC "TEXT": DARK PIXELS ON WHITE — AFTER INPAINT THE REGION MUST BE MOSTLY WHITE
-		img = np.full((200, 200, 3), 255, dtype=np.uint8)
-		img[80:120, 60:140] = (10, 10, 10)
-		mask = build_mask(200, 200, [polygon_from_box(60, 80, 80, 40)], dilate_px=3)
+class TestLamaOnnxInpainter:
+	def test_onnx_inpainter_call(self, monkeypatch):
+		mock_session = MagicMock()
+		mock_session.get_inputs.return_value = [
+			MagicMock(name="image", shape=[1, 3, 64, 64]),
+			MagicMock(name="mask", shape=[1, 1, 64, 64]),
+		]
+		mock_session.get_inputs.return_value[0].name = "image"
+		mock_session.get_inputs.return_value[1].name = "mask"
 
-		out = Inpainter(backend="opencv")(img, mask)
+		# Mock output matching (1, 3, H_padded, W_padded)
+		def fake_run(output_names, input_feed):
+			img_tensor = input_feed["image"]
+			return [img_tensor]
 
-		region = out[80:120, 60:140]
-		mean = region.mean()
-		assert mean > 200, f"text region should be mostly white after inpainting, mean={mean}"
+		mock_session.run.side_effect = fake_run
 
-	def test_no_mask_returns_image(self):
-		img = np.full((50, 50, 3), 128, dtype=np.uint8)
-		mask = np.zeros((50, 50), dtype=np.uint8)
-		out = Inpainter(backend="opencv")(img, mask)
-		np.testing.assert_array_equal(out, img)
+		monkeypatch.setattr("onnxruntime.InferenceSession", lambda *args, **kwargs: mock_session)
+
+		inpainter = LamaInpainter("dummy_path.onnx")
+		img = np.full((60, 60, 3), 200, dtype=np.uint8)
+		mask = np.zeros((60, 60), dtype=np.uint8)
+		mask[10:20, 10:20] = 255
+
+		out = inpainter(img, mask)
+		assert out.shape == (60, 60, 3)
+		assert out.dtype == np.uint8
+
+
+class TestInpainterUnsupported:
+	def test_raises_runtime_error_when_unsupported(self):
+		inpainter = Inpainter(backend="unsupported")
+		assert not inpainter.available()
+		img = np.full((50, 50, 3), 255, dtype=np.uint8)
+		mask = np.ones((50, 50), dtype=np.uint8) * 255
+		with pytest.raises(RuntimeError, match="Inpainting is not supported"):
+			inpainter(img, mask)
 
 
 class TestInpainterFactory:
-	def test_falls_back_to_opencv_when_weights_missing(self, monkeypatch):
-		# THE SUITE RUNS WITHOUT MODELS — THE FACTORY MUST NEVER CRASH, ALWAYS RETURN AN INPAINTER.
-		monkeypatch.setattr(config, "LAMA_MODEL_PATH", config.MODELS_DIR / "definitely-missing.pt")
-		# RESET THE CACHED LOAD ATTEMPT SO THE MONKEYPATCHED PATH IS ACTUALLY CONSULTED
-		from app import inpaint as inpaint_mod
-
-		monkeypatch.setattr(inpaint_mod, "_lama_model", None)
-		monkeypatch.setattr(inpaint_mod, "_lama_tried", False)
-		assert get_inpainter().backend == "opencv"
+	def test_returns_unsupported_when_weights_missing(self, monkeypatch):
+		monkeypatch.setattr(config, "LAMA_MODEL_PATH", config.MODELS_DIR / "definitely-missing.onnx")
+		monkeypatch.setattr(inpaint, "_lama_model", None)
+		monkeypatch.setattr(inpaint, "_lama_ready", threading.Event())
+		assert get_inpainter().backend == "unsupported"
+		assert not get_inpainter().available()
 
 	def test_factory_returns_inpainter_instance(self):
 		assert isinstance(get_inpainter(), Inpainter)
+
+	def test_concurrent_loaders_synchronize_load(self, monkeypatch):
+		from app import lama
+
+		class SlowFakeLama:
+			def __init__(self, path: str) -> None:
+				time.sleep(0.3)
+				self.path = path
+
+		from pathlib import Path
+
+		monkeypatch.setattr(config, "LAMA_MODEL_PATH", config.MODELS_DIR / "test_fake.onnx")
+		monkeypatch.setattr(Path, "exists", lambda self: True)
+		monkeypatch.setattr(inpaint, "_lama_model", None)
+		monkeypatch.setattr(inpaint, "_lama_ready", threading.Event())
+		monkeypatch.setattr(lama, "LamaInpainter", SlowFakeLama)
+
+		results: list[object] = []
+		barrier = threading.Barrier(5)
+
+		def worker() -> None:
+			barrier.wait()
+			results.append(inpaint._get_lama())
+
+		threads = [threading.Thread(target=worker) for _ in range(5)]
+		for t in threads:
+			t.start()
+		for t in threads:
+			t.join()
+
+		assert all(r is not None for r in results)
+		assert len({id(r) for r in results}) == 1

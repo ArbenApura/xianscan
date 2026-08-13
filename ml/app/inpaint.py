@@ -1,19 +1,21 @@
-# INPAINTING — TEXT ERASURE ON THE CLEANED PAGE.
+# INPAINTING — TEXT ERASURE ON THE CLEANED PAGE VIA LaMa ONNX.
 #
-# TWO BACKENDS, SELECTED AT PROCESS START:
-#   'lama'   — LaMa big-lama (apache-2.0) VIA DIRECT TORCHSCRIPT INFERENCE (app/lama.py). BEST
-#              QUALITY; ~200MB WEIGHTS IN models/big-lama.pt (download_models.py). FALLS BACK TO
-#              OPENCV WHEN TORCH OR THE WEIGHTS ARE MISSING.
-#   'opencv' — cv2.inpaint TELEA. ZERO EXTRA DEPS, FAST ON CPU, FINE FOR SOLID BUBBLES; THE
-#              GUARANTEED FALLBACK ON EVERY MACHINE.
+# RUNS LaMa ONNX DIRECTLY ON CPU/GPU VIA onnxruntime.
+# NOTE: THE DEGRADED OpenCV TELEA FALLBACK HAS BEEN REMOVED — IF THE ONNX WEIGHTS ARE NOT
+# PRESENT, INPAINTING IS MARKED AS "unsupported" AND EXPLICIT ERRORS ARE RAISED INSTEAD OF
+# SILENTLY CORRUPTING ARTWORK.
 from __future__ import annotations
 
+import logging
+import threading
 from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
 from . import config
+
+logger = logging.getLogger(__name__)
 
 # -- TYPES -- #
 
@@ -22,11 +24,17 @@ from . import config
 class Inpainter:
 	backend: str
 
+	def available(self) -> bool:
+		return self.backend == "lama-onnx"
+
 	def __call__(self, img_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
 		"""FILL `mask` REGIONS (255 = ERASE) IN img_bgr. RETURNS A NEW IMAGE."""
-		if self.backend == "lama":
-			return _lama_inpaint(img_bgr, mask)
-		return _opencv_inpaint(img_bgr, mask)
+		if not self.available():
+			raise RuntimeError(
+				"Inpainting is not supported: LaMa ONNX model is not available. "
+				"Please run `python scripts/download_models.py` to download models/lama.onnx."
+			)
+		return _lama_inpaint(img_bgr, mask)
 
 
 # -- PURE HELPERS (UNIT-TESTED) -- #
@@ -55,40 +63,46 @@ def polygon_from_box(x: int, y: int, w: int, h: int) -> np.ndarray:
 # -- BACKENDS -- #
 
 _lama_model = None
-_lama_tried = False
+_lama_lock = threading.Lock()
+_lama_ready = threading.Event()  # SET ONCE THE FIRST LOAD ATTEMPT COMPLETES (SUCCESS OR FAILURE)
+
+
+def available_backend() -> str:
+	"""WEIGHTS-PRESENCE CHECK WITHOUT LOADING — /health MUST STAY FAST."""
+	return "lama-onnx" if config.LAMA_MODEL_PATH.exists() else "unsupported"
 
 
 def _get_lama():
-	"""LAZY-LOAD THE TorchScript MODEL ONCE. RETURNS None IF TORCH OR THE WEIGHTS ARE MISSING."""
-	global _lama_model, _lama_tried
-	if _lama_tried:
+	"""LAZY-LOAD THE ONNX MODEL ONCE. RETURNS None IF THE WEIGHTS ARE MISSING OR FAIL TO LOAD."""
+	global _lama_model
+	if _lama_ready.is_set():
 		return _lama_model
-	_lama_tried = True
-	try:
-		if not config.LAMA_MODEL_PATH.exists():
-			return None
-		from .lama import LamaInpainter
+	with _lama_lock:
+		if not _lama_ready.is_set():
+			try:
+				if config.LAMA_MODEL_PATH.exists():
+					from .lama import LamaInpainter
 
-		_lama_model = LamaInpainter(str(config.LAMA_MODEL_PATH))
-	except Exception:
-		# TORCH MISSING / CORRUPT WEIGHTS / ANY LOAD PROBLEM → OPENCV FALLBACK
-		_lama_model = None
+					_lama_model = LamaInpainter(str(config.LAMA_MODEL_PATH))
+			except Exception as e:
+				logger.warning("Failed to initialize LaMa ONNX inpainter: %s", e)
+				_lama_model = None
+			_lama_ready.set()
 	return _lama_model
 
 
 def _lama_inpaint(img_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
 	model = _get_lama()
 	if model is None:
-		return _opencv_inpaint(img_bgr, mask)
+		raise RuntimeError(
+			"Inpainting is not supported: LaMa ONNX model is not available. "
+			"Please run `python scripts/download_models.py` to download models/lama.onnx."
+		)
 	return model(img_bgr, mask)
 
 
-def _opencv_inpaint(img_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
-	return cv2.inpaint(img_bgr, mask, 3, cv2.INPAINT_TELEA)
-
-
 def get_inpainter() -> Inpainter:
-	"""FACTORY — LAMA WHEN USABLE, OPENCV OTHERWISE (GUARANTEED NON-NONE)."""
-	if _get_lama() is not None:
-		return Inpainter(backend="lama")
-	return Inpainter(backend="opencv")
+	"""FACTORY — RETURNS Inpainter (backend='lama-onnx' WHEN MODEL EXISTS, 'unsupported' OTHERWISE)."""
+	if config.LAMA_MODEL_PATH.exists():
+		return Inpainter(backend="lama-onnx")
+	return Inpainter(backend="unsupported")

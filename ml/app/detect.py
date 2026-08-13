@@ -13,6 +13,8 @@
 #   SCALE TO ORIGINAL DIMENSIONS, RESIZE MASK BACK TO ORIGINAL SIZE.
 from __future__ import annotations
 
+import re
+import threading
 from dataclasses import dataclass, field
 
 import cv2
@@ -219,12 +221,14 @@ def merge_text_lines(
 	scores: list[float],
 	gap_factor: float = 1.0,
 	overlap_min: float = 0.5,
+	height_sim_max: float = 2.0,
 ) -> tuple[list[np.ndarray], list[float]]:
 	"""MERGE HORIZONTAL TEXT BOXES THAT SIT ON THE SAME LINE (PORT OF manga-image-translator's
 	textline_merge CONCEPT — THE DB REPRESENTER SPLITS ONE LINE WHEREVER THE LINE MAP DIPS).
 
 	RULE (PURE — UNIT-TESTED):
 	  - SAME LINE: VERTICAL OVERLAP ≥ overlap_min × min(heights)
+	  - SAME FONT SIZE: HEIGHTS MATCH (max/min ≤ height_sim_max)
 	  - MERGE WHEN: HORIZONTAL GAP ≤ gap_factor × max(heights) — A NEGATIVE GAP (OVERLAP) ALWAYS MERGES
 	  - VERTICAL TEXT COLUMNS (h > 1.2×w) ARE NEVER MERGED — SIDE-BY-SIDE COLUMNS LOOK IDENTICAL
 	    TO SAME-LINE BOXES BY THIS RULE AND MUST STAY SEPARATE REGIONS
@@ -244,11 +248,14 @@ def merge_text_lines(
 		placed = False
 		for ln in lines:
 			lx0, ly0, lx1, ly1, lscore = ln
-			min_h = min(h, ly1 - ly0)
+			lh = ly1 - ly0
+			min_h = min(h, lh)
+			if max(h, lh) / max(1.0, float(min_h)) > height_sim_max:
+				continue
 			overlap = min(y1, ly1) - max(y, ly0)
 			if overlap < overlap_min * min_h:
 				continue
-			if x - lx1 <= gap_factor * max(h, ly1 - ly0):
+			if x - lx1 <= gap_factor * max(h, lh):
 				ln[0] = min(lx0, x)
 				ln[1] = min(ly0, y)
 				ln[2] = max(lx1, x1)
@@ -266,11 +273,29 @@ def merge_text_lines(
 	return merged, mscores
 
 
+_URL_RE = re.compile(r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|http)', re.IGNORECASE)
+_CHINESE_RE = re.compile(r'[\u4e00-\u9fa5\u3400-\u4dbf\U00020000-\U0002A6DF]')
+
+
+def _is_url_or_non_chinese(text: str | None) -> bool:
+	"""Check if text is an English URL or contains zero Chinese characters (e.g. scanlation watermarks)."""
+	if not text:
+		return False
+	trimmed = text.strip()
+	if not trimmed:
+		return False
+	if _URL_RE.search(trimmed):
+		return True
+	return not bool(_CHINESE_RE.search(trimmed))
+
+
 def group_paragraphs(
 	boxes: list[np.ndarray],
 	scores: list[float],
-	overlap_min: float = 0.35,
-	gap_factor: float = 0.3,
+	texts: list[str] | None = None,
+	overlap_min: float = 0.20,
+	gap_factor: float = 0.45,
+	height_sim_max: float = 1.50,
 ) -> tuple[list[np.ndarray], list[float]]:
 	"""GROUP VERTICALLY STACKED TEXT LINES INTO PARAGRAPHS (A MULTI-LINE SPEECH BUBBLE).
 
@@ -280,48 +305,73 @@ def group_paragraphs(
 	  - SAME PARAGRAPH: THE NEXT LINE'S X-RANGE OVERLAPS THE PREVIOUS LINE'S BY ≥ overlap_min
 	    × min(widths) (BUBBLE LINES ARE ROUGHLY CENTER-ALIGNED), AND
 	  - THE VERTICAL GAP BETWEEN THEM IS ≤ gap_factor × min(heights) (BUBBLE LEADING IS TIGHT;
-	    THE GAP BETWEEN SEPARATE BUBBLES IS LARGER).
+	    THE GAP BETWEEN SEPARATE BUBBLES IS LARGER), AND
+	  - SAME FONT SIZE: LINE HEIGHTS MATCH (max/min ≤ height_sim_max). TWO BUBBLES STACKED
+	    VERTICALLY WITH DIFFERENT FONT SIZES (e.g. A SMALL DIALOGUE BUBBLE ABOVE A LARGE NARRATION)
+	    MUST STAY SEPARATE REGIONS, AND
+	  - WATERMARK / URL SEPARATION: ENGLISH SCANLATION URLS (.com, .net) OR NON-CHINESE STAMPS
+	    NEVER GROUP INTO CHINESE DIALOGUE BUBBLES.
 	VERTICAL TEXT COLUMNS (h > 1.2×w) NEVER GROUP — EACH COLUMN IS ITS OWN PARAGRAPH.
 	RETURNS (paragraph_boxes, scores) — THE UNION BOX PER PARAGRAPH; STANDALONE LINES UNCHANGED.
 	"""
 	if not boxes:
 		return [], []
+	if texts is None:
+		texts = [''] * len(boxes)
 	# VERTICAL COLUMNS ARE THEIR OWN PARAGRAPHS (NEVER GROUPED); HORIZONTAL LINES GROUP BY GEOMETRY
 	paragraphs: list[list[np.ndarray]] = []
 	para_scores: list[float] = []
-	for box, score in zip(boxes, scores):
+	para_is_url: list[bool] = []
+
+	for box, score, txt in zip(boxes, scores, texts):
 		x, y, w, h = box_to_xywh(box)
 		if h > w * 1.2:
 			paragraphs.append([box])
 			para_scores.append(score)
+			para_is_url.append(_is_url_or_non_chinese(txt))
+
 	horizontal = sorted(
-		((b, s) for b, s in zip(boxes, scores) if box_to_xywh(b)[3] <= box_to_xywh(b)[2] * 1.2),
+		((b, s, t) for b, s, t in zip(boxes, scores, texts) if box_to_xywh(b)[3] <= box_to_xywh(b)[2] * 1.2),
 		key=lambda p: (box_to_xywh(p[0])[1], box_to_xywh(p[0])[0]),
 	)
-	for box, score in horizontal:
+
+	for box, score, txt in horizontal:
 		x, y, w, h = box_to_xywh(box)
 		x1 = x + w
+		box_url = _is_url_or_non_chinese(txt)
 		placed = False
-		for para, _ps in zip(paragraphs, para_scores):
+
+		for p_idx, (para, _ps) in enumerate(zip(paragraphs, para_scores)):
+			# PREVENT MERGING SCANLATION WATERMARK URLS INTO CHINESE DIALOGUE
+			if box_url != para_is_url[p_idx]:
+				continue
+
 			last = para[-1]
 			lx, ly, lw, lh = box_to_xywh(last)
 			lx1 = lx + lw
+
 			# VERTICAL CONTIGUITY: THE NEW LINE SITS AT OR BELOW THE PARAGRAPH'S BOTTOM LINE.
-			# A NEGATIVE GAP (SLIGHT BOX OVERLAP FROM PADDING/LEADING) IS NORMAL FOR STACKED LINES
-			# AND MUST NOT BLOCK GROUPING — THE X-OVERLAP CHECK BELOW KEEPS SIDE-BY-SIDE LINES OUT.
 			gap = y - (ly + lh)
 			if gap > gap_factor * min(h, lh):
 				continue
+
+			# FONT-SIZE GATE: ONLY LINES OF SIMILAR FONT SIZE GROUP.
+			if max(h, lh) / max(1.0, float(min(h, lh))) > height_sim_max:
+				continue
+
 			# HORIZONTAL ALIGNMENT: X-RANGES OVERLAP LIKE CENTERED BUBBLE LINES
 			overlap = min(x1, lx1) - max(x, lx)
 			if overlap < overlap_min * min(w, lw):
 				continue
+
 			para.append(box)
 			placed = True
 			break
+
 		if not placed:
 			paragraphs.append([box])
 			para_scores.append(score)
+			para_is_url.append(box_url)
 
 	merged = []
 	mscores = []
@@ -333,6 +383,56 @@ def group_paragraphs(
 		merged.append(np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float64))
 		mscores.append(ps)
 	return merged, mscores
+
+
+def deduplicate_boxes(
+	boxes: list[np.ndarray],
+	scores: list[float],
+	iou_thresh: float = 0.40,
+) -> tuple[list[np.ndarray], list[float]]:
+	"""MERGE OR DEDUPLICATE OVERLAPPING PARAGRAPH BOXES (e.g. WHEN BOTH COMIC DETECTOR AND
+	RAPIDOCR DETECT THE SAME PARAGRAPH REGION WITH SLIGHTLY DIFFERENT BOUNDS).
+
+	IF TWO BOXES HAVE IoU >= iou_thresh OR ONE BOX ENCLOSES ≥ 60% OF THE OTHER,
+	TAKE THEIR AXIS-ALIGNED UNION SO ALL OCR LINES ARE MATCHED BY A SINGLE REGION BOX.
+	"""
+	if not boxes:
+		return [], []
+
+	indexed = sorted(enumerate(zip(boxes, scores)), key=lambda item: item[1][1], reverse=True)
+	kept_boxes: list[np.ndarray] = []
+	kept_scores: list[float] = []
+
+	for _idx, (box, score) in indexed:
+		merged = False
+		x0, y0, w, h = box_to_xywh(box)
+		box_area = max(1.0, float(w * h))
+		for k in range(len(kept_boxes)):
+			kbox = kept_boxes[k]
+			kx0, ky0, kw, kh = box_to_xywh(kbox)
+			karea = max(1.0, float(kw * kh))
+
+			iou = box_iou(box, kbox)
+			ix = max(0.0, min(float(x0 + w), float(kx0 + kw)) - max(float(x0), float(kx0)))
+			iy = max(0.0, min(float(y0 + h), float(ky0 + kh)) - max(float(y0), float(ky0)))
+			inter = ix * iy
+			min_area = min(box_area, karea)
+			overlap_ratio = inter / min_area if min_area > 0 else 0.0
+
+			if iou >= iou_thresh or overlap_ratio >= 0.60:
+				ux0 = min(x0, kx0)
+				uy0 = min(y0, ky0)
+				ux1 = max(x0 + w, kx0 + kw)
+				uy1 = max(y0 + h, ky0 + kh)
+				kept_boxes[k] = np.array([[ux0, uy0], [ux1, uy0], [ux1, uy1], [ux0, uy1]], dtype=np.float64)
+				kept_scores[k] = max(kept_scores[k], score)
+				merged = True
+				break
+		if not merged:
+			kept_boxes.append(box)
+			kept_scores.append(score)
+
+	return kept_boxes, kept_scores
 
 
 def sort_regions_top_to_bottom(boxes: list[np.ndarray], page_h: int, row_tolerance: float = 0.5) -> list[int]:
@@ -386,6 +486,7 @@ class ComicTextDetector:
 		self.model_path = model_path or str(config.DETECT_MODEL_PATH)
 		self.input_size = input_size
 		self._session = None
+		self._load_lock = threading.Lock()
 
 	def available(self) -> bool:
 		from pathlib import Path
@@ -393,12 +494,16 @@ class ComicTextDetector:
 		return Path(self.model_path).exists()
 
 	def _load(self):
+		# DOUBLE-CHECKED LOCKING — CONCURRENT /pages/analyze CALLS SHARE ONE SESSION (ORT SESSIONS
+		# SUPPORT CONCURRENT Run() CALLS; TWO SESSIONS WOULD DOUBLE THE ~90MB MODEL IN RAM).
 		if self._session is None:
-			import onnxruntime as ort
+			with self._load_lock:
+				if self._session is None:
+					import onnxruntime as ort
 
-			self._session = ort.InferenceSession(
-				self.model_path, providers=config.ORT_PROVIDERS, sess_options=ort.SessionOptions()
-			)
+					self._session = ort.InferenceSession(
+						self.model_path, providers=config.ORT_PROVIDERS, sess_options=ort.SessionOptions()
+					)
 
 	def analyze(self, img_bgr: np.ndarray) -> DetectResult:
 		"""RUN THE FULL PIPELINE ON ONE PAGE (BGR NUMPY IMAGE)."""

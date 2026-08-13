@@ -151,15 +151,50 @@ describe('runChapterPipeline', () => {
 	});
 
 	it('serves the second run from the translation cache (no second LLM call)', async () => {
-		const { chapter } = seedChapterWithPage('c1-p0.png');
+		const { chapter, page } = seedChapterWithPage('c1-p0.png');
 		const llm = fakeLlm();
 		await run(chapter.id, llm);
-		await run(chapter.id, llm); // SAME GLOSSARY + CONTENT → CACHE HIT
+		// SEND THE PAGE BACK TO 'pending' (e.g. CLEAR PROGRESS) SO THE SECOND RUN RE-ENTERS THE
+		// PIPELINE INSTEAD OF SKIPPING THE 'done' PAGE — THE translations CACHE IS THE HIT PATH.
+		db.update(pages).set({ status: 'pending' }).where(eq(pages.id, page.id)).run();
+		await run(chapter.id, llm);
 
 		const regions2 = db.select().from(regions).all();
 		expect(regions2).toHaveLength(1); // REGIONS WERE REPLACED, NOT DUPLICATED
 		expect(regions2[0].textTarget).toBe('Hello');
-		// THE LLM WAS CALLED ONCE TOTAL — THE SECOND RUN CAME FROM THE translations CACHE
+		expect(pipeline.analyzeCalls).toBe(2); // BOTH RUNS ANALYZED (NO SKIP) — CACHE SAVED THE LLM CALL
+	});
+
+	it('skips already-translated pages on re-run (resume without redundant work)', async () => {
+		seedBook(db, { id: 'b1' });
+		const chapter = seedChapter(db, { bookId: 'b1', seq: 0 });
+		const p0 = seedPage(db, { chapterId: chapter.id, seq: 0, filePath: 'uploads/done.png' });
+		const p1 = seedPage(db, { chapterId: chapter.id, seq: 1, filePath: 'uploads/new.png' });
+		mkdirSync(join(dataRoot, 'uploads'), { recursive: true });
+		writeFileSync(join(dataRoot, 'uploads', 'done.png'), PAGE_PNG);
+		writeFileSync(join(dataRoot, 'uploads', 'new.png'), PAGE_PNG);
+
+		await chapterWork(chapter.id, { pipeline, dataRoot, llm: fakeLlm() })(new AbortController().signal, () => {});
+		expect(db.select().from(pages).where(eq(pages.id, p0.id)).get()?.status).toBe('done');
+
+		// PAGE 1 GOES BACK TO 'pending' (e.g. CLEARED) — PAGE 0 STAYS 'done'
+		db.update(pages).set({ status: 'pending' }).where(eq(pages.id, p1.id)).run();
+		const callsBefore = pipeline.analyzeCalls;
+
+		const events: string[] = [];
+		await chapterWork(chapter.id, { pipeline, dataRoot, llm: fakeLlm() })(new AbortController().signal, (e) =>
+			events.push(e.type),
+		);
+
+		// ONLY PAGE 1 WAS RE-ANALYZED — PAGE 0 WAS SKIPPED AND KEPT ITS OUTPUT
+		expect(pipeline.analyzeCalls - callsBefore).toBe(1);
+		// BOTH PAGES REPORT DONE (THE SKIPPED PAGE EMITS ITS page-done UP FRONT, IN ORDER)
+		expect(events).toEqual(['page-done', 'page-done']);
+		const got0 = db.select().from(pages).where(eq(pages.id, p0.id)).get();
+		const got1 = db.select().from(pages).where(eq(pages.id, p1.id)).get();
+		expect(got0?.status).toBe('done');
+		expect(got0?.outputPath).toBe(`output/${chapter.id}/0.png`); // UNTOUCHED
+		expect(got1?.status).toBe('done');
 	});
 
 	it('isolates per-page failures: one bad page, the rest finish', async () => {
@@ -218,7 +253,7 @@ describe('runChapterPipeline', () => {
 		writeFileSync(join(dataRoot, 'uploads', 'p2.png'), PAGE_PNG);
 
 		const controller = new AbortController();
-		// ABORT AFTER THE FIRST PAGE COMPLETES — THE SECOND MUST NOT RUN
+		// ABORT DURING THE FIRST PAGE'S ANALYZE — THE JOB MUST STOP AT THE PHASE BOUNDARY
 		const slowPipeline = new FakePipeline();
 		const original = slowPipeline.analyze.bind(slowPipeline);
 		slowPipeline.analyze = async (image, signal) => {
@@ -227,14 +262,19 @@ describe('runChapterPipeline', () => {
 			return r;
 		};
 
-		// AN ABORT STOPS THE JOB — THE WORK FUNCTION RETHROWS THE AbortError (SUPERSEDE TAKES OVER)
+		// AN ABORT STOPS THE JOB — THE WORK FUNCTION RETHROWS THE AbortError (SUPERSEDE TAKES OVER).
+		// pageConcurrency: 1 KEEPS THE ORDERING DETERMINISTIC.
 		await expect(
-			chapterWork(chapter.id, { pipeline: slowPipeline, dataRoot, llm: fakeLlm() })(controller.signal, () => {}),
+			chapterWork(chapter.id, { pipeline: slowPipeline, dataRoot, llm: fakeLlm(), pageConcurrency: 1 })(
+				controller.signal,
+				() => {},
+			),
 		).rejects.toMatchObject({ name: 'AbortError' });
 
-		const done = db.select().from(pages).where(eq(pages.id, p1.id)).get();
+		const p1row = db.select().from(pages).where(eq(pages.id, p1.id)).get();
 		const skipped = db.select().from(pages).where(eq(pages.id, p2.id)).get();
-		expect(done?.status).toBe('done');
+		expect(p1row?.status).toBe('processing'); // PHASE 1 FINISHED; PHASE 3 NEVER STARTED
+		expect(p1row?.status).not.toBe('error'); // AN ABORT NEVER MARKS PAGES AS ERRORS
 		expect(skipped?.status).toBe('pending'); // NEVER STARTED
 	});
 
@@ -295,7 +335,7 @@ describe('runChapterPipeline', () => {
 			return PAGE_PNG;
 		};
 
-		let llmReceivedSources: string[] = [];
+		const llmReceivedSources: string[] = [];
 		const customLlm = {
 			chat: {
 				completions: {
@@ -329,7 +369,7 @@ describe('runChapterPipeline', () => {
 	});
 
 	it('does NOT erase watermark regions when enableWatermarkRemoval is false', async () => {
-		const { chapter, page } = seedChapterWithPage('c1-p0.png');
+		const { chapter } = seedChapterWithPage('c1-p0.png');
 		let cleanedRegionsPassed: unknown[] = [];
 		const wmPipeline = new FakePipeline();
 		wmPipeline.analyze = async () => ({
@@ -354,6 +394,73 @@ describe('runChapterPipeline', () => {
 		// CLEAN WAS PASSED ONLY r0 ('你好'), NOT THE WATERMARK REGION
 		expect(cleanedRegionsPassed).toHaveLength(1);
 		expect((cleanedRegionsPassed[0] as { id: string }).id).toBe('r0');
+	});
+
+	it('does not re-record spend on translation cache hits', async () => {
+		const { chapter, page } = seedChapterWithPage('c1-p0.png');
+		const llm = fakeLlm();
+		const usages: unknown[] = [];
+		const deps = { pipeline, dataRoot, llm, onUsage: (u: unknown) => usages.push(u) };
+		await chapterWork(chapter.id, deps)(new AbortController().signal, () => {});
+		// SEND THE PAGE BACK TO 'pending' SO THE SECOND RUN TAKES THE CACHE-HIT PATH (NOT THE SKIP)
+		db.update(pages).set({ status: 'pending' }).where(eq(pages.id, page.id)).run();
+		await chapterWork(chapter.id, deps)(new AbortController().signal, () => {});
+		// RUN 1: CHAPTER EXTRACTION (1) + TRANSLATION (1). RUN 2: EXTRACTION (1) + CACHE HIT (0).
+		expect(usages.length).toBe(3);
+	});
+
+	it('skips pages entirely on re-run when everything is done (no extraction call either)', async () => {
+		const { chapter } = seedChapterWithPage('c1-p0.png');
+		const llm = fakeLlm();
+		const usages: unknown[] = [];
+		const deps = { pipeline, dataRoot, llm, onUsage: (u: unknown) => usages.push(u) };
+		await chapterWork(chapter.id, deps)(new AbortController().signal, () => {});
+		await chapterWork(chapter.id, deps)(new AbortController().signal, () => {});
+		// RUN 1: EXTRACTION + TRANSLATION = 2. RUN 2: EVERYTHING SKIPPED — NO LLM CALLS AT ALL.
+		expect(usages.length).toBe(2);
+	});
+
+	it('processes pages concurrently within each phase', async () => {
+		seedBook(db, { id: 'b1' });
+		const chapter = seedChapter(db, { bookId: 'b1', seq: 0 });
+		mkdirSync(join(dataRoot, 'uploads'), { recursive: true });
+		for (let i = 0; i < 3; i++) {
+			seedPage(db, { chapterId: chapter.id, seq: i, filePath: `uploads/c${i}.png` });
+			writeFileSync(join(dataRoot, `uploads/c${i}.png`), PAGE_PNG);
+		}
+
+		// TRACK CONCURRENT ANALYZE CALLS — PARALLEL PHASE 1 MUST OVERLAP THEM
+		let inFlight = 0;
+		let maxInFlight = 0;
+		const concurrent = new FakePipeline();
+		const original = concurrent.analyze.bind(concurrent);
+		concurrent.analyze = async (image, signal) => {
+			inFlight++;
+			maxInFlight = Math.max(maxInFlight, inFlight);
+			await new Promise((r) => setTimeout(r, 10));
+			const result = await original(image, signal);
+			inFlight--;
+			return result;
+		};
+
+		const events: string[] = [];
+		await chapterWork(chapter.id, {
+			pipeline: concurrent,
+			dataRoot,
+			llm: fakeLlm(),
+			pageConcurrency: 3,
+		})(new AbortController().signal, (e) => events.push(e.type));
+
+		expect(maxInFlight).toBeGreaterThan(1); // ANALYZE CALLS OVERLAPPED
+		const rows = db
+			.select()
+			.from(pages)
+			.where(eq(pages.chapterId, chapter.id))
+			.orderBy(pages.seq)
+			.all();
+		expect(rows.every((r) => r.status === 'done')).toBe(true);
+		// EVENTS ARRIVE IN PAGE ORDER EVEN THOUGH PAGES FINISH OUT OF ORDER
+		expect(events).toEqual(['page-done', 'page-done', 'page-done']);
 	});
 });
 

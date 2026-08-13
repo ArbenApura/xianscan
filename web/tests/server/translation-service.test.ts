@@ -133,6 +133,20 @@ describe('translation cache DB round-trip', () => {
 		});
 		expect(getCachedPageTranslation(page.id, key2)).toBeNull();
 	});
+
+	it('identical pages each get their own cache row (per-page uniqueness)', () => {
+		seedBook(db, { id: 'b1' });
+		const chapter = seedChapter(db, { bookId: 'b1', seq: 0 });
+		const p0 = seedPage(db, { chapterId: chapter.id, seq: 0 });
+		const p1 = seedPage(db, { chapterId: chapter.id, seq: 1 });
+		const key = pageCacheKey([{ id: 'r0', text: '你好' }], [], 'deepseek-v4-flash', PAIR);
+		const usage = { model: 'deepseek-v4-flash', promptTokens: 1, cachedTokens: 0, completionTokens: 1, costUsd: 0 };
+		// TWO IDENTICAL PAGES SHARE THE SAME CONTENT KEY — EACH MUST STILL SAVE ITS OWN ROW
+		savePageTranslation(p0.id, key, new Map([['r0', 'Hello']]), 'deepseek-v4-flash', usage);
+		savePageTranslation(p1.id, key, new Map([['r0', 'Hello']]), 'deepseek-v4-flash', usage);
+		expect(getCachedPageTranslation(p0.id, key)?.byRegion.get('r0')).toBe('Hello');
+		expect(getCachedPageTranslation(p1.id, key)?.byRegion.get('r0')).toBe('Hello');
+	});
 });
 
 // -- JOB SERVICE -- //

@@ -12,7 +12,7 @@ from pathlib import Path
 MODELS_DIR = Path(os.environ.get("MT_MODELS_DIR", Path(__file__).resolve().parent.parent / "models"))
 
 DETECT_MODEL_PATH = MODELS_DIR / "comictextdetector.pt.onnx"
-LAMA_MODEL_PATH = MODELS_DIR / "big-lama.pt"
+LAMA_MODEL_PATH = MODELS_DIR / "lama.onnx"
 
 # THE ONNX DETECTOR'S TRAINED INPUT SIZE (LETTERBOXED TO A SQUARE)
 DETECT_INPUT_SIZE = int(os.environ.get("MT_DETECT_SIZE", "1024"))

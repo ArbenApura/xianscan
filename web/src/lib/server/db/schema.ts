@@ -210,7 +210,10 @@ export const translations = sqliteTable(
 			.$defaultFn(() => Date.now()),
 	},
 	(t) => ({
-		translationsCacheKeyUnq: uniqueIndex('translations_cache_key_unq').on(t.cacheKey),
+		// PER-PAGE CACHE UNIQUENESS: THE KEY (content+glossary+model fingerprint) IS SHARED BY
+		// IDENTICAL PAGES, SO THE UNIQUE CONSTRAINT MUST INCLUDE pageId — OTHERWISE A SECOND
+		// IDENTICAL PAGE'S SAVE NO-OPS (onConflictDoNothing) AND IT NEVER GETS A CACHE ROW.
+		translationsPageCacheKeyUnq: uniqueIndex('translations_page_cache_key_unq').on(t.pageId, t.cacheKey),
 		translationsPageIdx: index('translations_page_idx').on(t.pageId),
 	}),
 );

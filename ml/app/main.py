@@ -25,20 +25,22 @@ MAX_UPLOAD_BYTES = 32 * 1024 * 1024
 
 @app.get("/health")
 def health() -> dict:
-    from .inpaint import get_inpainter
+    from .inpaint import available_backend
 
     return {
         "status": "ok",
         "detector": "comic-ctd" if pipeline.detector.available() else "rapidocr-fallback",
-        "inpainter": get_inpainter().backend,
+        "inpainter": available_backend(),
         "ocr": "rapidocr",
         "models_dir": str(config.MODELS_DIR),
     }
 
 
 @app.post("/pages/analyze")
-async def analyze(image: UploadFile = File(...)) -> dict:
-    data = await image.read()
+def analyze(image: UploadFile = File(...)) -> dict:
+    # SYNC `def` (NOT `async def`) — FASTAPI RUNS IT IN THE THREADPOOL SO CONCURRENT REQUESTS FROM
+    # THE WEB PIPELINE EXECUTE IN PARALLEL INSTEAD OF BLOCKING THE EVENT LOOP SERIALLY.
+    data = image.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="empty upload")
     if len(data) > MAX_UPLOAD_BYTES:
@@ -52,9 +54,9 @@ async def analyze(image: UploadFile = File(...)) -> dict:
 
 
 @app.post("/pages/preprocess")
-async def preprocess(image: UploadFile = File(...)) -> Response:
+def preprocess(image: UploadFile = File(...)) -> Response:
     """STEP 0: PRE-PROCESS RAW IMAGE TO REMOVE WATERMARKS, CORNER STAMPS, AND LOGOS BEFORE OCR."""
-    data = await image.read()
+    data = image.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="empty upload")
     if len(data) > MAX_UPLOAD_BYTES:
@@ -68,8 +70,8 @@ async def preprocess(image: UploadFile = File(...)) -> Response:
 
 
 @app.post("/pages/clean")
-async def clean(image: UploadFile = File(...), regions: str = Form(...)) -> Response:
-    data = await image.read()
+def clean(image: UploadFile = File(...), regions: str = Form(...)) -> Response:
+    data = image.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="empty upload")
     if len(data) > MAX_UPLOAD_BYTES:
@@ -82,15 +84,17 @@ async def clean(image: UploadFile = File(...), regions: str = Form(...)) -> Resp
         img = pipeline.decode_image(data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    cleaned = pipeline.clean_image(img, parsed)
+    try:
+        cleaned = pipeline.clean_image(img, parsed)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     return Response(content=pipeline.encode_png(cleaned), media_type="image/png")
 
 
 @app.post("/pages/stitch")
-
-async def stitch(image_top: UploadFile = File(...), image_bottom: UploadFile = File(...)) -> Response:
-    data_top = await image_top.read()
-    data_bot = await image_bottom.read()
+def stitch(image_top: UploadFile = File(...), image_bottom: UploadFile = File(...)) -> Response:
+    data_top = image_top.file.read()
+    data_bot = image_bottom.file.read()
     if not data_top or not data_bot:
         raise HTTPException(status_code=400, detail="empty upload")
     try:
@@ -103,7 +107,6 @@ async def stitch(image_top: UploadFile = File(...), image_bottom: UploadFile = F
 
 
 if __name__ == "__main__":
-
     import uvicorn
 
     uvicorn.run(app, host="127.0.0.1", port=8001)

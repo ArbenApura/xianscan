@@ -152,7 +152,7 @@
 	aria-haspopup="menu"
 	aria-expanded={open}
 	aria-label={label}
-	class={cn('rounded-lg p-1.5 opacity-60 transition-colors hover:opacity-100', open && 'opacity-100', className)}
+	class={cn('rounded-lg p-1.5 opacity-80 transition-all hover:opacity-100', open && 'opacity-100', className)}
 >
 	<MoreVertical size={iconSize} />
 </button>

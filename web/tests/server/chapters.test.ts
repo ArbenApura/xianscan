@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { getTestDb, resetDb, seedBook, seedChapter, seedPage, type TestDb } from '../helpers/db';
 import { nextPageSeq, reorderPages } from '$lib/server/chapters';
-import { pages } from '$lib/server/db/schema';
+import { pages, regions, translations } from '$lib/server/db/schema';
 
 vi.mock('$lib/server/db', async () => ({ db: (await import('../helpers/db')).getTestDb() }));
 
@@ -111,6 +111,104 @@ describe('nextPageSeq & reorderPages', () => {
 		expect(fs.readFileSync(path.join(dataRoot, remaining[0].filePath)).toString()).toBe('page0page1');
 
 		fs.rmSync(dataRoot, { recursive: true, force: true });
+	});
+
+	it('uploadPages never reuses a file name still referenced by another page (regression: after a stitch, re-uploading clobbered the last page\'s image)', async () => {
+		const fs = await import('node:fs');
+		const path = await import('node:path');
+		const { uploadPages } = await import('$lib/server/chapters');
+		const { DATA_ROOT } = await import('$lib/server/paths');
+
+		// THE DIVERGENT STATE AFTER STITCHING THE FIRST TWO OF FIVE PAGES: DB seqs ARE RENUMBERED
+		// (0-3) BUT FILES KEEP THEIR ORIGINAL NAMES (0, 2, 3, 4) — SO seq 3 STILL POINTS AT "4.png".
+		seedBook(db, { id: 'b1' });
+		const chapter = seedChapter(db, { id: 1, bookId: 'b1', seq: 0 });
+		const legacyFiles = ['0.png', '2.png', '3.png', '4.png'];
+		const uploadDir = path.join(DATA_ROOT, 'uploads', '1');
+		fs.mkdirSync(uploadDir, { recursive: true });
+		try {
+			for (const f of legacyFiles) {
+				const filePath = `uploads/1/${f}`;
+				seedPage(db, { chapterId: chapter.id, seq: legacyFiles.indexOf(f), filePath });
+				fs.writeFileSync(path.join(DATA_ROOT, filePath), Buffer.from(`content-${f}`));
+			}
+
+			const file = new File([Buffer.from('brand-new-image')], 'new.png', { type: 'image/png' });
+			await uploadPages(chapter.id, [file]);
+
+			const rows = db.select().from(pages).where(eq(pages.chapterId, chapter.id)).orderBy(pages.seq).all();
+			expect(rows).toHaveLength(5);
+
+			// THE NEW PAGE MUST GET ITS OWN FILE — NOT "4.png" (THE OLD SCHEME COLLIDED: seq 4 → "4.png",
+			// OVERWRITING THE LAST REMAINING PAGE'S IMAGE AND DUPLICATING IT ON SCREEN).
+			const newPage = rows[4];
+			const existing = new Set(rows.slice(0, 4).map((p) => p.filePath));
+			expect(existing.has(newPage.filePath)).toBe(false);
+			expect(newPage.filePath).toMatch(/^uploads\/1\/[0-9a-f-]{36}\.png$/);
+
+			// AND THE OLD FILE'S CONTENT MUST BE UNTOUCHED ON DISK
+			expect(fs.readFileSync(path.join(DATA_ROOT, 'uploads/1/4.png')).toString()).toBe('content-4.png');
+			expect(fs.readFileSync(path.join(DATA_ROOT, newPage.filePath)).toString()).toBe('brand-new-image');
+		} finally {
+			fs.rmSync(uploadDir, { recursive: true, force: true });
+		}
+	});
+
+	it('resetPageProgress clears regions, cached translations, and output state', async () => {
+		const { resetPageProgress } = await import('$lib/server/chapters');
+
+		seedBook(db, { id: 'b1' });
+		const chapter = seedChapter(db, { bookId: 'b1', seq: 0 });
+		const page = seedPage(db, { chapterId: chapter.id, seq: 0, filePath: 'uploads/0.png' });
+
+		// SIMULATE A FINISHED PAGE: OUTPUTS + A REGION + A MEMOIZED TRANSLATION
+		db.update(pages)
+			.set({ status: 'done', cleanedPath: 'clean/1/0.png', outputPath: 'output/1/0.png', width: 100, height: 200 })
+			.where(eq(pages.id, page.id))
+			.run();
+		db.insert(regions)
+			.values({
+				pageId: page.id,
+				seq: 0,
+				box: JSON.stringify({ x: 0, y: 0, w: 10, h: 10 }),
+				category: 'dialogue',
+				textSource: '你好',
+				textTarget: 'Hello',
+				status: 'translated',
+			})
+			.run();
+		db.insert(translations)
+			.values({ pageId: page.id, cacheKey: 'k1', contentTarget: '{"r0":"Hello"}', model: 'm' })
+			.run();
+
+		resetPageProgress(page.id);
+
+		const got = db.select().from(pages).where(eq(pages.id, page.id)).get();
+		expect(got?.status).toBe('pending');
+		expect(got?.cleanedPath).toBeNull();
+		expect(got?.outputPath).toBeNull();
+		expect(got?.width).toBeNull();
+		expect(got?.height).toBeNull();
+		expect(got?.error).toBeNull();
+		expect(db.select().from(regions).where(eq(regions.pageId, page.id)).all()).toHaveLength(0);
+		expect(db.select().from(translations).where(eq(translations.pageId, page.id)).all()).toHaveLength(0);
+	});
+
+	it('resetChapterProgress clears every page of the chapter', async () => {
+		const { resetChapterProgress } = await import('$lib/server/chapters');
+
+		seedBook(db, { id: 'b1' });
+		const chapter = seedChapter(db, { bookId: 'b1', seq: 0 });
+		const p0 = seedPage(db, { chapterId: chapter.id, seq: 0 });
+		const p1 = seedPage(db, { chapterId: chapter.id, seq: 1 });
+		db.update(pages).set({ status: 'done', outputPath: 'output/1/0.png' }).where(eq(pages.id, p0.id)).run();
+		db.update(pages).set({ status: 'error', error: 'boom' }).where(eq(pages.id, p1.id)).run();
+
+		const reset = resetChapterProgress(chapter.id);
+
+		expect(reset).toBe(2);
+		const rows = db.select().from(pages).where(eq(pages.chapterId, chapter.id)).orderBy(pages.seq).all();
+		expect(rows.every((r) => r.status === 'pending' && r.outputPath === null && r.error === null)).toBe(true);
 	});
 });
 

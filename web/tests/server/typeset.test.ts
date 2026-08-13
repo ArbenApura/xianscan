@@ -2,9 +2,11 @@
 import { describe, expect, it } from 'vitest';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import {
+	decollideRegions,
 	fontFor,
 	fitFontSize,
 	pickTextColor,
+	reflowText,
 	renderText,
 	sampleBackground,
 	typesetPage,
@@ -51,7 +53,7 @@ describe('renderText', () => {
 		expect(renderText({ id: 'r0', box: { x: 0, y: 0, w: 10, h: 10 }, text: 'héllo wörld', category: 'dialogue' })).toBe('HÉLLO WÖRLD');
 	});
 
-	it('leaves CJK and punctuation unchanged', () => {
+	it('leaves CJK and punctuation unchanged (preserves unicode symbols for font fallback rendering)', () => {
 		expect(renderText({ id: 'r0', box: { x: 0, y: 0, w: 10, h: 10 }, text: '小心！BOOM…', category: 'dialogue' })).toBe('小心！BOOM…');
 	});
 });
@@ -87,6 +89,47 @@ describe('wrapText', () => {
 	it('treats \\n as a hard line break (multi-line bubble paragraphs)', () => {
 		const lines = wrapText(ctx(), 'Hello there.\nSecond line here.', 1000);
 		expect(lines).toEqual(['Hello there.', 'Second line here.']);
+	});
+
+	it('never strands a lone trailing punctuation on its own line', () => {
+		// THE USER-REPORTED FAILURE: "TRANSMIGRATION..." OVERFLOWS, SO CHARACTER-BREAKING
+		// DROPPED THE FINAL "." ONTO THE NEXT LINE. THE DOT MUST STAY WITH THE WORD.
+		const measure = { measureText: (t: string) => ({ width: t.length * 10 }) };
+		const lines = wrapText(measure, 'TRANSMIGRATION...', 160);
+		expect(lines.length).toBe(1);
+		expect(lines[0]).toBe('TRANSMIGRATION...');
+	});
+
+	it('re-attaches a space-separated trailing dot that overflows', () => {
+		const measure = { measureText: (t: string) => ({ width: t.length * 10 }) };
+		const lines = wrapText(measure, 'TRANSMIGRATION.. .', 160);
+		expect(lines.join('')).toBe('TRANSMIGRATION...'); // THE DOT ATTACHED WITHOUT A SPACE
+		expect(lines.some((l) => /^[.．…·!！?？]+$/.test(l))).toBe(false);
+	});
+});
+
+describe('reflowText', () => {
+	it('merges OCR line breaks into one balanced paragraph', () => {
+		const c = ctx();
+		const text = 'Bored out of her mind,\nXin\nawakened or perhaps\nenlightened\nthis sliver of humanity.';
+		const lines = reflowText(c, text, 300);
+		// THE FIVE OCR LINES COLLAPSE — NO ORPHANED SINGLE WORD
+		expect(lines.length).toBeLessThan(5);
+		expect(lines.includes('Xin')).toBe(false);
+		expect(lines.join(' ')).toBe(
+			'Bored out of her mind, Xin awakened or perhaps enlightened this sliver of humanity.',
+		);
+	});
+
+	it('prioritizes the upper lines over the last line', () => {
+		const c = ctx();
+		const text = 'Bored out of her mind, Xin awakened or perhaps enlightened this sliver of humanity.';
+		const lines = reflowText(c, text, 300);
+		expect(lines.length).toBeGreaterThan(1);
+		const widths = lines.map((l) => c.measureText(l).width);
+		// THE FIRST LINE IS THE FULLEST; THE LAST LINE IS THE SHORTEST
+		expect(widths[0]).toBeGreaterThanOrEqual(widths[widths.length - 1]);
+		for (const w of widths) expect(w).toBeLessThanOrEqual(300);
 	});
 });
 
@@ -200,5 +243,17 @@ describe('sampleBackground', () => {
 		x.fillRect(0, 0, 100, 100);
 		const img = await loadImage(c.toBuffer('image/png'));
 		expect(sampleBackground(img, 10, 10, 80, 80)).toEqual({ r: 255, g: 255, b: 255 });
+	});
+});
+
+describe('decollideRegions', () => {
+	it('adjusts overlapping bounding boxes to eliminate collision gap', () => {
+		const r1 = { id: 'r0', box: { x: 50, y: 10, w: 100, h: 50 }, text: 'Daddy!', category: 'dialogue' as const };
+		const r2 = { id: 'r1', box: { x: 50, y: 40, w: 100, h: 50 }, text: 'Wake up!', category: 'dialogue' as const };
+
+		const result = decollideRegions([r1, r2]);
+		expect(result).toHaveLength(2);
+		// Bottom box y should shift downwards to eliminate overlap
+		expect(result[1].box.y).toBeGreaterThan(r2.box.y);
 	});
 });

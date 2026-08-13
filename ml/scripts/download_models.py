@@ -4,12 +4,12 @@
 Manifest (all Apache-2.0 or permissive):
 - comictextdetector.pt.onnx  — comic text detector ONNX export (manga-image-translator, Apache-2.0).
   SHA-256 is pinned in manga-image-translator/detection/ctd.py for the 'model-cpu' variant.
-- big-lama.pt                — LaMa inpainting weights (Sanster/models, big-lama, Apache-2.0).
-  TorchScript JIT export; upstream publishes an MD5 (e3aa4aaa...) which we verify.
+- lama.onnx                  — LaMa inpainting ONNX weights (Carve/LaMa-ONNX, Apache-2.0).
+  Standard resolution-robust LaMa UNet ONNX model for onnxruntime inference.
 - RapidOCR v3 models         — auto-downloaded by the rapidocr package on first run (Apache-2.0);
   this script pre-fetches them too so the first analyze call never stalls.
 
-Usage:  python scripts/download_models.py [--models-dir ./models] [--skip-big-lama]
+Usage:  python scripts/download_models.py [--models-dir ./models] [--skip-lama]
 """
 from __future__ import annotations
 
@@ -29,11 +29,10 @@ MANIFEST: list[dict] = [
 		"size": 94_669_756,
 	},
 	{
-		"name": "big-lama.pt",
-		"url": "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt",
-		"sha256": None,  # UPSTREAM PUBLISHES MD5 ONLY — VERIFIED BY SIZE + MD5 BELOW
-		"md5": "e3aa4aaa15225a33ec84f9f4bc47e500",
-		"size": 205_669_692,
+		"name": "lama.onnx",
+		"url": "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
+		"sha256": "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
+		"size": 208_044_816,
 	},
 ]
 
@@ -78,14 +77,14 @@ def _download(url: str, dest: Path) -> None:
 def main() -> int:
 	parser = argparse.ArgumentParser(description="Download manua-translator ML models.")
 	parser.add_argument("--models-dir", type=Path, default=MODELS_DIR)
-	parser.add_argument("--skip-big-lama", action="store_true", help="skip the ~200MB inpainting weights")
+	parser.add_argument("--skip-lama", "--skip-big-lama", dest="skip_lama", action="store_true", help="skip the inpainting weights")
 	args = parser.parse_args()
 
 	args.models_dir.mkdir(parents=True, exist_ok=True)
 	ok = True
 	for entry in MANIFEST:
-		if args.skip_big_lama and entry["name"] == "big-lama.pt":
-			print(f"[skip] {entry['name']} (--skip-big-lama)")
+		if args.skip_lama and entry["name"] == "lama.onnx":
+			print(f"[skip] {entry['name']} (--skip-lama)")
 			continue
 		dest = args.models_dir / entry["name"]
 		if dest.exists() and _verify(entry, dest):

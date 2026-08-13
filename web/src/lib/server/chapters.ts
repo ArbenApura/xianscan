@@ -8,7 +8,7 @@ import { and, desc, eq } from 'drizzle-orm';
 
 // IMPORTED MODULES
 import { db } from './db';
-import { chapters, pages, regions } from './db/schema';
+import { chapters, pages, regions, translations } from './db/schema';
 
 import { DATA_ROOT } from './paths';
 import type { PipelineClient } from './pipeline-client';
@@ -48,6 +48,10 @@ export async function createChapter(bookId: string, title: string): Promise<{ id
 // WRITE UPLOADED PAGE IMAGES TO DISK AND CREATE THEIR DB ROWS. RETURNS THE CREATED PAGE COUNT.
 // SEQ CONTINUES AFTER THE CHAPTER'S EXISTING PAGES (A SECOND UPLOAD MUST NOT COLLIDE WITH THE
 // (chapterId, seq) UNIQUE INDEX — THE ORIGINAL BUG 500'd EVERY NON-FIRST UPLOAD).
+// FILE NAMES ARE UUIDs, NOT seq: seq IS RENUMBERED BY reorder/stitch/delete WHILE FILES KEEP THEIR
+// OLD NAMES, SO A SEQ-BASED NAME CAN REUSE A FILE STILL REFERENCED BY ANOTHER PAGE — THE OLD SCHEME
+// OVERWROTE THE LAST REMAINING PAGE'S IMAGE ON THE NEXT UPLOAD, MAKING THE LAST TWO PAGES SHOW THE
+// SAME PICTURE (EVERY RE-UPLOAD RE-DUPLICATED IT).
 export async function uploadPages(chapterId: number, files: File[]): Promise<number> {
 	let count = 0;
 	let seq = nextPageSeq(chapterId);
@@ -56,7 +60,7 @@ export async function uploadPages(chapterId: number, files: File[]): Promise<num
 	for (const file of files) {
 		const ext = extname(file.name).toLowerCase();
 		if (!ALLOWED_EXT.has(ext)) throw error(400, `Unsupported image type "${ext}" — use PNG/JPEG/WebP/AVIF.`);
-		const fileName = `${seq}${ext}`;
+		const fileName = `${randomUUID()}${ext}`;
 		writeFileSync(join(uploadDir, fileName), Buffer.from(await file.arrayBuffer()));
 		db.insert(pages)
 			.values({ chapterId, seq, filePath: `uploads/${chapterId}/${fileName}` })
@@ -156,6 +160,34 @@ export async function stitchPageWithNext(
 		.map((p) => p.id);
 
 	reorderPages(topPage.chapterId, remainingIds);
+}
+
+// -- PROGRESS RESET -- //
+
+// CLEAR ONE PAGE'S PIPELINE PROGRESS — DETECTED REGIONS, MEMOIZED TRANSLATIONS (SO A RE-RUN DOES A
+// FRESH LLM CALL INSTEAD OF A CACHE HIT), AND OUTPUT PATHS — BACK TO 'pending' FOR A CLEAN RETRY.
+// DISK FILES ARE LEFT IN PLACE: THE PIPELINE OVERWRITES clean/ AND output/ ON RE-RUN.
+export function resetPageProgress(pageId: number): void {
+	db.delete(translations).where(eq(translations.pageId, pageId)).run();
+	db.delete(regions).where(eq(regions.pageId, pageId)).run();
+	db.update(pages)
+		.set({
+			status: 'pending',
+			cleanedPath: null,
+			outputPath: null,
+			error: null,
+			width: null,
+			height: null,
+		})
+		.where(eq(pages.id, pageId))
+		.run();
+}
+
+// CLEAR EVERY PAGE OF A CHAPTER. RETURNS HOW MANY PAGES WERE RESET.
+export function resetChapterProgress(chapterId: number): number {
+	const rows = db.select({ id: pages.id }).from(pages).where(eq(pages.chapterId, chapterId)).all();
+	for (const row of rows) resetPageProgress(row.id);
+	return rows.length;
 }
 
 

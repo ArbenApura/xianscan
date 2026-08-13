@@ -5,6 +5,7 @@
 # RapidOCR v3 RETURNS A `RapidOCROutput` OBJECT WITH .txts/.scores/.boxes LISTS — NOT THE v1 TUPLE.
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 import cv2
@@ -22,14 +23,19 @@ class OcrResult:
 # -- ENGINE -- #
 
 _engine = None
+_engine_lock = threading.Lock()
 
 
 def _get_engine():
 	global _engine
 	if _engine is None:
-		from rapidocr import RapidOCR
+		# DOUBLE-CHECKED LOCKING — CONCURRENT /pages/analyze CALLS (THREADPOOL ENDPOINTS) MUST NOT
+		# CONSTRUCT TWO RapidOCR ENGINES (DUPLICATE ~15MB MODEL LOAD + A RACE ON THE SINGLETON).
+		with _engine_lock:
+			if _engine is None:
+				from rapidocr import RapidOCR
 
-		_engine = RapidOCR()
+				_engine = RapidOCR()
 	return _engine
 
 

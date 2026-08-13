@@ -27,18 +27,62 @@ export const DEFAULT_WATERMARK_PATTERNS: string[] = [
 	'嚴禁轉載',
 	'独家',
 	'獨家',
+	'漫畫',
+	'漫画',
+	'包子漫畫',
+	'包子漫画',
 	'mangabox',
 	'comick',
+	'漫库',
+	'yumanhuaku',
+	'yumanhua',
+	'漫网',
+	'扫图',
+	'录入',
+	'修图',
+	'漫画库',
+	'动漫',
+	'神漫',
+	'看漫画',
+	'读漫画',
+	'漫画人',
+	'漫画网',
+	'看漫',
+	'极速',
+	'速漫',
+	'速漫库',
+	'colamanhua',
+	'oamanhua',
+	'acloudmerge',
+	'qumanku',
+	'mangaku',
+	'manhuaku',
+	'speed manga',
+	'library',
+	'scanlation',
+	'site',
+	'domain',
 ];
 
 const URL_REGEX = /(https?:\/\/|www\.|[a-zA-Z0-9-]+\.(com|net|org|cc|xyz|me|site|info|tw|cn|io|app|club|fun|top))(?:\/[^\s]*)?/i;
 
 /**
- * RETURNS true IF THE OCR TEXT MATCHES KNOWN WATERMARK REGEXES, SITE URLS, OR CUSTOM PATTERNS.
+ * RETURNS true IF THE TEXT CONTAINS CJK / CHINESE CHARACTERS.
+ */
+export function containsChinese(text: string): boolean {
+	return /[\u4e00-\u9fa5\u3400-\u4dbf\u{20000}-\u{2a6df}]/u.test(text);
+}
+
+/**
+ * RETURNS true IF THE OCR TEXT MATCHES KNOWN WATERMARK REGEXES, SITE URLS, CUSTOM PATTERNS,
+ * OR LACKS CHINESE CHARACTERS ENTIRELY (NON-CHINESE/ENGLISH TEXT).
  */
 export function isWatermarkText(text: string, customPatterns: string[] = []): boolean {
 	const trimmed = text.trim();
 	if (!trimmed) return false;
+
+	// 0. CHECK IF TEXT CONTAINS CHINESE CHARACTERS (IF NONE, IT IS NON-CHINESE / WATERMARK / ENGLISH ARTIFACT)
+	if (!containsChinese(trimmed)) return true;
 
 	// 1. CHECK URL / DOMAIN PATTERNS
 	if (URL_REGEX.test(trimmed)) return true;

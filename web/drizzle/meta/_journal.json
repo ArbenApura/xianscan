@@ -15,6 +15,13 @@
       "when": 1786542882637,
       "tag": "0001_regions_polygon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1786621381513,
+      "tag": "0002_ambitious_lady_deathstrike",
+      "breakpoints": true
     }
   ]
 }

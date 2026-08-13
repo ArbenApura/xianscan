@@ -88,6 +88,8 @@ class WatermarkRemover:
             return img_bgr
 
         inpainter = get_inpainter()
+        if not inpainter.available():
+            return img_bgr
         return inpainter(img_bgr, mask)
 
 

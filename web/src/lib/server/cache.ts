@@ -93,6 +93,6 @@ export function savePageTranslation(
 			completionTokens: usage.completionTokens,
 			costUsd: usage.costUsd,
 		})
-		.onConflictDoNothing({ target: translations.cacheKey })
+		.onConflictDoNothing({ target: [translations.pageId, translations.cacheKey] })
 		.run();
 }

@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { page } from '$app/stores';
-	import { Badge, Button, Modal, ConfirmDialog } from '$lib/components/ui';
+	import { Badge, Button, Modal, ConfirmDialog, ActionMenu, type MenuAction } from '$lib/components/ui';
 	import { ripple } from '$lib/actions/ripple';
 	import { streamSse } from '$lib/sse';
 	// IMPORTED ICONS
@@ -11,7 +11,7 @@
 	import Upload from 'lucide-svelte/icons/upload';
 	import Download from 'lucide-svelte/icons/download';
 	import Play from 'lucide-svelte/icons/play';
-	import RefreshCw from 'lucide-svelte/icons/refresh-cw';
+	import RotateCcw from 'lucide-svelte/icons/rotate-ccw';
 	import LayoutGrid from 'lucide-svelte/icons/layout-grid';
 	import BookOpen from 'lucide-svelte/icons/book-open';
 	import Columns from 'lucide-svelte/icons/columns';
@@ -23,6 +23,7 @@
 	import ZoomOut from 'lucide-svelte/icons/zoom-out';
 	import ArrowUp from 'lucide-svelte/icons/arrow-up';
 	import GripVertical from 'lucide-svelte/icons/grip-vertical';
+	import Copy from 'lucide-svelte/icons/copy';
 	import { settings } from '$lib/stores/settings';
 
 	// -- TYPES -- //
@@ -171,18 +172,82 @@
 		isDraggingOver = false;
 	}
 
-	async function translate(force = false) {
+	let translatingPageId: number | null = null;
+
+	async function translateSinglePage(pg: Page) {
+		if (running) return;
+		translatingPageId = pg.id;
+		try {
+			if (pg.status === 'done') {
+				const resetResp = await fetch(`/api/pages/${pg.id}/reset`, { method: 'POST' });
+				if (!resetResp.ok) throw new Error('Reset failed');
+				pg.status = 'pending';
+				pg.outputPath = null;
+				pages = [...pages];
+			}
+
+			running = true;
+			progress = 0;
+			pageCount = 1;
+			const customWatermarks = $settings.watermarkRemoval && $settings.customWatermarks
+				? $settings.customWatermarks.split(',').map((s) => s.trim()).filter(Boolean)
+				: [];
+
+			await streamSse(
+				`/api/chapters/${$page.params.chapterId}/translate`,
+				{ watermarkRemoval: $settings.watermarkRemoval, customWatermarks },
+				(e) => {
+					if (e.type === 'page-done') {
+						const pageIdx = e.page as number;
+						if (pages[pageIdx]) {
+							pages[pageIdx].status = 'done';
+							pages[pageIdx].outputPath = `/api/pages/${pages[pageIdx].id}/file?kind=output`;
+							pages = [...pages];
+						}
+						reloadKey = Date.now();
+						progress = (e.page as number) + 1;
+						pageCount = e.pageCount as number;
+					} else if (e.type === 'error') {
+						toast.error(String(e.message ?? 'A page failed — see its badge.'));
+					}
+				},
+			);
+			toast.success(`Translated Page ${pg.seq + 1}.`);
+			await reload();
+		} catch (e) {
+			toast.error(e instanceof Error ? e.message : 'Translation failed.');
+		} finally {
+			running = false;
+			translatingPageId = null;
+		}
+	}
+
+	async function translate() {
+		const pendingPages = pages.filter((p) => p.status !== 'done');
+		if (pendingPages.length === 0 && pages.length > 0) {
+			toast.info('All pages are already translated! Use Clear Progress to reset or click individual Translate buttons.');
+			return;
+		}
+
 		running = true;
 		progress = 0;
+		pageCount = pages.length;
 		const customWatermarks = $settings.watermarkRemoval && $settings.customWatermarks
 			? $settings.customWatermarks.split(',').map((s) => s.trim()).filter(Boolean)
 			: [];
 		try {
 			await streamSse(
 				`/api/chapters/${$page.params.chapterId}/translate`,
-				{ force, watermarkRemoval: $settings.watermarkRemoval, customWatermarks },
+				{ watermarkRemoval: $settings.watermarkRemoval, customWatermarks },
 				(e) => {
 					if (e.type === 'page-done') {
+						const pageIdx = e.page as number;
+						if (pages[pageIdx]) {
+							pages[pageIdx].status = 'done';
+							pages[pageIdx].outputPath = `/api/pages/${pages[pageIdx].id}/file?kind=output`;
+							pages = [...pages];
+						}
+						reloadKey = Date.now();
 						progress = (e.page as number) + 1;
 						pageCount = e.pageCount as number;
 					} else if (e.type === 'error') {
@@ -196,6 +261,52 @@
 		} finally {
 			running = false;
 		}
+	}
+
+	function getGridMenuItems(pg: Page, idx: number): MenuAction[] {
+		const items: MenuAction[] = [
+			{
+				value: 'translate',
+				label: pg.status === 'done' ? 'Re-translate Page' : 'Translate Page',
+				icon: Sparkles,
+			},
+			{
+				value: 'inspect',
+				label: 'Inspect Page',
+				icon: Eye,
+			},
+		];
+
+		if (idx < pages.length - 1) {
+			items.push({
+				value: 'stitch',
+				label: `Merge with Page ${pg.seq + 2}`,
+				icon: Layers,
+			});
+		}
+
+		items.push({
+			value: 'reset',
+			label: 'Clear Progress',
+			icon: RotateCcw,
+		});
+
+		items.push({
+			value: 'delete',
+			label: 'Delete Page',
+			icon: Trash2,
+			danger: true,
+		});
+
+		return items;
+	}
+
+	function handleGridMenuSelect(actionValue: string, pg: Page) {
+		if (actionValue === 'translate') translateSinglePage(pg);
+		else if (actionValue === 'inspect') openInspector(pg);
+		else if (actionValue === 'stitch') stitchPageWithNext(pg.id, pg.seq);
+		else if (actionValue === 'reset') clearPageProgress(pg);
+		else if (actionValue === 'delete') promptDeletePage(pg);
 	}
 
 	function downloadZip() {
@@ -265,6 +376,41 @@
 			toast.error((e as Error).message || 'Could not stitch pages.');
 		} finally {
 			stitchingPageId = null;
+		}
+	}
+
+	// -- PROGRESS RESET (PER PAGE + WHOLE CHAPTER) -- //
+
+	let resettingPageId: number | null = null;
+	async function clearPageProgress(pg: Page) {
+		resettingPageId = pg.id;
+		try {
+			const resp = await fetch(`/api/pages/${pg.id}/reset`, { method: 'POST' });
+			if (!resp.ok) throw new Error('Reset failed');
+			toast.success(`Cleared progress on Page ${pg.seq + 1} — re-run Translate to redo it.`);
+			await reload();
+		} catch {
+			toast.error('Could not clear page progress.');
+		} finally {
+			resettingPageId = null;
+		}
+	}
+
+	let clearChapterConfirmOpen = false;
+	let clearingChapter = false;
+	async function confirmClearChapter() {
+		clearingChapter = true;
+		try {
+			const resp = await fetch(`/api/chapters/${$page.params.chapterId}/reset`, { method: 'POST' });
+			if (!resp.ok) throw new Error('Reset failed');
+			const { reset } = await resp.json();
+			toast.success(`Cleared progress on ${reset} page${reset === 1 ? '' : 's'} — re-run Translate to start fresh.`);
+			await reload();
+		} catch {
+			toast.error('Could not clear chapter progress.');
+		} finally {
+			clearingChapter = false;
+			clearChapterConfirmOpen = false;
 		}
 	}
 
@@ -358,6 +504,33 @@
 			h: Number(b.h ?? 0),
 		};
 	}
+
+	function copyInspectDebugInfo(p: Page | null) {
+		if (!p) return;
+		const debugData = {
+			page: {
+				id: p.id,
+				seq: p.seq + 1,
+				status: p.status,
+				width: p.width,
+				height: p.height,
+				error: p.error ?? null,
+				regionCount: p.regions?.length ?? 0,
+			},
+			regions: (p.regions ?? []).map((r) => ({
+				id: r.id,
+				seq: r.seq + 1,
+				category: r.category,
+				box: getBox(r.box),
+				conf: r.conf,
+				textSource: r.textSource,
+				textTarget: r.textTarget,
+			})),
+		};
+		const jsonStr = JSON.stringify(debugData, null, 2);
+		navigator.clipboard?.writeText(jsonStr);
+		toast.success(`Copied debug data for Page ${p.seq + 1} to clipboard!`);
+	}
 </script>
 
 <svelte:head>
@@ -417,7 +590,7 @@
 				<span>{uploading ? 'Uploading…' : 'Add Images'}</span>
 			</label>
 
-			<Button variant="primary" size="sm" disabled={running || pages.length === 0} on:click={() => translate(false)}>
+			<Button variant="primary" size="sm" disabled={running || pages.length === 0} on:click={translate}>
 				<Play size={14} /> {running ? 'Translating…' : 'Translate'}
 			</Button>
 		</div>
@@ -439,8 +612,13 @@
 			</div>
 
 			<div class="flex items-center gap-2">
-				<Button variant="secondary" size="sm" disabled={!running} on:click={() => translate(true)}>
-					<RefreshCw size={14} /> Force Re-run
+				<Button
+					variant="secondary"
+					size="sm"
+					disabled={pages.length === 0 || running}
+					on:click={() => (clearChapterConfirmOpen = true)}
+				>
+					<RotateCcw size={14} /> Clear Progress
 				</Button>
 
 				<Button variant="secondary" size="sm" disabled={pages.length === 0} on:click={downloadZip}>
@@ -609,48 +787,58 @@
 								<span class="flex items-center gap-1 cursor-grab rounded-md bg-black/80 px-2 py-0.5 text-[11px] font-bold text-white backdrop-blur border border-white/10 active:cursor-grabbing">
 									<GripVertical size={12} class="opacity-60" /> Page {page.seq + 1}
 								</span>
-								<Badge variant={statusVariant[page.status]}>
-									{statusLabel[page.status]}
-								</Badge>
-							</div>
-
-							<div class="absolute bottom-3 right-3 flex items-center gap-1.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
-								{#if idx < pages.length - 1}
-									<button
-										type="button"
-										on:click={() => stitchPageWithNext(page.id, page.seq)}
-										disabled={stitchingPageId === page.id}
-										class="flex items-center gap-1 rounded-md bg-blue-600/80 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-blue-600 pointer-events-auto disabled:opacity-50"
-										title="Stitch with page {page.seq + 2}"
-									>
-										{stitchingPageId === page.id ? 'Stitching...' : 'Merge Next'}
-									</button>
-								{/if}
-								<button
-									type="button"
-									on:click={() => openInspector(page)}
-									class="flex items-center gap-1 rounded-md bg-black/80 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-black pointer-events-auto"
-								>
-									<Eye size={12} /> Inspect
-								</button>
-
-								<button
-									type="button"
-									on:click={() => promptDeletePage(page)}
-									class="flex items-center gap-1 rounded-md bg-red-600/80 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-red-600 pointer-events-auto"
-								>
-									<Trash2 size={12} />
-								</button>
-							</div>
+							<Badge
+								variant={statusVariant[page.status]}
+								class={page.status === 'done'
+									? 'text-emerald-300 bg-emerald-950/80 border border-emerald-500/40 backdrop-blur shadow-md'
+									: page.status === 'processing'
+										? 'text-amber-300 bg-amber-950/80 border border-amber-500/40 backdrop-blur shadow-md'
+										: page.status === 'error'
+											? 'text-red-300 bg-red-950/80 border border-red-500/40 backdrop-blur shadow-md'
+											: 'text-neutral-200 bg-neutral-900/80 border border-white/20 backdrop-blur shadow-md'}
+							>
+								{statusLabel[page.status]}
+							</Badge>
 						</div>
-					{/each}
-				</div>
-			</div>
 
-			<!-- FLOATING UNINTRUSIVE WEBTOON DOCK -->
-			<div class="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full border border-white/15 bg-black/85 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur transition-all duration-300 hover:bg-black">
-				<span class="text-[11px] font-mono opacity-80">Page {currentScrollPage} / {pages.length}</span>
-				<span class="h-3 w-px bg-white/20"></span>
+						<div class="absolute bottom-3 right-3 flex items-center gap-1.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+							<button
+								type="button"
+								on:click={() => openInspector(page)}
+								class="flex items-center gap-1 rounded-md bg-black/80 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-black pointer-events-auto"
+							>
+								<Eye size={12} /> Inspect
+							</button>
+							<ActionMenu
+								items={getGridMenuItems(page, idx)}
+								on:select={(e) => handleGridMenuSelect(e.detail, page)}
+								class="bg-black/80 text-white border border-white/20 hover:bg-black pointer-events-auto opacity-100"
+							/>
+						</div>
+					</div>
+				{/each}
+			</div>
+		</div>
+
+		<!-- FLOATING UNINTRUSIVE WEBTOON DOCK -->
+		<div class="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full border border-white/15 bg-black/85 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur transition-all duration-300 hover:bg-black">
+			<span class="text-[11px] font-mono opacity-80">Page {currentScrollPage} / {pages.length}</span>
+			{#if pages[currentScrollPage - 1]}
+				{@const curPg = pages[currentScrollPage - 1]}
+				<Badge
+					variant={statusVariant[curPg.status]}
+					class={curPg.status === 'done'
+						? 'text-emerald-300 bg-emerald-950/80 border border-emerald-500/40'
+						: curPg.status === 'processing'
+							? 'text-amber-300 bg-amber-950/80 border border-amber-500/40'
+							: curPg.status === 'error'
+								? 'text-red-300 bg-red-950/80 border border-red-500/40'
+								: 'text-neutral-200 bg-neutral-900/80 border border-white/20'}
+				>
+					{statusLabel[curPg.status]}
+				</Badge>
+			{/if}
+			<span class="h-3 w-px bg-white/20"></span>
 				<button
 					type="button"
 					on:click={() => setWebtoonKind(webtoonKind === 'output' ? 'original' : 'output')}
@@ -688,32 +876,26 @@
 				>
 					<div>
 						<div class="mb-2 flex items-center justify-between">
-							<span class="flex items-center gap-1 cursor-grab text-xs font-bold active:cursor-grabbing">
-								<GripVertical size={13} class="opacity-40" /> Page {page.seq + 1}
-							</span>
 							<div class="flex items-center gap-2">
+								<span class="flex items-center gap-1 cursor-grab text-xs font-bold active:cursor-grabbing">
+									<GripVertical size={13} class="opacity-40" /> Page {page.seq + 1}
+								</span>
 								<Badge variant={statusVariant[page.status]}>
 									{statusLabel[page.status]}
 								</Badge>
-								{#if idx < pages.length - 1}
-									<button
-										type="button"
-										on:click={() => stitchPageWithNext(page.id, page.seq)}
-										disabled={stitchingPageId === page.id}
-										class="rounded px-1.5 py-0.5 text-[10px] font-semibold bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 disabled:opacity-50"
-										title="Stitch with page {page.seq + 2}"
-									>
-										{stitchingPageId === page.id ? 'Stitching...' : 'Merge Next'}
-									</button>
-								{/if}
+							</div>
+							<div class="flex items-center gap-1.5">
 								<button
 									type="button"
-									on:click={() => promptDeletePage(page)}
-									class="rounded p-1 opacity-40 hover:bg-red-500/10 hover:opacity-100 hover:text-red-600"
-									aria-label="Delete Page"
+									on:click={() => openInspector(page)}
+									class="flex items-center gap-1 rounded-md bg-black/5 px-2 py-1 text-xs font-semibold transition hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"
 								>
-									<Trash2 size={13} />
+									<Eye size={12} /> Inspect
 								</button>
+								<ActionMenu
+									items={getGridMenuItems(page, idx)}
+									on:select={(e) => handleGridMenuSelect(e.detail, page)}
+								/>
 							</div>
 						</div>
 
@@ -724,7 +906,8 @@
 									src={`/api/pages/${page.id}/file?kind=${viewMode.get(page.id) === 'output' ? 'output' : 'original'}&v=${reloadKey}`}
 									alt={`Page ${page.seq + 1}`}
 									draggable="false"
-									class="w-full object-cover transition-opacity duration-200 select-none"
+									class="w-full object-cover transition-opacity duration-200 select-none cursor-pointer"
+									on:click={() => openInspector(page)}
 								/>
 								<button
 									type="button"
@@ -739,41 +922,14 @@
 									src={`/api/pages/${page.id}/file?kind=original&v=${reloadKey}`}
 									alt={`Page ${page.seq + 1}`}
 									draggable="false"
-									class="w-full object-cover select-none"
+									class="w-full object-cover select-none cursor-pointer"
+									on:click={() => openInspector(page)}
 								/>
 							{/if}
-
-							<!-- INSPECTOR TRIGGER OVERLAY -->
-							<button
-								type="button"
-								on:click={() => openInspector(page)}
-								class="absolute bottom-2 right-2 flex items-center gap-1 rounded-md bg-black/75 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur transition hover:bg-black"
-							>
-								<Eye size={12} /> Inspect
-							</button>
 						</div>
 
 						{#if page.error}
 							<p class="mt-2 text-xs text-red-600 dark:text-red-400">{page.error}</p>
-						{/if}
-
-						<!-- REGIONS PREVIEW -->
-						{#if page.regions.length > 0}
-							<div class="mt-2.5 border-t border-black/[0.04] pt-2 text-[11px] opacity-70 dark:border-white/[0.04]">
-								<div class="font-semibold text-xs opacity-80 mb-1">{page.regions.length} detected regions</div>
-								<ul class="space-y-0.5 max-h-16 overflow-y-auto">
-									{#each page.regions.slice(0, 3) as region}
-										<li class="truncate">
-											<span class="font-medium text-[#b23a2e] dark:text-[#e08a63]">{region.category}:</span>
-											{region.textSource || '—'}
-											{#if region.textTarget}<span class="opacity-60">→ {region.textTarget}</span>{/if}
-										</li>
-									{/each}
-									{#if page.regions.length > 3}
-										<li class="opacity-40 font-italic">+ {page.regions.length - 3} more...</li>
-									{/if}
-								</ul>
-							</div>
 						{/if}
 					</div>
 				</div>
@@ -799,44 +955,28 @@
 					<div class="mb-3 flex items-center justify-between text-xs font-bold">
 						<div class="flex items-center gap-2">
 							<span class="flex items-center gap-1 cursor-grab active:cursor-grabbing">
-								<GripVertical size={14} class="opacity-40" /> Page {page.seq + 1} Side-by-Side Comparison
+								<GripVertical size={14} class="opacity-40" /> Page {page.seq + 1}
 							</span>
 							<Badge variant={statusVariant[page.status]}>{statusLabel[page.status]}</Badge>
 						</div>
 
 						<div class="flex items-center gap-1.5">
-							{#if idx < pages.length - 1}
-								<button
-									type="button"
-									on:click={() => stitchPageWithNext(page.id, page.seq)}
-									disabled={stitchingPageId === page.id}
-									class="flex items-center gap-1 rounded-md bg-blue-500/10 px-2 py-1 text-xs font-semibold text-blue-600 hover:bg-blue-500/20 disabled:opacity-50"
-									title="Stitch with page {page.seq + 2}"
-								>
-									{stitchingPageId === page.id ? 'Stitching...' : 'Merge Next'}
-								</button>
-							{/if}
 							<button
 								type="button"
 								on:click={() => openInspector(page)}
-								class="flex items-center gap-1 rounded-md bg-black/5 px-2.5 py-1 text-xs font-semibold hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"
+								class="flex items-center gap-1 rounded-md bg-black/5 px-2 py-1 text-xs font-semibold transition hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"
 							>
-								<Eye size={13} /> Inspect
+								<Eye size={12} /> Inspect
 							</button>
-
-							<button
-								type="button"
-								on:click={() => promptDeletePage(page)}
-								class="flex items-center gap-1 rounded-md bg-red-500/10 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-500/20"
-								aria-label="Delete Page"
-							>
-								<Trash2 size={13} />
-							</button>
+							<ActionMenu
+								items={getGridMenuItems(page, idx)}
+								on:select={(e) => handleGridMenuSelect(e.detail, page)}
+							/>
 						</div>
 					</div>
 
 					<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-						<!-- ORIGINAL PAGE COLUMN WITH HOVER TOOLS -->
+						<!-- ORIGINAL PAGE COLUMN -->
 						<div class="flex flex-col gap-1.5">
 							<div class="flex items-center justify-between text-xs font-semibold opacity-60">
 								<span>Original Page</span>
@@ -846,37 +986,21 @@
 									src={`/api/pages/${page.id}/file?kind=original&v=${reloadKey}`}
 									alt={`Page ${page.seq + 1} Original`}
 									draggable="false"
-									class="w-full h-auto block object-contain select-none"
+									class="w-full h-auto block object-contain select-none cursor-pointer"
+									on:click={() => openInspector(page, 'original')}
 								/>
-								<!-- HOVER-ONLY OVERLAY TOOLS -->
-								<div class="absolute bottom-2 left-2 flex items-center gap-1.5 opacity-0 transition-opacity duration-200 group-hover/img:opacity-100">
+								<div class="absolute bottom-2 left-2 flex items-center gap-1.5">
 									<span class="rounded bg-black/80 px-2 py-0.5 text-[10px] font-bold text-white backdrop-blur">
 										Original
 									</span>
 								</div>
-								<div class="absolute bottom-2 right-2 flex items-center gap-1.5 opacity-0 transition-opacity duration-200 group-hover/img:opacity-100">
-									<button
-										type="button"
-										on:click={() => openInspector(page, 'original')}
-										class="flex items-center gap-1 rounded-md bg-black/80 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-black"
-									>
-										<Eye size={12} /> Inspect
-									</button>
-									<button
-										type="button"
-										on:click={() => promptDeletePage(page)}
-										class="flex items-center gap-1 rounded-md bg-red-600/80 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-red-600"
-									>
-										<Trash2 size={12} />
-									</button>
-								</div>
 							</div>
 						</div>
 
-						<!-- TRANSLATED / CLEANED OUTPUT COLUMN WITH HOVER TOOLS -->
+						<!-- TRANSLATED / CLEANED OUTPUT COLUMN -->
 						<div class="flex flex-col gap-1.5">
 							<div class="flex items-center justify-between text-xs font-semibold opacity-60">
-								<span>Translated / Cleaned Output</span>
+								<span>Translated Output</span>
 							</div>
 							{#if page.outputPath}
 								<div class="group/img relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10">
@@ -884,29 +1008,13 @@
 										src={`/api/pages/${page.id}/file?kind=output&v=${reloadKey}`}
 										alt={`Page ${page.seq + 1} Output`}
 										draggable="false"
-										class="w-full h-auto block object-contain select-none"
+										class="w-full h-auto block object-contain select-none cursor-pointer"
+										on:click={() => openInspector(page, 'output')}
 									/>
-									<!-- HOVER-ONLY OVERLAY TOOLS -->
-									<div class="absolute bottom-2 left-2 flex items-center gap-1.5 opacity-0 transition-opacity duration-200 group-hover/img:opacity-100">
+									<div class="absolute bottom-2 left-2 flex items-center gap-1.5">
 										<span class="rounded bg-black/80 px-2 py-0.5 text-[10px] font-bold text-white backdrop-blur">
 											Translated
 										</span>
-									</div>
-									<div class="absolute bottom-2 right-2 flex items-center gap-1.5 opacity-0 transition-opacity duration-200 group-hover/img:opacity-100">
-										<button
-											type="button"
-											on:click={() => openInspector(page, 'output')}
-											class="flex items-center gap-1 rounded-md bg-black/80 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-black"
-										>
-											<Eye size={12} /> Inspect
-										</button>
-										<button
-											type="button"
-											on:click={() => promptDeletePage(page)}
-											class="flex items-center gap-1 rounded-md bg-red-600/80 px-2 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-red-600"
-										>
-											<Trash2 size={12} />
-										</button>
 									</div>
 								</div>
 							{:else}
@@ -960,7 +1068,6 @@
 						</button>
 					{/if}
 
-					<!-- BUG FIX: was `text-[#b23a2e]` (red text on red bg = invisible). Now `text-white`. -->
 					<button
 						type="button"
 						class={`rounded-lg px-3 py-1.5 font-medium transition ${inspectTab === 'original' ? 'bg-[#b23a2e] text-white' : 'bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10'}`}
@@ -1075,7 +1182,7 @@
 			</div>
 
 			<!-- REGIONS LIST COLUMN -->
-			<div class="flex flex-col gap-3 lg:col-span-5">
+			<div class="flex flex-col gap-3 lg:col-span-5 h-full">
 				<div class="flex items-center justify-between gap-2">
 					<h3 class="text-sm font-bold">
 						Detected Regions ({inspectPage.regions.length})
@@ -1094,7 +1201,7 @@
 				{#if inspectPage.regions.length === 0}
 					<p class="text-xs opacity-60">No text regions detected on this page yet.</p>
 				{:else}
-					<div class="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
+					<div class="flex-1 min-h-[300px] max-h-[65vh] space-y-2 overflow-y-auto pr-1">
 						{#each inspectPage.regions as region (region.id)}
 							{@const b = getBox(region.box)}
 							{@const catCls =
@@ -1184,6 +1291,12 @@
 	{/if}
 
 	<svelte:fragment slot="footer">
+		{#if inspectPage}
+			<Button variant="secondary" on:click={() => copyInspectDebugInfo(inspectPage)}>
+				<Copy size={14} class="mr-1.5" />
+				Copy Debug Data
+			</Button>
+		{/if}
 		<Button on:click={() => (inspectModalOpen = false)}>Close</Button>
 	</svelte:fragment>
 </Modal>
@@ -1193,10 +1306,20 @@
 <ConfirmDialog
 	open={deletePageConfirmOpen}
 	title="Delete Page?"
-	description={`Are you sure you want to delete Page ${pageToDelete ? pageToDelete.seq + 1 : ''}? This cannot be undone.`}
+	message={`Are you sure you want to delete Page ${pageToDelete ? pageToDelete.seq + 1 : ''}? This cannot be undone.`}
 	confirmLabel="Delete Page"
-	destructive
-	loading={deletingPage}
+	variant="danger"
 	on:confirm={confirmDeletePage}
 	on:cancel={() => (deletePageConfirmOpen = false)}
+/>
+
+<!-- CLEAR CHAPTER PROGRESS CONFIRMATION -->
+<ConfirmDialog
+	open={clearChapterConfirmOpen}
+	title="Clear Chapter Progress?"
+	message={`This resets all ${pages.length} page${pages.length === 1 ? '' : 's'} — detected regions, translations, cached results, and outputs are removed. Re-run Translate to start fresh.`}
+	confirmLabel="Clear Progress"
+	variant="danger"
+	on:confirm={confirmClearChapter}
+	on:cancel={() => (clearChapterConfirmOpen = false)}
 />
