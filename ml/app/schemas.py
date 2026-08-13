@@ -29,6 +29,7 @@ class Region(BaseModel):
     text: str = ""
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     vertical: bool = False
+    angle: float = 0.0
 
     @field_validator("polygon")
     @classmethod

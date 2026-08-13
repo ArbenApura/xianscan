@@ -25,6 +25,7 @@ _EXCLAIM_TAIL = re.compile(r"[!！]$")
 _QUESTION_TAIL = re.compile(r"[?？]$")
 # A REGION CONTAINING NOTHING BUT 1-2 PUNCTUATION GLYPHS (A LONE "." / "？" / "！").
 _PUNCT_ONLY = re.compile(r"^[.．…·!！?？~～]{1,2}$")
+_STRAY_DOT_LINE = re.compile(r"^[.．·…]$")
 
 
 def _ellipsis_polygon(base_pts: np.ndarray, union_box: np.ndarray, text: str, page_w: int) -> list[list[int]]:
@@ -186,6 +187,7 @@ def decode_image(data: bytes) -> np.ndarray:
 def _region_from_box(box: np.ndarray, index: int, page_w: int, page_h: int) -> Region:
     x, y, w, h = detect.box_to_xywh(box)
     polygon = [[int(px), int(py)] for px, py in box]
+    angle = detect.calculate_box_angle(box)
     return Region(
         id=f"r{index}",
         box=Box(x=x, y=y, w=w, h=h),
@@ -193,6 +195,7 @@ def _region_from_box(box: np.ndarray, index: int, page_w: int, page_h: int) -> R
         category=detect.classify_region(box, page_w, page_h),  # type: ignore[arg-type]
         confidence=0.0,
         vertical=detect.is_vertical_box(box),
+        angle=angle,
     )
 
 
@@ -277,8 +280,27 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	except Exception:
 		pass
 
+	# CLEAN STRAY LATIN NOISE BEFORE ELLIPSIS / PUNCTUATION (e.g. "NMT..." -> "……")
+	normalized_rapid_lines = []
+	for pts, t, s in rapid_lines:
+		clean_t = t
+		if re.fullmatch(r'^[A-Za-z]{1,4}[.．…!！?？]{1,}$', t.strip()):
+			has_bang = "!" in t or "！" in t
+			has_q = "?" in t or "？" in t
+			if has_bang and has_q:
+				clean_t = "……！？"
+			elif has_bang:
+				clean_t = "……！"
+			elif has_q:
+				clean_t = "……？"
+			else:
+				clean_t = "……"
+		normalized_rapid_lines.append((pts, clean_t, s))
+	rapid_lines = normalized_rapid_lines
+
 	rapid_boxes = [pts for pts, _t, _s in rapid_lines]
 	rapid_scores = [float(s) for _pts, _t, s in rapid_lines]
+	rapid_texts = [t for _pts, t, _s in rapid_lines]
 
 	# FILTER OUT COMIC DETECTOR BLOBS THAT SPAN MULTIPLE VERTICAL LINES.
 	# RAPIDOCR PROVIDES PRECISE SINGLE-LINE DETECTIONS; INGESTING OVERLAPPING MULTI-LINE COMIC BLOBS
@@ -383,6 +405,13 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					region.box = Box(x=hx, y=hy, w=max(1, hw), h=max(1, hh))
 				region.category = detect.classify_region(hull_pts, page_w, page_h)  # type: ignore[arg-type]
 				region.vertical = detect.is_vertical_box(hull_pts)
+			# 3. COMPUTE ORIENTATION ANGLE FROM MATCHED TEXT LINES
+			line_angles = [detect.calculate_box_angle(l) for l, _t, _s in matched]
+			non_zero = [a for a in line_angles if abs(a) >= 2.0]
+			if non_zero:
+				region.angle = round(float(np.median(non_zero)), 2)
+			elif line_angles:
+				region.angle = round(float(np.median(line_angles)), 2)
 		else:
 			ocr_result = ocr.recognize_crop(ocr.crop_region(img_bgr, box))
 			if ocr_result:
@@ -437,26 +466,37 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					if last_char not in "。.;；:：!！?？)]】”’\"'":
 						unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
 						region.text = region.text.rstrip() + "\n" + unit
-				# A REAL HORIZONTAL EXTENSION TO THE RIGHT IS MISSED TRAILING PUNCTUATION
-				# (e.g. THE "！" OF "找到军师了！！") — REFLECT IT IN THE EXTRACTED TEXT TOO.
-				if line_h > 0 and added_w >= line_h * 0.35:
+				# A REAL HORIZONTAL EXTENSION TO THE RIGHT IS MISSED TRAILING PUNCTUATION OR ELLIPSIS
+				# (e.g. THE "！" OF "找到军师了！！" OR THE "……" OF "这里建……") — REFLECT IT IN THE EXTRACTED TEXT TOO.
+				if line_h > 0 and added_w >= max(10.0, line_h * 0.20):
 					if _ELLIPSIS_TAIL.search(region.text):
 						region.text = _append_ellipsis(region.text)
-					else:
+					elif any(c in "！!？?" for c in region.text):
 						region.text = _append_punctuation(region.text)
+					elif region.text.strip() and region.text.rstrip()[-1] not in "。.;；:：)]】”’\"'":
+						unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
+						region.text = region.text.rstrip() + unit
 		regions.append(region)
 
 	# -- STRAY-DOT CLEANUP: REC MODELS SOMETIMES SPLIT A FINAL "..." INTO THE LAST WORD PLUS A
-	# LONE "." ON ITS OWN LINE — OR EVEN ITS OWN REGION (e.g. "Transmigration.." + ".", OR
-	# "JINGZHOU" WITH A "." REGION RIGHT BELOW). A LONE DOT MUST STAY WITH THE LAST WORD —
-	# OTHERWISE IT RENDERS AS A STRAY FLOATING DOT AND BREAKS THE READING FLOW.
+	# SEPARATE LONE-DOT LINE (e.g. "大姐大，\n轻，轻点\n."): A TRAILING LONE-DOT LINE JOINS THE LINE ABOVE IT.
 	_STRAY_DOT_LINE = re.compile(r"^[.．·…]$")
-
-	# 1) WITHIN A REGION: A TRAILING LONE-DOT LINE JOINS THE LINE ABOVE IT.
 	for region in regions:
 		lines = region.text.split("\n")
 		if len(lines) >= 2 and _STRAY_DOT_LINE.fullmatch(lines[-1].strip()):
 			region.text = "\n".join(lines[:-2] + [lines[-2].rstrip() + lines[-1].strip()])
+		# CLEAN STRAY LATIN NOISE BEFORE ELLIPSIS / PUNCTUATION (e.g. "NMT........." -> "……！" or "……")
+		if re.fullmatch(r'^[A-Za-z]{1,4}[.．…!！?？]{2,}$', region.text.strip()):
+			has_bang = "!" in region.text or "！" in region.text
+			has_q = "?" in region.text or "？" in region.text
+			if has_bang and has_q:
+				region.text = "……！？"
+			elif has_bang:
+				region.text = "……！"
+			elif has_q:
+				region.text = "……？"
+			else:
+				region.text = "……"
 
 	# 2) A PUNCTUATION-ONLY REGION MERGES INTO ITS NEIGHBOUR: THE LONE "." UNDER "JINGZHOU" AND
 	# THE LONE "？" AFTER "穿越者！" MUST JOIN THE ADJACENT TEXT — NEVER STAND ALONE.

@@ -18,6 +18,7 @@ export interface PipelineRegion {
 	text: string;
 	confidence: number;
 	vertical: boolean;
+	angle?: number;
 }
 
 export interface AnalyzeResult {

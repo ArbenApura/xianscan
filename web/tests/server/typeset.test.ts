@@ -233,6 +233,28 @@ describe('typesetPage', () => {
 		]);
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 	});
+
+	it('renders an angled/rotated region with rotation transform', async () => {
+		const out = await typesetPage(blankPng(400, 400, 'black'), [
+			{ id: 'r0', box: { x: 50, y: 50, w: 300, h: 100 }, text: 'SLASH!', category: 'sfx', angle: 35.5 },
+		]);
+		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+		expect(await brightPixels(out)).toBeGreaterThan(0);
+	});
+
+	it('renders an angled structured stat panel with rotation transform', async () => {
+		const out = await typesetPage(blankPng(400, 400, 'black'), [
+			{
+				id: 'r0',
+				box: { x: 50, y: 50, w: 300, h: 150 },
+				text: '[TOP-TIER CHARACTERS: TEN.]\n(With a Top-tier Pet)',
+				category: 'dialogue',
+				angle: 9.26,
+			},
+		]);
+		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+		expect(await brightPixels(out)).toBeGreaterThan(0);
+	});
 });
 
 describe('sampleBackground', () => {

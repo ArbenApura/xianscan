@@ -178,6 +178,35 @@ def is_vertical_box(box: np.ndarray) -> bool:
 	return h > w * 1.2
 
 
+def calculate_box_angle(box: np.ndarray | list[list[int | float]]) -> float:
+	"""CALCULATE ORIENTATION ANGLE IN DEGREES [-90, 90] OF A 4-POINT POLYGON / BOX.
+	ANGLES WITH MAGNITUDE < 2.0 DEGREES ARE ROUNDED TO 0.0 TO PREVENT SUBPIXEL BLUR ON HORIZONTAL TEXT.
+	"""
+	pts = np.array(box, dtype=np.float32).reshape(-1, 2)
+	if len(pts) < 4:
+		return 0.0
+
+	p0, p1, p2, p3 = pts[0], pts[1], pts[2], pts[3]
+	dx = float(p1[0] - p0[0] + p2[0] - p3[0]) / 2.0
+	dy = float(p1[1] - p0[1] + p2[1] - p3[1]) / 2.0
+
+	if dx == 0 and dy == 0:
+		return 0.0
+
+	angle_rad = np.arctan2(dy, dx)
+	angle_deg = float(np.degrees(angle_rad))
+
+	while angle_deg > 90.0:
+		angle_deg -= 180.0
+	while angle_deg < -90.0:
+		angle_deg += 180.0
+
+	if abs(angle_deg) < 2.0:
+		return 0.0
+
+	return round(angle_deg, 2)
+
+
 def classify_region(box: np.ndarray, page_w: int, page_h: int) -> str:
 	"""CATEGORY HEURISTIC — SFX/IMPACT TEXT HAS BIG GLYPHS THAT DOMINATE A LARGE AREA.
 	A MULTI-LINE DIALOGUE PARAGRAPH CAN BE TALL BUT IS NARROW — IT MUST STAY 'dialogue'.
@@ -217,7 +246,7 @@ def line_center_inside(line: np.ndarray, region: np.ndarray) -> bool:
 
 
 _URL_RE = re.compile(r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|http)', re.IGNORECASE)
-_CHINESE_RE = re.compile(r'[\u4e00-\u9fa5\u3400-\u4dbf\U00020000-\U0002A6DF]')
+_CHINESE_RE = re.compile(r'[\u4e00-\u9fa5\u3400-\u4dbf\U00020000-\U0002A6DF\u3000-\u303f\uff00-\uffef\u2026]')
 _WATERMARK_RE = re.compile(
 	r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|http|'
 	r'速漫|漫库|qumanku|包子|baozimh|colamanga|colamanhua|acloudmerge|oamanhua|'

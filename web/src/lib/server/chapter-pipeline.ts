@@ -298,6 +298,7 @@ export async function runChapterPipeline(
 						text: byRegion.get(r.id)!,
 						category: r.category,
 						vertical: r.vertical,
+						angle: r.angle,
 					}));
 				const out = await typesetPage(cleaned, typesetRegions);
 				const outputPath = `output/${chapterId}/${page.seq}.png`;

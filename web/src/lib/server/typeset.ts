@@ -18,6 +18,7 @@ export interface TypesetRegion {
 	text: string;
 	category: 'dialogue' | 'sfx' | 'mono' | 'other';
 	vertical?: boolean;
+	angle?: number;
 }
 
 export interface TextColor {
@@ -418,7 +419,19 @@ export function typesetStatPanel(
 	}
 
 	// --- Pass 2: draw --- //
-	let ty = y + (h - Math.min(totalH, insetH)) / 2;
+	const angleDeg = r.angle ?? 0;
+	const hasRotation = Math.abs(angleDeg) >= 2.0;
+
+	ctx.save();
+	if (hasRotation) {
+		const cx = x + w / 2;
+		const cy = y + h / 2;
+		ctx.translate(cx, cy);
+		ctx.rotate((angleDeg * Math.PI) / 180);
+	}
+
+	const renderH = Math.min(totalH, insetH);
+	let ty = hasRotation ? -renderH / 2 : y + (h - renderH) / 2;
 
 	for (let i = 0; i < measured.length; i++) {
 		const { seg, lines, size, color, stroke, font: segFont } = measured[i];
@@ -427,7 +440,7 @@ export function typesetStatPanel(
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'alphabetic';
 
-		const tx = x + w / 2;
+		const tx = hasRotation ? 0 : x + w / 2;
 		for (const line of lines) {
 			const drawY = ty + size * 0.85;
 			ctx.lineWidth = Math.max(OUTLINE_MIN, size * OUTLINE_FACTOR);
@@ -440,6 +453,7 @@ export function typesetStatPanel(
 		}
 		if (i < measured.length - 1) ty += gap;
 	}
+	ctx.restore();
 }
 
 /**
@@ -543,19 +557,39 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		const lines = reflowText(ctx, text, maxW);
 		const lineH = size * LINE_HEIGHT;
 		const totalH = lines.length * lineH;
-		let ty = y + (h - totalH) / 2 + size * 0.85;
+
+		const angleDeg = r.angle ?? 0;
+		const hasRotation = Math.abs(angleDeg) >= 2.0;
+
+		ctx.save();
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'alphabetic';
-		for (const line of lines) {
+		ctx.lineWidth = Math.max(OUTLINE_MIN, size * OUTLINE_FACTOR);
+		ctx.lineJoin = 'round';
+		ctx.strokeStyle = color.stroke;
+		ctx.fillStyle = color.fill;
+
+		if (hasRotation) {
+			const cx = x + w / 2;
+			const cy = y + h / 2;
+			ctx.translate(cx, cy);
+			ctx.rotate((angleDeg * Math.PI) / 180);
+			let ty = -totalH / 2 + size * 0.85;
+			for (const line of lines) {
+				ctx.strokeText(line, 0, ty);
+				ctx.fillText(line, 0, ty);
+				ty += lineH;
+			}
+		} else {
 			const tx = x + w / 2;
-			ctx.lineWidth = Math.max(OUTLINE_MIN, size * OUTLINE_FACTOR);
-			ctx.lineJoin = 'round';
-			ctx.strokeStyle = color.stroke;
-			ctx.strokeText(line, tx, ty);
-			ctx.fillStyle = color.fill;
-			ctx.fillText(line, tx, ty);
-			ty += lineH;
+			let ty = y + (h - totalH) / 2 + size * 0.85;
+			for (const line of lines) {
+				ctx.strokeText(line, tx, ty);
+				ctx.fillText(line, tx, ty);
+				ty += lineH;
+			}
 		}
+		ctx.restore();
 	}
 	return canvas.toBuffer('image/png');
 }
