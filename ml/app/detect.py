@@ -216,11 +216,35 @@ def line_center_inside(line: np.ndarray, region: np.ndarray) -> bool:
 	return rx0 <= cx <= rx0 + rw and ry0 <= cy <= ry0 + rh
 
 
+_URL_RE = re.compile(r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|http)', re.IGNORECASE)
+_CHINESE_RE = re.compile(r'[\u4e00-\u9fa5\u3400-\u4dbf\U00020000-\U0002A6DF]')
+_WATERMARK_RE = re.compile(
+	r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|http|'
+	r'速漫|漫库|qumanku|包子|baozimh|colamanga|colamanhua|acloudmerge|oamanhua|'
+	r'yumanhua|mangabox|comick|腾讯|微信|公众号|qq群|严禁转载|独家|扫图|录入|修图)',
+	re.IGNORECASE,
+)
+
+
+def _is_watermark_line(text: str | None) -> bool:
+	if not text:
+		return False
+	trimmed = text.strip()
+	if not trimmed:
+		return False
+	if _WATERMARK_RE.search(trimmed):
+		return True
+	if not bool(_CHINESE_RE.search(trimmed)):
+		return True
+	return False
+
+
 def merge_text_lines(
 	boxes: list[np.ndarray],
 	scores: list[float],
-	gap_factor: float = 1.0,
-	overlap_min: float = 0.5,
+	texts: list[str] | None = None,
+	overlap_min: float = 0.40,
+	gap_factor: float = 0.80,
 	height_sim_max: float = 2.0,
 ) -> tuple[list[np.ndarray], list[float]]:
 	"""MERGE HORIZONTAL TEXT BOXES THAT SIT ON THE SAME LINE (PORT OF manga-image-translator's
@@ -230,24 +254,32 @@ def merge_text_lines(
 	  - SAME LINE: VERTICAL OVERLAP ≥ overlap_min × min(heights)
 	  - SAME FONT SIZE: HEIGHTS MATCH (max/min ≤ height_sim_max)
 	  - MERGE WHEN: HORIZONTAL GAP ≤ gap_factor × max(heights) — A NEGATIVE GAP (OVERLAP) ALWAYS MERGES
+	  - WATERMARK ISOLATION: A WATERMARK STAMP AT THE CORNER (e.g. "速漫库") MUST NEVER MERGE
+	    WITH A STORY DIALOGUE LINE ON THE SAME ROW.
 	  - VERTICAL TEXT COLUMNS (h > 1.2×w) ARE NEVER MERGED — SIDE-BY-SIDE COLUMNS LOOK IDENTICAL
 	    TO SAME-LINE BOXES BY THIS RULE AND MUST STAY SEPARATE REGIONS
 	RETURNS (merged_boxes, merged_scores) — EACH MERGED BOX IS THE UNION (AXIS-ALIGNED), SCORE = MAX.
 	"""
 	if not boxes:
 		return [], []
-	items = sorted(zip(boxes, scores), key=lambda p: p[0][:, 0].min())
-	lines: list[list] = []  # [x0, y0, x1, y1, score]
-	for box, score in items:
+	if texts is None:
+		texts = [''] * len(boxes)
+	items = sorted(zip(boxes, scores, texts), key=lambda p: p[0][:, 0].min())
+	lines: list[list] = []  # [x0, y0, x1, y1, score, is_wm]
+	for box, score, txt in items:
 		x, y, w, h = box_to_xywh(box)
 		x1, y1 = x + w, y + h
+		is_wm = _is_watermark_line(txt)
 		if h > w * 1.2:
 			# VERTICAL COLUMN — ITS OWN LINE, NEVER MERGED
-			lines.append([x, y, x1, y1, score])
+			lines.append([x, y, x1, y1, score, is_wm])
 			continue
 		placed = False
 		for ln in lines:
-			lx0, ly0, lx1, ly1, lscore = ln
+			lx0, ly0, lx1, ly1, lscore, l_is_wm = ln
+			# NEVER MERGE A WATERMARK STAMP INTO STORY DIALOGUE
+			if is_wm != l_is_wm:
+				continue
 			lh = ly1 - ly0
 			min_h = min(h, lh)
 			if max(h, lh) / max(1.0, float(min_h)) > height_sim_max:
@@ -264,17 +296,14 @@ def merge_text_lines(
 				placed = True
 				break
 		if not placed:
-			lines.append([x, y, x1, y1, score])
+			lines.append([x, y, x1, y1, score, is_wm])
 	merged = []
 	mscores = []
-	for x0, y0, x1, y1, score in lines:
-		merged.append(np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float64))
-		mscores.append(score)
+	for ln in lines:
+		lx0, ly0, lx1, ly1, lscore = ln[:5]
+		merged.append(np.array([[lx0, ly0], [lx1, ly0], [lx1, ly1], [lx0, ly1]], dtype=np.float64))
+		mscores.append(lscore)
 	return merged, mscores
-
-
-_URL_RE = re.compile(r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|http)', re.IGNORECASE)
-_CHINESE_RE = re.compile(r'[\u4e00-\u9fa5\u3400-\u4dbf\U00020000-\U0002A6DF]')
 
 
 def _is_url_or_non_chinese(text: str | None) -> bool:

@@ -189,13 +189,10 @@
 			running = true;
 			progress = 0;
 			pageCount = 1;
-			const customWatermarks = $settings.watermarkRemoval && $settings.customWatermarks
-				? $settings.customWatermarks.split(',').map((s) => s.trim()).filter(Boolean)
-				: [];
 
 			await streamSse(
 				`/api/chapters/${$page.params.chapterId}/translate`,
-				{ watermarkRemoval: $settings.watermarkRemoval, customWatermarks },
+				{},
 				(e) => {
 					if (e.type === 'page-done') {
 						const pageIdx = e.page as number;
@@ -232,13 +229,10 @@
 		running = true;
 		progress = 0;
 		pageCount = pages.length;
-		const customWatermarks = $settings.watermarkRemoval && $settings.customWatermarks
-			? $settings.customWatermarks.split(',').map((s) => s.trim()).filter(Boolean)
-			: [];
 		try {
 			await streamSse(
 				`/api/chapters/${$page.params.chapterId}/translate`,
-				{ watermarkRemoval: $settings.watermarkRemoval, customWatermarks },
+				{},
 				(e) => {
 					if (e.type === 'page-done') {
 						const pageIdx = e.page as number;

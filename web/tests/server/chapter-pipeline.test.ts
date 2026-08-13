@@ -350,17 +350,13 @@ describe('runChapterPipeline', () => {
 			},
 		} as unknown as OpenAI;
 
-		await chapterWork(chapter.id, { pipeline: wmPipeline, dataRoot, llm: customLlm, enableWatermarkRemoval: true })(
+		await chapterWork(chapter.id, { pipeline: wmPipeline, dataRoot, llm: customLlm })(
 			new AbortController().signal,
 			() => {},
 		);
 
-		// CLEAN WAS PASSED BOTH REGIONS (2 TOTAL) TO ERASE BOTH DIALOGUE AND WATERMARK
+		// UNIVERSAL CLEAN PASSES ALL DETECTED REGIONS (2 TOTAL) TO ERASE BOTH DIALOGUE AND WATERMARKS
 		expect(cleanedRegionsPassed).toHaveLength(2);
-
-		// LLM WAS ONLY SENT r0 ('你好'), NOT THE WATERMARK REGION ('www.baozimh.com')
-		expect(llmReceivedSources[0]).toContain('你好');
-		expect(llmReceivedSources[0]).not.toContain('www.baozimh.com');
 
 		const rows = db.select().from(regions).where(eq(regions.pageId, page.id)).orderBy(regions.seq).all();
 		expect(rows).toHaveLength(2);
@@ -368,8 +364,8 @@ describe('runChapterPipeline', () => {
 		expect(rows[1].textTarget).toBeNull(); // WATERMARK HAS NO TRANSLATED TARGET
 	});
 
-	it('does NOT erase watermark regions when enableWatermarkRemoval is false', async () => {
-		const { chapter } = seedChapterWithPage('c1-p0.png');
+	it('universally inprints all detected text and watermark regions', async () => {
+		const { chapter, page } = seedChapterWithPage('c1-p0.png');
 		let cleanedRegionsPassed: unknown[] = [];
 		const wmPipeline = new FakePipeline();
 		wmPipeline.analyze = async () => ({
@@ -386,14 +382,13 @@ describe('runChapterPipeline', () => {
 			return PAGE_PNG;
 		};
 
-		await chapterWork(chapter.id, { pipeline: wmPipeline, dataRoot, llm: fakeLlm({ r0: 'Hello' }), enableWatermarkRemoval: false })(
+		await chapterWork(chapter.id, { pipeline: wmPipeline, dataRoot, llm: fakeLlm({ r0: 'Hello' }) })(
 			new AbortController().signal,
 			() => {},
 		);
 
-		// CLEAN WAS PASSED ONLY r0 ('你好'), NOT THE WATERMARK REGION
-		expect(cleanedRegionsPassed).toHaveLength(1);
-		expect((cleanedRegionsPassed[0] as { id: string }).id).toBe('r0');
+		// ALL DETECTED REGIONS ARE PASSED TO CLEAN
+		expect(cleanedRegionsPassed).toHaveLength(2);
 	});
 
 	it('does not re-record spend on translation cache hits', async () => {

@@ -21,7 +21,7 @@ import type OpenAI from 'openai';
 import { env } from '$env/dynamic/private';
 // IMPORTED DEP-MODULES
 import PQueue from 'p-queue';
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 // IMPORTED TYPES
 import type { TranslationUsage } from '$lib/types';
 // IMPORTED MODULES
@@ -34,7 +34,6 @@ import { db } from './db';
 import { chapters, pages, regions, type Page } from './db/schema';
 import { extractTerms, translatePage } from './translate';
 import { typesetPage } from './typeset';
-import { filterWatermarkRegions } from './watermark';
 
 // -- TYPES -- //
 
@@ -43,10 +42,6 @@ export interface ChapterPipelineDeps {
 	/** INJECTABLE LLM — TESTS PASS A FAKE; PRODUCTION USES THE DEEPSEEK SINGLETON. */
 	llm?: OpenAI;
 	model?: string;
-	/** OPTIONAL FLAG TO ENABLE STEP 0 PRE-PROCESSING & WATERMARK FILTERING. */
-	enableWatermarkRemoval?: boolean;
-	/** CUSTOM WATERMARK PATTERNS TO DETECT & ERASE WITHOUT TRANSLATING. */
-	customWatermarks?: string[];
 	/**
 	 * OPACQUE PROVIDER DISCRIMINATOR FOR THE TRANSLATION CACHE — THE API LAYER SETS IT FROM
 	 * DEEPSEEK_BASE_URL SO SWITCHING PROVIDERS (e.g. MOCK ↔ REAL) NEVER SERVES STALE CACHED TEXT.
@@ -91,12 +86,10 @@ function cleanDir(path: string): void {
 }
 
 // PER-PAGE SLOT — CARRIES THE PAGE THROUGH THE STAGES; `outcome` DOUBLES AS THE ORDERED-EVENT
-// WATERMARK (AN UNSET OR 'analyzed' SLOT BLOCKS LATER EVENTS UNTIL IT RESOLVES).
 type PageSlot = {
 	page: Page;
 	image?: Buffer;
 	analyzed?: AnalyzeResult;
-	textRegions?: PipelineRegion[];
 	outcome?: 'analyzed' | 'done' | 'error';
 	message?: string;
 };
@@ -113,49 +106,64 @@ export async function runChapterPipeline(
 	if (!chapter) throw new Error(`chapter ${chapterId} not found`);
 
 	// CRASH-RESUME: A BACKEND RESTART CAN LEAVE PAGES STUCK IN 'processing' — RESET THEM SO A RE-RUN
-	// IS CLEAN (THE RUNNER IS IDEMPOTENT: REGIONS REPLACED, OUTPUTS OVERWRITTEN).
+	// CAN PICK THEM UP (ONLY 'done' PAGES COUNT AS FINISHED).
 	db.update(pages)
 		.set({ status: 'pending', error: null })
 		.where(and(eq(pages.chapterId, chapterId), eq(pages.status, 'processing')))
 		.run();
 
-	const pair = await bookPair(chapter.bookId);
 	const pageRows = db
 		.select()
 		.from(pages)
 		.where(eq(pages.chapterId, chapterId))
-		.orderBy(pages.seq)
+		.orderBy(asc(pages.seq))
 		.all();
 
-	const model = deps.model;
-	// SKIP ALREADY-TRANSLATED PAGES: A 'done' PAGE KEEPS ITS OUTPUT AND IS MARKED COMPLETE UP FRONT —
-	// RE-RUNS ONLY PROCESS 'pending'/'error' PAGES (USE THE UI'S CLEAR-PROGRESS TO FORCE A REDO).
-	const slots: PageSlot[] = pageRows.map((page) =>
-		page.status === 'done' ? { page, outcome: 'done' as const } : { page },
-	);
-	const pool = new PQueue({ concurrency: Math.max(1, deps.pageConcurrency ?? PAGE_CONCURRENCY) });
-	let nextEmit = 0;
+	if (pageRows.length === 0) {
+		emit({ type: 'done', chapterId });
+		return;
+	}
 
-	// EMIT COMPLETED PAGE EVENTS IN PAGE ORDER (PAGES FINISH OUT OF ORDER; LATER PAGES WAIT).
-	const flushEvents = () => {
-		while (nextEmit < slots.length) {
-			const slot = slots[nextEmit];
-			if (!slot || slot.outcome === undefined || slot.outcome === 'analyzed') break;
-			if (slot.outcome === 'error') {
+	const pool = new PQueue({ concurrency: deps.pageConcurrency ?? PAGE_CONCURRENCY });
+	const pair: LangPair = { sourceLang: chapter.sourceLang, targetLang: chapter.targetLang };
+	const model = deps.model;
+
+	// -- EMISSION WATERMARK STATE -- //
+	const slots: PageSlot[] = pageRows.map((page) => ({
+		page,
+		outcome: page.status === 'done' ? 'done' : undefined,
+	}));
+	let nextEmitIdx = 0;
+
+	// FLUSH EVENTS IN STRICT ASCENDING PAGE ORDER (PAGE 0 BEFORE PAGE 1, ALWAYS).
+	function flushEvents(): void {
+		while (nextEmitIdx < slots.length) {
+			const slot = slots[nextEmitIdx];
+			if (slot.outcome === undefined || slot.outcome === 'analyzed') {
+				break; // BLOCKED — WAIT FOR THIS PAGE TO REACH A TERMINAL STATE ('done' | 'error')
+			}
+			if (slot.outcome === 'done') {
+				emit({
+					type: 'page-done',
+					chapterId,
+					page: nextEmitIdx,
+					pageCount: slots.length,
+					outputPath: slot.page.outputPath,
+				});
+			} else if (slot.outcome === 'error') {
 				emit({
 					type: 'error',
-					page: nextEmit,
-					pageCount: slots.length,
-					message: slot.message ?? 'page failed',
+					chapterId,
+					page: nextEmitIdx,
+					message: slot.message ?? 'Unknown error',
 				});
-			} else {
-				emit({ type: 'page-done', page: nextEmit, pageCount: slots.length });
 			}
-			nextEmit++;
+			nextEmitIdx++;
 		}
-	};
+	}
 
-	// -- PHASE 1 (PARALLEL): PREPROCESS → ANALYZE → PERSIST REGIONS -- //
+
+	// -- PHASE 1 (PARALLEL): READ IMAGE + DETECT + OCR -- //
 	await pool.addAll(
 		pageRows.map((page, i) => async () => {
 			const slot = slots[i];
@@ -168,22 +176,9 @@ export async function runChapterPipeline(
 					.where(eq(pages.id, page.id))
 					.run();
 
-				// 0) STEP 0: PRE-PROCESS RAW IMAGE TO REMOVE WATERMARKS (IF ENABLED IN SETTINGS)
-				const rawImage = readFileSync(join(deps.dataRoot, page.filePath));
-				let image: Buffer = rawImage;
-				if (deps.enableWatermarkRemoval) {
-					try {
-						image = await deps.pipeline.preprocess(rawImage, signal);
-					} catch {
-						// FALLBACK TO RAW IMAGE IF SIDECAR PREPROCESS IS NOT UP YET
-					}
-				}
-
 				// 1) ANALYZE — DETECT + OCR VIA THE SIDECAR
+				const image = readFileSync(join(deps.dataRoot, page.filePath));
 				const analyzed = await deps.pipeline.analyze(image, signal);
-
-				// 1b) WATERMARK TEXT FILTER & SMART LINE-LEVEL SPLITTING
-				const { textRegions } = filterWatermarkRegions(analyzed.regions, deps.customWatermarks);
 
 				// 2) PERSIST REGIONS (REPLACE THE PREVIOUS RUN'S)
 				db.delete(regions).where(eq(regions.pageId, page.id)).run();
@@ -195,7 +190,6 @@ export async function runChapterPipeline(
 
 				slot.image = image;
 				slot.analyzed = analyzed;
-				slot.textRegions = textRegions;
 				slot.outcome = 'analyzed';
 			} catch (e) {
 				// AN ABORT STOPS THE WHOLE JOB — THE NEXT SUPERSEDING RUN TAKES OVER. NEVER MARK THE PAGE.
@@ -215,11 +209,9 @@ export async function runChapterPipeline(
 	flushEvents();
 
 	// -- PHASE 2: ONE CHAPTER-LEVEL TERM-EXTRACTION CALL (NON-BLOCKING) -- //
-	// (WAS: ONE EXTRACTION LLM CALL PER PAGE — NOW A SINGLE CALL OVER THE WHOLE CHAPTER'S OCR TEXT,
-	//  WHICH ALSO MAKES THE EFFECTIVE GLOSSARY CONSISTENT FOR EVERY PAGE'S CACHE KEY.)
 	const chapterText = slots
 		.filter((s) => s.outcome === 'analyzed')
-		.flatMap((s) => (s.textRegions ?? []).filter((r) => r.text.trim().length > 0).map((r) => r.text))
+		.flatMap((s) => (s.analyzed?.regions ?? []).filter((r) => r.text.trim().length > 0).map((r) => r.text))
 		.join('\n')
 		.slice(0, MAX_EXTRACT_CHARS);
 	if (chapterText.trim().length > 0) {
@@ -245,12 +237,11 @@ export async function runChapterPipeline(
 			if (slot.outcome !== 'analyzed') return; // PHASE-1 FAILURES SKIP THE REST
 			const image = slot.image!;
 			const analyzed = slot.analyzed!;
-			const textRegions = slot.textRegions!;
 			try {
 				signal.throwIfAborted();
 
-				// 3) TRANSLATE — EXCLUDE WATERMARKS FROM DEEPSEEK CALLS TO SAVE TOKENS
-				const sources = textRegions
+				// 3) TRANSLATE — LLM SEMANTICALLY TRANSLATES VALID DIALOGUE & EMITS "" FOR WATERMARKS/STAMPS
+				const sources = analyzed.regions
 					.filter((r) => r.text.trim().length > 0)
 					.map((r) => ({ id: r.id, text: r.text, category: r.category }));
 				const byRegion = new Map<string, string>();
@@ -290,28 +281,25 @@ export async function runChapterPipeline(
 						.run();
 				}
 
-				// 5) CLEAN — ERASE TEXT WITH LAMA INPAINTING
-				// WHEN enableWatermarkRemoval IS TRUE: ERASE BOTH DIALOGUE TEXT AND WATERMARKS
-				// WHEN enableWatermarkRemoval IS FALSE: ERASE ONLY DIALOGUE TEXT (LEAVE WATERMARKS/SITE STAMPS UNTOUCHED ON ORIGINAL ARTWORK)
-				const targetCleanList = deps.enableWatermarkRemoval ? analyzed.regions : textRegions;
-				const cleanRegions = targetCleanList.map((r) => ({ id: r.id, box: r.box, polygon: r.polygon }));
+				// 5) CLEAN — UNIVERSALLY ERASE ALL DETECTED TEXT & WATERMARK REGIONS WITH LAMA INPAINTING
+				const cleanRegions = analyzed.regions.map((r) => ({ id: r.id, box: r.box, polygon: r.polygon }));
 				const cleaned = await deps.pipeline.clean(image, cleanRegions, signal);
 				const cleanPath = `clean/${chapterId}/${page.seq}.png`;
 				const cleanAbs = join(deps.dataRoot, cleanPath);
 				cleanDir(join(deps.dataRoot, 'clean', String(chapterId)));
 				writeFileSync(cleanAbs, cleaned);
 
-				// 6) TYPESET — RENDER TRANSLATIONS ONLY FOR DIALOGUE TEXT (EXCLUDING WATERMARKS)
-				const out = await typesetPage(
-					cleaned,
-					textRegions.map((r) => ({
+				// 6) TYPESET — RENDER TRANSLATIONS ONLY FOR REGIONS WITH NON-EMPTY DIALOGUE
+				const typesetRegions = analyzed.regions
+					.filter((r) => Boolean(byRegion.get(r.id)?.trim()))
+					.map((r) => ({
 						id: r.id,
 						box: r.box,
-						text: byRegion.get(r.id) ?? '',
+						text: byRegion.get(r.id)!,
 						category: r.category,
 						vertical: r.vertical,
-					})),
-				);
+					}));
+				const out = await typesetPage(cleaned, typesetRegions);
 				const outputPath = `output/${chapterId}/${page.seq}.png`;
 				cleanDir(join(deps.dataRoot, 'output', String(chapterId)));
 				writeFileSync(join(deps.dataRoot, outputPath), out);

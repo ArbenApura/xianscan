@@ -267,37 +267,6 @@
 			</div>
 		</div>
 
-		<!-- WATERMARK REMOVAL SETTINGS -->
-		<div class="rounded-xl border border-black/10 p-3.5 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02]">
-			<div class="flex items-center justify-between">
-				<div>
-					<span class="block text-xs font-bold">Auto-Erase Watermarks & Site Stamps</span>
-					<span class="block text-[11px] opacity-60">Erases site URLs, scanlation group tags & stamps using LaMa inpainting without translating them</span>
-				</div>
-				<input
-					type="checkbox"
-					checked={$settings.watermarkRemoval}
-					on:change={(e) => settings.update((s) => ({ ...s, watermarkRemoval: e.currentTarget.checked }))}
-					class="h-4 w-4 rounded accent-[#b23a2e]"
-				/>
-			</div>
-
-			{#if $settings.watermarkRemoval}
-				<div class="mt-3 border-t border-black/[0.06] pt-2.5 dark:border-white/[0.06]">
-					<label class="mb-1 block text-[11px] font-semibold opacity-70">
-						Custom Watermark Keywords (comma-separated)
-					</label>
-					<input
-						type="text"
-						value={$settings.customWatermarks}
-						on:input={(e) => settings.update((s) => ({ ...s, customWatermarks: e.currentTarget.value }))}
-						placeholder="e.g. customsite.com, my-scanlation-tag, 漫画组"
-						class="w-full rounded-lg border border-black/10 bg-transparent px-2.5 py-1.5 text-xs outline-none focus:border-[#b23a2e] dark:border-white/10"
-					/>
-				</div>
-			{/if}
-		</div>
-
 		<div>
 			<label class="mb-1 block text-xs font-semibold opacity-60">Appearance Theme</label>
 			<div class="grid grid-cols-5 gap-1.5">

@@ -18,9 +18,6 @@ export interface AppSettings {
 	// DEFAULT TRANSLATION DIRECTION FOR NEWLY CREATED BOOKS (PER-BOOK OVERRIDES AT CREATION)
 	sourceLang: string;
 	targetLang: string;
-	// WATERMARK ERASE & DETECTION CONTROLS
-	watermarkRemoval: boolean;
-	customWatermarks: string;
 	// PERSISTENT READER CONFIGURATIONS
 	readerViewMode: 'reader' | 'grid' | 'compare';
 	webtoonKind: 'output' | 'original';
@@ -38,13 +35,11 @@ export const TRANSLATION_MODELS: { id: string; label: string; blurb: string }[] 
 
 // BUMP version WHEN DEFAULTS CHANGE — TRIGGERS A ONE-TIME MIGRATION OF SAVED SETTINGS
 export const DEFAULTS: AppSettings = {
-	version: 3,
+	version: 4,
 	theme: 'sepia',
 	model: 'deepseek-v4-flash',
 	sourceLang: DEFAULT_SOURCE_LANG,
 	targetLang: DEFAULT_TARGET_LANG,
-	watermarkRemoval: false,
-	customWatermarks: '',
 	readerViewMode: 'reader',
 	webtoonKind: 'output',
 	webtoonWidth: 'md',

@@ -264,7 +264,8 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 	all_boxes = rapid_boxes + kept_comic_boxes
 	all_scores = rapid_scores + kept_comic_scores
-	boxes, _scores = detect.merge_text_lines(all_boxes, all_scores)
+	all_texts = [t for _pts, t, _s in rapid_lines] + [""] * len(kept_comic_boxes)
+	boxes, _scores = detect.merge_text_lines(all_boxes, all_scores, texts=all_texts)
 
 	# MAP LINE TEXTS TO BOXES FOR WATERMARK / URL SEPARATION DURING PARAGRAPH GROUPING
 	box_texts: list[str] = []
@@ -295,10 +296,14 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		]
 		hull_pts: np.ndarray | None = None
 		if matched:
-			# WHEN REGION CONTAINS CHINESE TEXT, DISCARD EMBEDDED NON-CHINESE/ENGLISH SUBTITLE LINES (e.g. "I HAVE A SHANZHAI")
+			# 1. DISCARD NON-CHINESE / ENGLISH SUBTITLE LINES IF CHINESE IS PRESENT
 			chinese_matched = [m for m in matched if detect._CHINESE_RE.search(m[1])]
 			if chinese_matched:
 				matched = chinese_matched
+			# 2. DISCARD WATERMARK / SCANLATION SIGNATURE LINES IF LEGITIMATE STORY DIALOGUE IS PRESENT
+			story_matched = [m for m in matched if not detect._is_watermark_line(m[1])]
+			if story_matched:
+				matched = story_matched
 			matched.sort(key=lambda m: (m[0][:, 1].min(), m[0][:, 0].min()))
 			region.text = "\n".join(t for _l, t, _s in matched if t.strip())
 			region.confidence = float(max(s for _l, _t, s in matched)) if matched else 0.0
@@ -465,6 +470,32 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					prev.box = Box(x=bx, y=by, w=bw, h=bh)
 				continue
 		final_regions.append(region)
+
+	# 3) FINAL NMS DEDUPLICATION: REMOVE DUPLICATE SUBSET BOXES (e.g. WHEN A SINGLE LINE FROM A
+	# DUAL DETECTOR IS FULLY ENCLOSED INSIDE AN ALREADY-GROUPED MULTI-LINE PARAGRAPH REGION).
+	if len(final_regions) > 1:
+		sorted_regs = sorted(final_regions, key=lambda r: (len(r.text), r.box.w * r.box.h), reverse=True)
+		kept_final: list[Region] = []
+		for r in sorted_regs:
+			x0, y0, w, h = r.box.x, r.box.y, r.box.w, r.box.h
+			area = w * h
+			duplicate = False
+			for k in kept_final:
+				kx0, ky0, kw, kh = k.box.x, k.box.y, k.box.w, k.box.h
+				karea = kw * kh
+				ix = max(0, min(x0 + w, kx0 + kw) - max(x0, kx0))
+				iy = max(0, min(y0 + h, ky0 + kh) - max(y0, ky0))
+				inter = ix * iy
+				min_area = min(area, karea)
+				overlap = inter / min_area if min_area > 0 else 0
+				if overlap >= 0.65 or (r.text in k.text and overlap >= 0.40):
+					duplicate = True
+					break
+			if not duplicate:
+				kept_final.append(r)
+		kept_final.sort(key=lambda r: (r.box.y, r.box.x))
+		final_regions = kept_final
+
 	regions = final_regions
 
 	return AnalyzeResponse(width=page_w, height=page_h, regions=regions, backend=backend)

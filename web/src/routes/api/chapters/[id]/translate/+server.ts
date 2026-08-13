@@ -22,8 +22,6 @@ import type { RequestHandler } from './$types';
 
 const Body = z.object({
 	force: z.boolean().default(false),
-	watermarkRemoval: z.boolean().default(false),
-	customWatermarks: z.array(z.string()).optional(),
 });
 
 export const POST: RequestHandler = async ({ params, request }) => {
@@ -33,15 +31,11 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
 	const parsed = Body.safeParse(await request.json().catch(() => null));
 	const force = parsed.success ? parsed.data.force : false;
-	const watermarkRemoval = parsed.success ? parsed.data.watermarkRemoval : false;
-	const customWatermarks = parsed.success ? parsed.data.customWatermarks : undefined;
 
 	// RECORD AI SPEND ON THE LEDGER (THE JOB STAYS DETACHED — FAILURES LOG, NOT THROW)
 	const deps = {
 		pipeline: createPipelineClient(),
 		dataRoot: DATA_ROOT,
-		enableWatermarkRemoval: watermarkRemoval,
-		customWatermarks,
 		// THE CACHE MUST NEVER MIX PROVIDERS: MOCK ↔ REAL SWITCHES PRODUCE A FRESH KEY
 		cacheSalt: env.DEEPSEEK_BASE_URL ?? '',
 		onUsage: (u: { model: string; promptTokens: number; cachedTokens: number; completionTokens: number; costUsd: number }) => {

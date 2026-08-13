@@ -39,7 +39,7 @@ export interface PageTranslation {
 // -- CONSTANTS -- //
 
 // PART OF THE CACHE KEY — BUMP WHEN THE PROMPTS CHANGE SO STALE CACHED TRANSLATIONS NEVER RESURFACE.
-export const PROMPT_VERSION = 'v1';
+export const PROMPT_VERSION = 'v2';
 
 // A TRANSLATION LONGER THAN 6× THE SOURCE IS ALMOST CERTAINLY THE MODEL REWRITING THE PROMPT / ADDING
 // EXPLANATIONS — FLAGGED FOR A REFILL (SAME HEURISTIC AS xianslate's looksOverExpanded).
@@ -51,7 +51,10 @@ export function systemPrompt(src: string, tgt: string): string {
 	return `You are a professional manhua (Chinese comic) localizer translating ${src} dialogue into natural ${tgt}.
 Rules:
 - Comic dialogue: short, punchy, natural spoken English. Match the speaker's tone.
-- ONLY translate Chinese source text. Ignore or output empty string for any non-Chinese text, site URLs, domain names, or scanlation watermark fragments if present in the input.
+- Watermark & Scanlation Tag Filtering:
+  * If a text region is a scanlation group credit, recruitment ad, website URL/domain, aggregator watermark, chapter banner stamp, QQ/Discord group, uploader watermark, or non-story meta text (e.g. BaoziManhua, Kuaikan, Bilibili, WeChat channels, "扫图", "汉化组", "严禁转载", "独家", "修图", "首发", etc.), return an EMPTY STRING "" for its id.
+  * If a dialogue bubble contains legitimate character speech mixed with a trailing watermark or website URL, translate ONLY the dialogue portion and omit the watermark entirely.
+  * For non-Chinese or pure punctuation noise fragments, return an EMPTY STRING "".
 - Sound effects (SFX): keep the onomatopoeia style, all-caps where the source is emphatic (e.g. 轰 → BOOM!).
 - Never add narration, explanations, or stage directions outside the text itself.
 - Never translate glossary terms differently from the glossary block.
