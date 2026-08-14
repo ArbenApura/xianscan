@@ -1,9 +1,9 @@
-// MANUAL AI TERM EXTRACTION ENDPOINT — EXTRACTS TERMs FROM CHAPTER TEXT AND SAVES TO BOOK GLOSSARY.
+// MANUAL AI TERM EXTRACTION ENDPOINT — EXTRACTS TERMS FROM CHAPTER TEXT AND SAVES TO BOOK GLOSSARY.
 import { error, json } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { chapters, pages, regions } from '$lib/server/db/schema';
-import { addNewTerms, bookPair } from '$lib/server/glossary';
+import { addNewTerms, bookPair, getEffectiveGlossary } from '$lib/server/glossary';
 import { extractTerms } from '$lib/server/translate';
 import type { RequestHandler } from './$types';
 
@@ -13,6 +13,7 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!bookId || typeof bookId !== 'string') throw error(400, 'Invalid bookId.');
 
 	const pair = await bookPair(bookId);
+	const effective = await getEffectiveGlossary(bookId);
 
 	let pageRows;
 	if (chapterId) {
@@ -29,14 +30,24 @@ export const POST: RequestHandler = async ({ request }) => {
 	let totalAdded = 0;
 	let totalSkipped = 0;
 
+	// Group pages by chapter to properly associate firstChapterId
+	const byChapter = new Map<number, string[]>();
 	for (const p of pageRows) {
 		const regionRows = db.select({ textSource: regions.textSource }).from(regions).where(eq(regions.pageId, p.id)).all();
 		const pageText = regionRows.map((r) => r.textSource).filter((t) => t.trim()).join('\n');
 		if (!pageText.trim()) continue;
+		const arr = byChapter.get(p.chapterId) ?? [];
+		arr.push(pageText);
+		byChapter.set(p.chapterId, arr);
+	}
 
-		const { terms: extracted } = await extractTerms(pageText, pair);
+	for (const [chId, textList] of byChapter.entries()) {
+		const fullText = textList.join('\n');
+		if (!fullText.trim()) continue;
+
+		const { terms: extracted } = await extractTerms(fullText, pair, { knownTerms: effective });
 		if (extracted.length > 0) {
-			const { added, skipped } = await addNewTerms(bookId, extracted, p.chapterId);
+			const { added, skipped } = await addNewTerms(bookId, extracted, chId);
 			totalAdded += added;
 			totalSkipped += skipped;
 		}

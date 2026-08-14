@@ -73,19 +73,19 @@ export async function bookPair(bookId: string): Promise<LangPair> {
 	return { sourceLang: b?.sourceLang ?? 'zh-Hans', targetLang: b?.targetLang ?? 'en' };
 }
 
-// SPLIT THE WHOLE CHAPTER INTO PARAGRAPH-ALIGNED CHUNKS SO EVERY PART IS SCANNED FOR TERMS.
+// SPLIT CHAPTER / PASSAGE TEXT INTO LINE-ALIGNED CHUNKS SO EVERY PART IS SCANNED FOR TERMS.
 // EXPORTED FOR UNIT TESTS — THE CHUNK SPLITTER BEHIND THE COST CAP.
-export function chunkForExtraction(content: string): string[] {
-	const paras = content.split(/\n{2,}/).filter((p) => p.trim().length > 0);
-	if (paras.length === 0) return content.trim() ? [content] : [];
+export function chunkForExtraction(content: string, maxChunkChars = EXTRACT_CHUNK_CHARS): string[] {
+	const lines = content.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+	if (lines.length === 0) return content.trim() ? [content.trim()] : [];
 	const chunks: string[] = [];
 	let cur = '';
-	for (const p of paras) {
-		if (cur.length + p.length > EXTRACT_CHUNK_CHARS && cur.length > 0) {
+	for (const line of lines) {
+		if (cur.length + line.length > maxChunkChars && cur.length > 0) {
 			chunks.push(cur);
 			cur = '';
 		}
-		cur = cur ? `${cur}\n\n${p}` : p;
+		cur = cur ? `${cur}\n${line}` : line;
 	}
 	if (cur) chunks.push(cur);
 	return chunks;

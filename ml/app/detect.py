@@ -298,6 +298,9 @@ def is_pure_watermark_region(text: str | None) -> bool:
 
 
 
+_TERMINAL_PUNCTUATION = tuple("。!！?？…）】”\"'~～")
+
+
 def merge_text_lines(
 	boxes: list[np.ndarray],
 	scores: list[float],
@@ -315,6 +318,8 @@ def merge_text_lines(
 	  - MERGE WHEN: HORIZONTAL GAP ≤ gap_factor × max(heights) — A NEGATIVE GAP (OVERLAP) ALWAYS MERGES
 	  - WATERMARK ISOLATION: A WATERMARK STAMP AT THE CORNER (e.g. "速漫库") MUST NEVER MERGE
 	    WITH A STORY DIALOGUE LINE ON THE SAME ROW.
+	  - TERMINAL PUNCTUATION GUARD: IF THE PRECEDING TEXT ALREADY ENDS IN TERMINAL PUNCTUATION
+	    ('！', '。', '？', etc.) AND THERE IS A NON-NEGATIVE GAP, DO NOT MERGE ACROSS SPEECH BUBBLES.
 	  - VERTICAL TEXT COLUMNS (h > 1.2×w) ARE NEVER MERGED — SIDE-BY-SIDE COLUMNS LOOK IDENTICAL
 	    TO SAME-LINE BOXES BY THIS RULE AND MUST STAY SEPARATE REGIONS
 	RETURNS (merged_boxes, merged_scores) — EACH MERGED BOX IS THE UNION (AXIS-ALIGNED), SCORE = MAX.
@@ -324,18 +329,18 @@ def merge_text_lines(
 	if texts is None:
 		texts = [''] * len(boxes)
 	items = sorted(zip(boxes, scores, texts), key=lambda p: p[0][:, 0].min())
-	lines: list[list] = []  # [x0, y0, x1, y1, score, is_wm]
+	lines: list[list] = []  # [x0, y0, x1, y1, score, is_wm, text]
 	for box, score, txt in items:
 		x, y, w, h = box_to_xywh(box)
 		x1, y1 = x + w, y + h
 		is_wm = _is_watermark_line(txt)
 		if h > w * 1.2:
 			# VERTICAL COLUMN — ITS OWN LINE, NEVER MERGED
-			lines.append([x, y, x1, y1, score, is_wm])
+			lines.append([x, y, x1, y1, score, is_wm, txt])
 			continue
 		placed = False
 		for ln in lines:
-			lx0, ly0, lx1, ly1, lscore, l_is_wm = ln
+			lx0, ly0, lx1, ly1, lscore, l_is_wm, l_txt = ln
 			# NEVER MERGE A WATERMARK STAMP INTO STORY DIALOGUE
 			if is_wm != l_is_wm:
 				continue
@@ -346,16 +351,37 @@ def merge_text_lines(
 			overlap = min(y1, ly1) - max(y, ly0)
 			if overlap < overlap_min * min_h:
 				continue
-			if x - lx1 <= gap_factor * max(h, lh):
-				ln[0] = min(lx0, x)
-				ln[1] = min(ly0, y)
-				ln[2] = max(lx1, x1)
-				ln[3] = max(ly1, y1)
-				ln[4] = max(lscore, score)
-				placed = True
-				break
+			gap = x - lx1
+			if gap > gap_factor * max(h, lh):
+				continue
+			# SUSPICIOUS X-OVERLAP GUARD: WHEN TWO BOXES OVERLAP IN X BY MORE THAN
+			# 0.30 x max_line_height (gap << 0) AND THE RESULTING UNION IS SIGNIFICANTLY
+			# WIDER THAN EITHER BOX ALONE (NOT A NEAR-DUPLICATE), THEY ALMOST CERTAINLY
+			# BELONG TO DIFFERENT SPEECH BUBBLES SITTING AT THE SAME HEIGHT IN THE PANEL.
+			#
+			# PAGE-678: LEFT BUBBLE'S LAST LINE x=[82,210] AND RIGHT BUBBLE'S FIRST LINE
+			# x=[184,384] HAVE gap=-26, union_w=302 vs max_w=200 (1.51x) -> REJECT.
+			# A NEAR-DUPLICATE (TWO DETECTORS, SAME LINE) HAS union_w <= max_w*1.20 -> ALLOW.
+			if gap < -max(h, lh) * 0.30:
+				union_w = max(x1, lx1) - min(x, lx0)
+				if union_w > max(w, lx1 - lx0) * 1.20:
+					continue  # DIFFERENT SPEECH BUBBLES -- DO NOT HORIZONTALLY MERGE
+
+			# TERMINAL PUNCTUATION GUARD: IF THE PRECEDING BOX ENDS IN TERMINAL PUNCTUATION
+			# AND THERE IS A NON-NEGATIVE GAP, IT IS A FINISHED SENTENCE IN ANOTHER BUBBLE.
+			if l_txt and l_txt.rstrip().endswith(_TERMINAL_PUNCTUATION) and gap >= 0:
+				continue
+
+			ln[0] = min(lx0, x)
+			ln[1] = min(ly0, y)
+			ln[2] = max(lx1, x1)
+			ln[3] = max(ly1, y1)
+			ln[4] = max(lscore, score)
+			ln[6] = (l_txt + ' ' + txt).strip()
+			placed = True
+			break
 		if not placed:
-			lines.append([x, y, x1, y1, score, is_wm])
+			lines.append([x, y, x1, y1, score, is_wm, txt])
 	merged = []
 	mscores = []
 	for ln in lines:
@@ -377,6 +403,7 @@ def group_paragraphs(
 	overlap_min: float = 0.20,
 	gap_factor: float = 0.45,
 	height_sim_max: float = 1.50,
+	centroid_drift_max: float = 0.60,
 ) -> tuple[list[np.ndarray], list[float]]:
 	"""GROUP VERTICALLY STACKED TEXT LINES INTO PARAGRAPHS (A MULTI-LINE SPEECH BUBBLE).
 
@@ -403,6 +430,10 @@ def group_paragraphs(
 	paragraphs: list[list[np.ndarray]] = []
 	para_scores: list[float] = []
 	para_is_url: list[bool] = []
+	# X-CENTROID DRIFT GUARD: TRACK THE RUNNING MEAN X-CENTER OF EACH PARAGRAPH'S LINES.
+	# WHEN A CANDIDATE LINE'S X-CENTER DEVIATES BY MORE THAN centroid_drift_max × max(w, lw)
+	# FROM THE PARAGRAPH'S ESTABLISHED CENTER, IT BELONGS TO A DIFFERENT BUBBLE.
+	para_cx_lists: list[list[float]] = []
 
 	for box, score, txt in zip(boxes, scores, texts):
 		x, y, w, h = box_to_xywh(box)
@@ -410,6 +441,7 @@ def group_paragraphs(
 			paragraphs.append([box])
 			para_scores.append(score)
 			para_is_url.append(_is_url_or_non_chinese(txt))
+			para_cx_lists.append([x + w / 2.0])
 
 	horizontal = sorted(
 		((b, s, t) for b, s, t in zip(boxes, scores, texts) if box_to_xywh(b)[3] <= box_to_xywh(b)[2] * 1.2),
@@ -445,7 +477,18 @@ def group_paragraphs(
 			if overlap < overlap_min * min(w, lw):
 				continue
 
+			# X-CENTROID DRIFT GUARD: REJECT IF THE NEW LINE'S X-CENTER DEVIATES TOO FAR
+			# FROM THE PARAGRAPH'S ESTABLISHED MEAN X-CENTER. TWO SIDE-BY-SIDE BUBBLES AT
+			# THE SAME HEIGHT CAN PASS ALL THREE CHECKS ABOVE THROUGH A LAST-LINE CHAIN
+			# (L4 OF LEFT BUBBLE BARELY X-OVERLAPS R1 OF RIGHT BUBBLE), BUT THEIR CENTERS
+			# DIFFER BY >60% OF MAX LINE WIDTH → THEY BELONG TO DIFFERENT SPEECH BUBBLES.
+			new_cx = x + w / 2.0
+			para_mean_cx = sum(para_cx_lists[p_idx]) / len(para_cx_lists[p_idx])
+			if abs(new_cx - para_mean_cx) > centroid_drift_max * max(w, lw):
+				continue
+
 			para.append(box)
+			para_cx_lists[p_idx].append(new_cx)
 			placed = True
 			break
 
@@ -453,6 +496,7 @@ def group_paragraphs(
 			paragraphs.append([box])
 			para_scores.append(score)
 			para_is_url.append(box_url)
+			para_cx_lists.append([x + w / 2.0])
 
 	merged = []
 	mscores = []

@@ -230,73 +230,137 @@ function mergeUsage(acc: TranslationUsage, u: TranslationUsage): void {
 
 // -- AI TERM EXTRACTION -- //
 
+import { chunkForExtraction } from './glossary';
+
+export const MAX_CONTEXT_TERMS = 100;
+
 export function extractionSystemPrompt(src: string, tgt: string): string {
-	return `You are a professional localizer specializing in ${src} manhua (comics).
-Identify key proper nouns, character names, locations, organizations/sects, martial techniques, items/weapons, cultivation realms, creatures, titles, and concepts from the provided source text.
+	return `You build a translation glossary from a ${src} manhua (comic) chapter so that names, titles, and techniques stay 100% consistent across all pages.
+
+Return ONLY a JSON object of exactly this shape — no markdown fences, no comments, no extra text:
+{"terms":[{"source":"<exact ${src} characters verbatim from text>","target":"<natural ${tgt} translation>","category":"character|location|organization|technique|item|realm|creature|title|concept|other","gender":"neuter|masculine|feminine","aliases":["<other ${src} forms/nicknames>"],"pinned":false,"context":"<brief description>"}]}
 
 Rules:
-- Extract terms in source language (${src}) and suggest natural ${tgt} translations.
-- For character names, identify gender ('masculine', 'feminine', or 'neuter').
-- Categorize each term as one of: 'character', 'location', 'organization', 'technique', 'item', 'realm', 'creature', 'title', 'concept', 'other'.
-- Provide a brief context note if helpful.
-
-Return ONLY a JSON array of objects:
-[
-  {
-    "source": "叶凡",
-    "target": "Ye Fan",
-    "category": "character",
-    "gender": "masculine",
-    "context": "Main protagonist"
-  }
-]
-No markdown fences, no extra text.`;
+1. "source": MUST be copied EXACTLY as it appears in the text (identical characters, no added or removed spaces) so exact string match will find it on every page.
+2. "target":
+   - Personal character names: Romanize into Pinyin / Latin script with Title Case (e.g. 叶凡 → Ye Fan; 李澈 → Li Che). Space-separate family and given names.
+   - Place names: Romanize the proper name and translate the place type (e.g. 雲霄村 → Yunxiao Village; 紫山 → Purple Mountain).
+   - Descriptive terms (techniques, martial arts, cultivation realms, weapons, items, artifacts): Translate by MEANING into natural ${tgt} (e.g. 斩龙剑 → Dragon Slaying Sword; 筑基期 → Foundation Establishment).
+3. "category": 'character', 'location', 'organization', 'technique', 'item', 'realm', 'creature', 'title', 'concept', 'other'.
+4. "gender": 'masculine' or 'feminine' ONLY when the text explicitly indicates it (pronouns, titles like master/sister/brother/prince); otherwise 'neuter'.
+5. "aliases": Array of other short forms, nicknames, or forms of address in the text (e.g. for 叶凡, aliases: ["小凡", "凡儿"]).
+6. Skip generic words, common dialogue phrases, numbers, and pronouns. Focus on recurring proper nouns, character names, and unique terminology.`;
 }
 
-export function parseExtractedTerms(raw: string): TermDraft[] {
-	const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
-	try {
-		const parsed = JSON.parse(cleaned);
-		if (!Array.isArray(parsed)) return [];
-		const validCategories = new Set([
-			'character',
-			'location',
-			'organization',
-			'technique',
-			'item',
-			'realm',
-			'creature',
-			'title',
-			'concept',
-			'other',
-		]);
-		const validGenders = new Set(['neuter', 'masculine', 'feminine']);
-		return parsed
-			.filter(
-				(item) =>
-					item &&
-					typeof item.source === 'string' &&
-					typeof item.target === 'string' &&
-					item.source.trim() &&
-					item.target.trim(),
-			)
-			.map((item) => ({
-				source: item.source.trim(),
-				target: item.target.trim(),
-				category: validCategories.has(item.category) ? item.category : 'other',
-				gender: validGenders.has(item.gender) ? item.gender : 'neuter',
-				context: typeof item.context === 'string' ? item.context.trim() : null,
-				status: 'ai' as const,
-			}));
-	} catch {
-		return [];
+// ROBUST PARSE: ACCEPT CLEAN JSON, A BARE ARRAY, OR A TRUNCATED RESPONSE (SALVAGE COMPLETE {…} OBJECTS)
+// SO A SLIGHTLY MALFORMED / CUT-OFF REPLY STILL YIELDS THE TERMS IT DID CONTAIN INSTEAD OF ZERO.
+export function parseTermObjects(text: string): unknown[] {
+	const tryParse = (s: string): unknown => {
+		try {
+			return JSON.parse(s);
+		} catch {
+			return undefined;
+		}
+	};
+	const cleaned = text.replace(/```(?:json)?/gi, '').trim();
+	const whole = tryParse(cleaned);
+	if (Array.isArray(whole)) return whole;
+	const terms = (whole as { terms?: unknown })?.terms;
+	if (Array.isArray(terms)) return terms;
+	// SALVAGE EVERY COMPLETE {…} OBJECT (HANDLES A TRUNCATED ARRAY THAT NEVER GOT ITS CLOSING `]`)
+	const objs: unknown[] = [];
+	const re = /\{[^{}]*\}/g;
+	let m: RegExpExecArray | null;
+	while ((m = re.exec(cleaned))) {
+		const o = tryParse(m[0]);
+		if (o) objs.push(o);
 	}
+	return objs;
+}
+
+export function parseExtractedTerms(raw: string, contentSource?: string): TermDraft[] {
+	const validCategories = new Set([
+		'character',
+		'location',
+		'organization',
+		'technique',
+		'item',
+		'realm',
+		'creature',
+		'title',
+		'concept',
+		'other',
+	]);
+	const validGenders = new Set(['neuter', 'masculine', 'feminine']);
+	const rawObjects = parseTermObjects(raw);
+	const results: TermDraft[] = [];
+	const seen = new Set<string>();
+
+	for (const item of rawObjects) {
+		const t = item as {
+			source?: unknown;
+			target?: unknown;
+			gender?: unknown;
+			context?: unknown;
+			category?: unknown;
+			aliases?: unknown;
+			pinned?: unknown;
+		};
+		const sourceTerm = String(t?.source ?? '').trim();
+		const target = String(t?.target ?? '').trim();
+		if (!sourceTerm || !target) continue;
+
+		// VERBATIM VERIFICATION: If contentSource is supplied, only keep terms whose source
+		// actually appears in the OCR text (prevents hallucinations).
+		if (contentSource && !contentSource.includes(sourceTerm)) continue;
+
+		if (seen.has(sourceTerm)) continue;
+		seen.add(sourceTerm);
+
+		const category = validCategories.has(String(t?.category))
+			? (String(t?.category) as TermDraft['category'])
+			: 'other';
+
+		const gender =
+			category && category !== 'character'
+				? 'neuter'
+				: validGenders.has(String(t?.gender))
+					? (String(t?.gender) as TermDraft['gender'])
+					: 'neuter';
+
+		const context = typeof t?.context === 'string' && t.context.trim() ? t.context.trim() : null;
+		const pinned = t?.pinned === true;
+
+		// ALIASES: Other source forms that appear in contentSource
+		const aliases = Array.isArray(t?.aliases)
+			? [
+					...new Set(
+						(t.aliases as unknown[])
+							.map((a) => String(a ?? '').trim())
+							.filter((a) => a && a !== sourceTerm && (!contentSource || contentSource.includes(a))),
+					),
+				].slice(0, 8)
+			: [];
+
+		results.push({
+			source: sourceTerm,
+			target,
+			category,
+			gender,
+			context,
+			pinned,
+			aliases: aliases.length ? aliases : null,
+			status: 'ai' as const,
+		});
+	}
+
+	return results;
 }
 
 export async function extractTerms(
 	content: string,
 	pair: LangPair,
-	opts: PageTranslationOptions = {},
+	opts: PageTranslationOptions & { knownTerms?: TermDraft[] } = {},
 ): Promise<{ terms: TermDraft[]; usage: TranslationUsage }> {
 	const client = opts.client ?? deepseek;
 	const model = resolveModel(opts.model);
@@ -304,35 +368,78 @@ export async function extractTerms(
 
 	if (!content.trim()) return { terms: [], usage };
 
-	const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
-		{ role: 'system', content: extractionSystemPrompt(pair.sourceLang, pair.targetLang) },
-		{ role: 'user', content: `Extract terms from the following text:\n\n${content}` },
-	];
+	// Chunk content if text is long (split by lines/bubbles)
+	const chunks = chunkForExtraction(content);
+	const bySource = new Map<string, TermDraft>();
 
-	try {
-		const resp = await queued(() =>
-			withRetry(async () => {
-				return await client.chat.completions.create(
-					{
-						model,
-						messages,
-						temperature: 0.2,
-						max_tokens: 1024,
-						...thinkingParam(),
-					},
-					{ signal: opts.signal },
-				);
-			}),
-		);
+	for (let i = 0; i < chunks.length; i++) {
+		if (opts.signal?.aborted) throw Object.assign(new Error('Extraction aborted'), { name: 'AbortError' });
+		const chunk = chunks[i];
 
-		const raw = resp.choices[0]?.message?.content ?? '';
-		const u = computeUsage(resp.usage, model);
-		mergeUsage(usage, u);
+		// Cumulative context: DB existing terms + terms extracted from earlier chunks of this chapter
+		const established = new Map<string, TermDraft>();
+		for (const t of bySource.values()) established.set(t.source, t);
+		for (const t of opts.knownTerms ?? []) established.set(t.source, t);
 
-		const terms = parseExtractedTerms(raw);
-		return { terms, usage };
-	} catch {
-		return { terms: [], usage };
+		const all = [...established.values()].filter((t) => t.source);
+		const inChunk = (t: TermDraft) => chunk.includes(t.source);
+		const cmpSource = (a: TermDraft, b: TermDraft) => a.source.localeCompare(b.source);
+		const ctx =
+			all.length <= MAX_CONTEXT_TERMS
+				? [...all.filter((t) => t.pinned).sort(cmpSource), ...all.filter((t) => !t.pinned).sort(cmpSource)]
+				: [
+						...all.filter((t) => t.pinned),
+						...all.filter((t) => !t.pinned && inChunk(t)),
+						...all.filter((t) => !t.pinned && !inChunk(t)),
+					].slice(0, MAX_CONTEXT_TERMS);
+
+		const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+			{ role: 'system', content: extractionSystemPrompt(pair.sourceLang, pair.targetLang) },
+		];
+
+		if (ctx.length > 0) {
+			messages.push({
+				role: 'system',
+				content:
+					`ESTABLISHED GLOSSARY (already known — reuse each EXACT ${pair.targetLang} rendering everywhere you name these entities and never contradict one):\n` +
+					ctx.map((t) => `${t.source} = ${t.target}`).join('\n'),
+			});
+		}
+
+		messages.push({ role: 'user', content: `Extract terms from the following chapter text passage:\n\n${chunk}` });
+
+		try {
+			const resp = await queued(() =>
+				withRetry(async () => {
+					return await client.chat.completions.create(
+						{
+							model,
+							messages,
+							temperature: 0,
+							max_tokens: 4096,
+							...thinkingParam(),
+						},
+						{ signal: opts.signal },
+					);
+				}),
+			);
+
+			const raw = resp.choices[0]?.message?.content ?? '';
+			const u = computeUsage(resp.usage, model);
+			mergeUsage(usage, u);
+
+			const extracted = parseExtractedTerms(raw, content);
+			for (const term of extracted) {
+				if (!bySource.has(term.source)) {
+					bySource.set(term.source, term);
+				}
+			}
+		} catch (err) {
+			if (opts.signal?.aborted) throw err;
+			// Chunk-local failure: continue with already extracted terms
+		}
 	}
+
+	return { terms: [...bySource.values()], usage };
 }
 

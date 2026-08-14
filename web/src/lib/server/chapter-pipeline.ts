@@ -426,17 +426,18 @@ export async function runChapterPipeline(
 	const chapterText = slots
 		.filter((s) => s.outcome === 'analyzed')
 		.flatMap((s) => (s.analyzed?.regions ?? []).filter((r) => r.text.trim().length > 0).map((r) => r.text))
-		.join('\n')
-		.slice(0, MAX_EXTRACT_CHARS);
+		.join('\n');
 
 	if (chapterText.trim().length > 0) {
 		const tExtract0 = performance.now();
 		emit({ type: 'term-extract-step', chapterId, stepStatus: 'running' });
 		try {
+			const currentEffective = await getEffectiveGlossary(chapter.bookId);
 			const { terms: extracted, usage: extUsage } = await extractTerms(chapterText, pair, {
 				client: deps.llm,
 				model,
 				signal,
+				knownTerms: currentEffective,
 			});
 			if (extracted.length > 0) {
 				await addNewTerms(chapter.bookId, extracted, chapterId);

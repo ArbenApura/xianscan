@@ -124,7 +124,7 @@ def _grow_polygon_by_mask(
 	polygon: list[list[int]],
 	mask: np.ndarray,
 	thresh: int = 64,
-	dilate_px: int = 35,
+	dilate_px: int = 14,
 ) -> list[list[int]] | None:
 	"""GROW A REGION'S INPAINT POLYGON TO COVER FAINT TEXT PIXELS THE BOX EXTRACTION MISSED.
 
@@ -300,12 +300,21 @@ def _apply_mask_growth(
 	matched_count: int,
 	box: np.ndarray,
 	page_w: int,
+	other_boxes: list[np.ndarray] | None = None,
 ) -> None:
 	if comic_mask is None or not region.polygon or detect._is_watermark_line(region.text):
 		return
 	prev_bottom = max(p[1] for p in region.polygon)
 	prev_right = max(p[0] for p in region.polygon)
-	grown = _grow_polygon_by_mask(region.polygon, comic_mask)
+
+	growth_mask = comic_mask
+	if other_boxes:
+		growth_mask = comic_mask.copy()
+		for ob in other_boxes:
+			ox, oy, ow, oh = detect.box_to_xywh(ob)
+			growth_mask[max(0, oy) : min(growth_mask.shape[0], oy + oh), max(0, ox) : min(growth_mask.shape[1], ox + ow)] = 0
+
+	grown = _grow_polygon_by_mask(region.polygon, growth_mask)
 	if grown is not None and grown != region.polygon:
 		region.polygon = grown
 		bx, by, bw, bh = _polygon_bounds(grown)
@@ -341,11 +350,76 @@ def _apply_mask_growth(
 					region.box = Box(x=bx, y=by, w=bw, h=bh)
 
 
+def _split_lines_by_internal_punctuation(
+	rapid_lines: list[tuple],
+	ocr_img: np.ndarray,
+) -> list[tuple]:
+	"""SPLIT OCR LINES THAT ACCIDENTALLY FUSE TWO DISTINCT SPEECH BUBBLES / CLAUSES INTO ONE.
+
+	SCENE-TEXT DETECTORS (e.g. PP-OCR DET) OFTEN GROUP TEXT FRAGMENTS FROM ADJACENT SPEECH BUBBLES
+	ON THE SAME HORIZONTAL ROW INTO A SINGLE LINE WHEN THEY LIE ON THE SAME ROW
+	(e.g. '裤子上不可！哈哈！' SPANNING 2 SPEECH BUBBLES).
+	WHEN A LINE HAS INTERNAL SENTENCE-TERMINAL PUNCTUATION (e.g. '！', '。', '？', '…') FOLLOWED BY
+	MORE NON-WHITESPACE TEXT (AND BOTH PARTS ARE SUBSTANTIAL UTTERANCES, NOT SHORT INTERJECTIONS LIKE '咦！'),
+	WE FIND THE OPTIMAL SPLIT BOUNDARY IN THE IMAGE GAP AND RECOGNIZE EACH SUB-LINE INDIVIDUALLY.
+	"""
+	if not rapid_lines:
+		return rapid_lines
+
+	new_lines: list[tuple] = []
+	punct_pattern = re.compile(r"([\u3002!！?？…]+)(?=[^\u3002!！?？…\s])")
+
+	for item in rapid_lines:
+		pts, t, s, ang = item[:4] if len(item) >= 4 else (*item[:3], detect.calculate_box_angle(item[0]))
+		text_str = t.strip()
+		match = punct_pattern.search(text_str)
+		if match:
+			split_idx = match.end()
+			part1 = text_str[:split_idx].strip()
+			part2 = text_str[split_idx:].strip()
+
+			x, y, w, h = detect.box_to_xywh(pts)
+			len1 = len(part1)
+			len2 = len(part2)
+			total_len = len1 + len2
+
+			# Both parts must be substantial clauses (e.g. len1 >= 3, len2 >= 2)
+			# to avoid splitting leading single-character interjections like "咦！", "哈！", "喂！"
+			if total_len > 0 and len1 >= 3 and len2 >= 2:
+				prop_x = int(w * (len1 / total_len))
+				crop_band = ocr_img[max(0, y) : min(ocr_img.shape[0], y + h), max(0, x) : min(ocr_img.shape[1], x + w)]
+				split_px = prop_x
+				if crop_band.size > 0:
+					gray = cv2.cvtColor(crop_band, cv2.COLOR_BGR2GRAY)
+					col_mean = np.mean(gray, axis=0)
+					win_start = max(10, prop_x - int(h * 0.5))
+					win_end = min(w - 10, prop_x + int(h * 0.5))
+					if win_end > win_start:
+						peak_idx = win_start + np.argmax(col_mean[win_start:win_end])
+						split_px = int(peak_idx)
+
+				b1 = np.array([[x, y], [x + split_px, y], [x + split_px, y + h], [x, y + h]], dtype=np.float64)
+				b2 = np.array([[x + split_px, y], [x + w, y], [x + w, y + h], [x + split_px, y + h]], dtype=np.float64)
+
+				crop1 = ocr.crop_region(ocr_img, b1, margin=2)
+				crop2 = ocr.crop_region(ocr_img, b2, margin=2)
+
+				rec1 = ocr.recognize_line(crop1)
+				rec2 = ocr.recognize_line(crop2)
+
+				if rec1 and rec2 and rec1.text.strip() and rec2.text.strip():
+					new_lines.append((b1, rec1.text.strip(), rec1.score, detect.calculate_box_angle(b1)))
+					new_lines.append((b2, rec2.text.strip(), rec2.score, detect.calculate_box_angle(b2)))
+					continue
+
+		new_lines.append((pts, t, s, ang))
+
+	return new_lines
+
+
 def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	page_h, page_w = img_bgr.shape[:2]
-
-	# 0. DE-WATERMARK BUBBLES / SPEECH TEXT WITH COLLIDING CHROMATIC WATERMARKS
-	ocr_img, _has_collision = watermark_remover.remove_colliding_watermarks(img_bgr)
+	ocr_img = img_bgr
 
 	# COMIC-TEXT-DETECTOR PRIMARY DETECTION
 	comic_boxes: list[np.ndarray] = []
@@ -423,6 +497,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 				clean_t = "……"
 		normalized_rapid_lines.append((pts, clean_t, s, line_angle))
 	rapid_lines = _deduplicate_ocr_lines(normalized_rapid_lines)
+	rapid_lines = _split_lines_by_internal_punctuation(rapid_lines, ocr_img)
 
 	rapid_boxes = [pts for pts, _t, _s, _ang in rapid_lines]
 	rapid_scores = [float(s) for _pts, _t, s, _ang in rapid_lines]
@@ -593,8 +668,9 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 				else:
 					s_region.angle = 0.0
 
-				# MASK-GUIDED GROWTH FOR s_region
-				_apply_mask_growth(s_region, comic_mask, hull_pts, len(s_matched), box, page_w)
+				# MASK-GUIDED GROWTH FOR s_region (EXCLUDING OTHER LINES TO PREVENT INVADING NEIGHBOURING BUBBLES)
+				other_lines = [l[0] for l in rapid_lines if not any(detect.box_iou(l[0], sm[0]) > 0.50 for sm in s_matched)]
+				_apply_mask_growth(s_region, comic_mask, hull_pts, len(s_matched), box, page_w, other_boxes=other_lines)
 				regions.append(s_region)
 		else:
 			ocr_result = ocr.recognize_crop(ocr.crop_region(ocr_img, box))
@@ -626,7 +702,8 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					region.box = Box(x=bx, y=by, w=bw, h=bh)
 
 				# MASK-GUIDED GROWTH FOR crop region
-				_apply_mask_growth(region, comic_mask, None, 0, box, page_w)
+				other_lines = [l[0] for l in rapid_lines if detect.box_iou(l[0], box) <= 0.50]
+				_apply_mask_growth(region, comic_mask, None, 0, box, page_w, other_boxes=other_lines)
 				regions.append(region)
 
 	# -- STRAY-DOT CLEANUP: REC MODELS SOMETIMES SPLIT A FINAL "..." INTO THE LAST WORD PLUS A

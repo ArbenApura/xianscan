@@ -229,33 +229,80 @@ describe('translatePage', () => {
 });
 
 describe('parseExtractedTerms & extractTerms', () => {
-	it('parses valid AI extracted terms JSON array', async () => {
+	it('parses valid AI extracted terms JSON array or wrapped object', async () => {
 		const { parseExtractedTerms } = await import('$lib/server/translate');
-		const json = `[
-			{ "source": "叶凡", "target": "Ye Fan", "category": "character", "gender": "masculine", "context": "Protagonist" },
+		const json = `{"terms": [
+			{ "source": "叶凡", "target": "Ye Fan", "category": "character", "gender": "masculine", "context": "Protagonist", "aliases": ["小凡"] },
 			{ "source": "紫山", "target": "Purple Mountain", "category": "location", "gender": "neuter" }
-		]`;
+		]}`;
 		const terms = parseExtractedTerms(json);
 		expect(terms).toHaveLength(2);
 		expect(terms[0].source).toBe('叶凡');
 		expect(terms[0].target).toBe('Ye Fan');
 		expect(terms[0].category).toBe('character');
 		expect(terms[0].gender).toBe('masculine');
+		expect(terms[0].aliases).toEqual(['小凡']);
 		expect(terms[0].status).toBe('ai');
 		expect(terms[1].category).toBe('location');
 	});
 
-	it('extractTerms calls client and returns extracted drafts', async () => {
+	it('salvages complete term objects from a truncated JSON response', async () => {
+		const { parseExtractedTerms } = await import('$lib/server/translate');
+		// Truncated mid-stream before closing array / object
+		const truncated = `{"terms": [
+			{ "source": "林动", "target": "Lin Dong", "category": "character", "gender": "masculine" },
+			{ "source": "青檀", "target": "Qing Tan", "category": "character", "gender": "feminine" },
+			{ "source": "大荒宗", "target": "Great Desolate`;
+		const terms = parseExtractedTerms(truncated);
+		expect(terms).toHaveLength(2);
+		expect(terms[0].source).toBe('林动');
+		expect(terms[0].target).toBe('Lin Dong');
+		expect(terms[1].source).toBe('青檀');
+		expect(terms[1].target).toBe('Qing Tan');
+	});
+
+	it('filters out hallucinated terms when contentSource is provided', async () => {
+		const { parseExtractedTerms } = await import('$lib/server/translate');
+		const json = `[
+			{ "source": "萧炎", "target": "Xiao Yan", "category": "character" },
+			{ "source": "药老", "target": "Yao Lao", "category": "character" }
+		]`;
+		// "药老" is NOT in the chapter text
+		const terms = parseExtractedTerms(json, '萧炎大喝一声，冲上前去！');
+		expect(terms).toHaveLength(1);
+		expect(terms[0].source).toBe('萧炎');
+	});
+
+	it('extractTerms passes ESTABLISHED GLOSSARY when knownTerms are supplied', async () => {
 		const { extractTerms } = await import('$lib/server/translate');
-		const { client } = fakeClient([
-			'[{"source": "姬紫月", "target": "Ji Ziyue", "category": "character", "gender": "feminine"}]'
-		]);
-		const { terms, usage } = await extractTerms('姬紫月来到了紫山', PAIR, { client });
+		let sentMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+		const client = {
+			chat: {
+				completions: {
+					create: async (params: { messages: OpenAI.Chat.ChatCompletionMessageParam[] }) => {
+						sentMessages = params.messages;
+						return {
+							choices: [{ message: { content: '{"terms": [{"source": "姬紫月", "target": "Ji Ziyue", "category": "character", "gender": "feminine"}]}' } }],
+							usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
+						};
+					},
+				},
+			},
+		} as unknown as OpenAI;
+
+		const known = [{ source: '叶凡', target: 'Ye Fan', gender: 'masculine' as const, status: 'user' as const, pinned: true }];
+		const { terms, usage } = await extractTerms('姬紫月来到了紫山', PAIR, { client, knownTerms: known });
 		expect(terms).toHaveLength(1);
 		expect(terms[0].source).toBe('姬紫月');
 		expect(terms[0].target).toBe('Ji Ziyue');
 		expect(terms[0].gender).toBe('feminine');
 		expect(usage.promptTokens).toBeGreaterThan(0);
+
+		// Verify established glossary message was sent
+		const establishedMsg = sentMessages.find((m) => typeof m.content === 'string' && m.content.includes('ESTABLISHED GLOSSARY'));
+		expect(establishedMsg).toBeDefined();
+		expect(String(establishedMsg?.content)).toContain('叶凡 = Ye Fan');
 	});
 });
+
 

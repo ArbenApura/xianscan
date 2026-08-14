@@ -39,19 +39,29 @@ def _get_engine():
 	return _engine
 
 
-def _run_engine(img_bgr: np.ndarray) -> tuple[list[str], list[float], list[np.ndarray]]:
+def _run_engine(img_bgr: np.ndarray, use_det: bool = True) -> tuple[list[str], list[float], list[np.ndarray]]:
 	"""RUN DET+REC, NORMALISING THE v3 OUTPUT OBJECT TO PLAIN LISTS."""
-	out = _get_engine()(img_bgr)
-	txts = list(out.txts or [])
-	scores = [float(s) for s in (out.scores or [])]
-	# out.boxes IS A numpy ARRAY WHEN NON-EMPTY — `or []` WOULD TRIP ITS AMBIGUOUS TRUTH VALUE
-	boxes_raw = out.boxes
+	out = _get_engine()(img_bgr, use_det=use_det)
+	txts = list(getattr(out, "txts", None) or [])
+	scores = [float(s) for s in (getattr(out, "scores", None) or [])]
+	boxes_raw = getattr(out, "boxes", None)
 	boxes = []
 	if boxes_raw is not None:
 		arr = np.asarray(boxes_raw)
 		if arr.size:
 			boxes = [np.array(b, dtype=np.float64) for b in arr]
 	return txts, scores, boxes
+
+
+def recognize_line(img_bgr: np.ndarray) -> OcrResult | None:
+	"""RUN DIRECT TEXT RECOGNITION (NO DETECTION STEP) ON A TIGHT LINE CROP."""
+	h, w = img_bgr.shape[:2]
+	if h < 4 or w < 4:
+		return None
+	txts, scores, _ = _run_engine(img_bgr, use_det=False)
+	if not txts or not str(txts[0]).strip():
+		return None
+	return OcrResult(text=str(txts[0]).strip(), score=float(scores[0]) if scores else 0.0)
 
 
 def recognize_crop(img_bgr: np.ndarray) -> OcrResult | None:
