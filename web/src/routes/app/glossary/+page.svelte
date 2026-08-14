@@ -154,7 +154,7 @@
 
 			{#if selectedBookId}
 				<Button
-					variant="outline"
+					variant="secondary"
 					size="sm"
 					disabled={isExtracting}
 					on:click={triggerExtract}

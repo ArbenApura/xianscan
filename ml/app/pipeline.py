@@ -124,7 +124,7 @@ def _grow_polygon_by_mask(
 	polygon: list[list[int]],
 	mask: np.ndarray,
 	thresh: int = 64,
-	dilate_px: int = 20,
+	dilate_px: int = 35,
 ) -> list[list[int]] | None:
 	"""GROW A REGION'S INPAINT POLYGON TO COVER FAINT TEXT PIXELS THE BOX EXTRACTION MISSED.
 
@@ -150,6 +150,8 @@ def _grow_polygon_by_mask(
 	if not touching:
 		return None
 
+	orig_x0 = float(min(p[0] for p in polygon))
+	orig_y0 = float(min(p[1] for p in polygon))
 	parts = [pts.reshape(-1, 2).astype(np.float32)]
 	for i in sorted(touching):
 		ys, xs = np.where(labels == i)
@@ -160,7 +162,10 @@ def _grow_polygon_by_mask(
 	if hull is None or len(hull) < 3:
 		return None
 	hull_pts = hull.reshape(-1, 2).astype(np.float64)
-	return [[int(p[0]), int(p[1])] for p in hull_pts]
+	# CLAMP UPWARD AND LEFTWARD EXPANSION — TEXT ONLY GROWS RIGHTWARD (TRAILING DOTS/PUNCTUATION)
+	# AND DOWNWARD (TRAILING BOTTOM DOTS LINE). NEVER INVADE A BUBBLE ABOVE OR TO THE LEFT.
+	clamped_pts = [[max(int(orig_x0 - 2), int(p[0])), max(int(orig_y0 - 2), int(p[1]))] for p in hull_pts]
+	return clamped_pts
 
 
 def preprocess_watermark(img_bgr: np.ndarray, corner_margin_pct: float = 0.08) -> np.ndarray:
@@ -204,9 +209,9 @@ def _region_from_box(box: np.ndarray, index: int, page_w: int, page_h: int) -> R
 
 
 def _is_multiline_comic_blob(cb: np.ndarray, rapid_boxes: list[np.ndarray]) -> bool:
-	"""Check if a ComicTextDetector box is a multi-line blob that spans across multiple vertically
-	stacked RapidOCR lines. We drop multi-line blobs because RapidOCR provides precise single lines,
-	while keeping single-line comic boxes (e.g. for punctuation/ellipsis extension or SFX)."""
+	"""Check if a ComicTextDetector box is a redundant multi-line blob that spans across multiple
+	vertically stacked RapidOCR lines already detected. We only drop multi-line blobs when RapidOCR
+	has ALREADY detected 2 or more distinct vertical lines inside it."""
 	cx, cy, cw, ch = detect.box_to_xywh(cb)
 	overlapping_rapid = []
 	for rb in rapid_boxes:
@@ -219,27 +224,57 @@ def _is_multiline_comic_blob(cb: np.ndarray, rapid_boxes: list[np.ndarray]) -> b
 			inter_area = (ix1 - ix0) * (iy1 - iy0)
 			if inter_area > 0.15 * min(cw * ch, rw * rh):
 				overlapping_rapid.append((rx, ry, rw, rh))
-	if not overlapping_rapid:
-		return False  # Standalone SFX / stylized text
+	if len(overlapping_rapid) < 2:
+		return False  # RapidOCR did NOT detect multiple lines — preserve comic box to rescue missing lines!
 
-	# If it overlaps with multiple vertically stacked lines, it is multi-line
-	if len(overlapping_rapid) >= 2:
-		for i in range(len(overlapping_rapid)):
-			for j in range(i + 1, len(overlapping_rapid)):
-				r1 = overlapping_rapid[i]
-				r2 = overlapping_rapid[j]
-				if abs(r1[1] - r2[1]) > 0.4 * min(r1[3], r2[3]):
-					return True
+	# If it overlaps with multiple vertically stacked lines, it is redundant
+	for i in range(len(overlapping_rapid)):
+		for j in range(i + 1, len(overlapping_rapid)):
+			r1 = overlapping_rapid[i]
+			r2 = overlapping_rapid[j]
+			if abs(r1[1] - r2[1]) > 0.4 * min(r1[3], r2[3]):
+				return True
 
-	# If its height is significantly larger than the overlapping line (e.g. 1.35x taller), it is multi-line
-	avg_rh = sum(r[3] for r in overlapping_rapid) / len(overlapping_rapid)
-	if ch > 1.35 * avg_rh and ch > 55:
-		return True
 	return False
+
+
+def _deduplicate_ocr_lines(lines: list[tuple]) -> list[tuple]:
+	"""Deduplicate overlapping OCR lines that have identical text or high spatial IoU."""
+	if not lines:
+		return []
+	kept: list[tuple] = []
+	for item in lines:
+		pts, text, score = item[:3]
+		line_ang = item[3] if len(item) > 3 else 0.0
+		x, y, w, h = detect.box_to_xywh(pts)
+		duplicate = False
+		for k_idx, k_item in enumerate(kept):
+			k_pts, k_text, k_score = k_item[:3]
+			kx, ky, kw, kh = detect.box_to_xywh(k_pts)
+			iou = detect.box_iou(pts, k_pts)
+			cx1, cy1 = x + w / 2, y + h / 2
+			cx2, cy2 = kx + kw / 2, ky + kh / 2
+			dist = np.hypot(cx1 - cx2, cy1 - cy2)
+			same_text = (
+				(text.strip() == k_text.strip())
+				or (text.strip() and text.strip() in k_text.strip())
+				or (k_text.strip() and k_text.strip() in text.strip())
+			)
+			if (iou >= 0.30) or (same_text and (dist < max(h, kh) * 1.5 or iou >= 0.15)):
+				if len(text.strip()) > len(k_text.strip()) or (len(text.strip()) == len(k_text.strip()) and score > k_score):
+					kept[k_idx] = (pts, text, max(score, k_score), line_ang)
+				duplicate = True
+				break
+		if not duplicate:
+			kept.append((pts, text, score, line_ang))
+	return kept
 
 
 def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	page_h, page_w = img_bgr.shape[:2]
+
+	# 0. DE-WATERMARK BUBBLES / SPEECH TEXT WITH COLLIDING CHROMATIC WATERMARKS
+	ocr_img, _has_collision = watermark_remover.remove_colliding_watermarks(img_bgr)
 
 	# COMIC-TEXT-DETECTOR PRIMARY DETECTION
 	comic_boxes: list[np.ndarray] = []
@@ -248,39 +283,59 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	backend: Literal["comic-ctd", "rapidocr-fallback"] = "rapidocr-fallback"
 
 	if detector is not None and detector.available():
-		result = detector.analyze(img_bgr)
+		result = detector.analyze(ocr_img)
 		comic_boxes = result.boxes
 		comic_scores = result.scores
 		comic_mask = result.mask
 		backend = result.backend
 
 	# RAPIDOCR FULL-PAGE DET+REC — ALWAYS RUN (THE UNION'S SECOND OPINION + TEXT SOURCE)
-	rapid_lines = ocr.recognize_full(img_bgr)
+	rapid_lines = ocr.recognize_full(ocr_img)
 
 	# RECOVER CHINESE TEXT OBSCURED OR COVERED BY COLORED WATERMARK STAMPS (e.g. "点将:" UNDER "COLAMANHUA.com")
 	try:
-		hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-		mask_red1 = cv2.inRange(hsv, np.array([0, 40, 50]), np.array([15, 255, 255]))
-		mask_red2 = cv2.inRange(hsv, np.array([165, 40, 50]), np.array([180, 255, 255]))
-		mask_blue = cv2.inRange(hsv, np.array([85, 40, 50]), np.array([130, 255, 255]))
-		color_wm = mask_red1 | mask_red2 | mask_blue
+		hsv = cv2.cvtColor(ocr_img, cv2.COLOR_BGR2HSV)
+		sat = hsv[:, :, 1]
+		val = hsv[:, :, 2]
+		b, g, r = ocr_img[:, :, 0], ocr_img[:, :, 1], ocr_img[:, :, 2]
+		max_c = np.maximum(np.maximum(r, g), b)
+		min_c = np.minimum(np.minimum(r, g), b)
+		color_diff = max_c - min_c
+		color_wm = (((sat >= 30) | (color_diff >= 25)) & (val >= 40)).astype(np.uint8) * 255
 		if np.count_nonzero(color_wm) > 500:
-			clean_wm_img = cv2.inpaint(img_bgr, color_wm, 3, cv2.INPAINT_TELEA)
+			clean_wm_img = cv2.inpaint(ocr_img, color_wm, 3, cv2.INPAINT_TELEA)
 			clean_lines = ocr.recognize_full(clean_wm_img)
-			for pts, t, s in clean_lines:
-				if detect._CHINESE_RE.search(t) and not detect._is_watermark_line(t):
-					x, y, w, h = detect.box_to_xywh(pts)
-					covered = False
-					for rpts, rt, _rs in rapid_lines:
-						if detect._CHINESE_RE.search(rt) and not detect._is_watermark_line(rt):
-							rx, ry, rw, rh = detect.box_to_xywh(rpts)
-							ix = max(0, min(x + w, rx + rw) - max(x, rx))
-							iy = max(0, min(y + h, ry + rh) - max(y, ry))
-							if ix * iy >= 0.5 * w * h:
-								covered = True
+			for cpts, ct, cs in clean_lines:
+				clean_text = re.sub(r'^[A-Za-z0-9_.\-]{1,8}\s*(?=[\u4e00-\u9fa5])', '', ct.strip())
+				if detect._CHINESE_RE.search(clean_text) and not detect._is_watermark_line(clean_text):
+					cx, cy, cw, ch = detect.box_to_xywh(cpts)
+					replaced = False
+					for idx, (rpts, rt, rs) in enumerate(rapid_lines):
+						rx, ry, rw, rh = detect.box_to_xywh(rpts)
+						ix = max(0, min(cx + cw, rx + rw) - max(cx, rx))
+						iy = max(0, min(cy + ch, ry + rh) - max(cy, ry))
+						if ix * iy >= 0.4 * min(cw * ch, rw * rh):
+							has_latin = bool(re.search(r'[A-Za-z]', rt))
+							if has_latin or len(clean_text) >= len(rt):
+								rapid_lines[idx] = (cpts, clean_text, max(cs, rs))
+								replaced = True
 								break
-					if not covered:
-						rapid_lines.append((pts, t, s))
+					if not replaced:
+						rapid_lines.append((cpts, clean_text, cs))
+
+			# CLIP RAPIDOCR LINES THAT OVERLAP OR EXTEND INTO THE COLORED WATERMARK STAMP
+			clipped_rapid = []
+			for pts, t, s in rapid_lines:
+				x, y, w, h = detect.box_to_xywh(pts)
+				if w > 80 and not detect._CHINESE_RE.search(t):
+					line_mask = color_wm[max(0, y):min(page_h, y + h), max(0, x):min(page_w, x + w)]
+					col_sums = np.sum(line_mask > 0, axis=0)
+					colored_cols = np.where(col_sums > 0.2 * h)[0]
+					if colored_cols.size and colored_cols[0] > 30:
+						new_w = colored_cols[0]
+						pts = np.array([[x, y], [x + new_w, y], [x + new_w, y + h], [x, y + h]], dtype=np.float64)
+				clipped_rapid.append((pts, t, s))
+			rapid_lines = clipped_rapid
 	except Exception:
 		pass
 
@@ -288,10 +343,12 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	normalized_rapid_lines = []
 	for pts, t, s in rapid_lines:
 		line_angle = detect.calculate_box_angle(pts)
-		clean_t = t
-		if re.fullmatch(r'^[A-Za-z]{1,4}[.．…!！?？]{1,}$', t.strip()):
-			has_bang = "!" in t or "！" in t
-			has_q = "?" in t or "？" in t
+		clean_t = re.sub(r'^[A-Za-z0-9_.\-]{1,8}\s*(?=[\u4e00-\u9fa5])', '', t.strip())
+		if not clean_t:
+			clean_t = t
+		if re.fullmatch(r'^[A-Za-z]{1,4}[.．…!！?？]{1,}$', clean_t.strip()):
+			has_bang = "!" in clean_t or "！" in clean_t
+			has_q = "?" in clean_t or "？" in clean_t
 			if has_bang and has_q:
 				clean_t = "……！？"
 			elif has_bang:
@@ -301,7 +358,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			else:
 				clean_t = "……"
 		normalized_rapid_lines.append((pts, clean_t, s, line_angle))
-	rapid_lines = normalized_rapid_lines
+	rapid_lines = _deduplicate_ocr_lines(normalized_rapid_lines)
 
 	rapid_boxes = [pts for pts, _t, _s, _ang in rapid_lines]
 	rapid_scores = [float(s) for _pts, _t, s, _ang in rapid_lines]
@@ -359,23 +416,55 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			story_matched = [m for m in matched if not detect._is_watermark_line(m[1])]
 			if story_matched:
 				matched = story_matched
+
+			# DEDUPLICATE IDENTICAL / NEAR-DUPLICATE MATCHED LINES INSIDE THE REGION
+			unique_matched = []
+			for m in matched:
+				m_line, m_text, m_score, m_ang = m
+				m_txt_clean = m_text.strip()
+				if not m_txt_clean:
+					continue
+				if not any(m_txt_clean == u[1].strip() for u in unique_matched):
+					unique_matched.append(m)
+			matched = unique_matched
+
 			matched.sort(key=lambda m: (m[0][:, 1].min(), m[0][:, 0].min()))
 			region.text = "\n".join(t for _l, t, _s, _ang in matched if t.strip())
 			region.confidence = float(max(s for _l, _t, s, _ang in matched)) if matched else 0.0
-			# USE THE CONVEX HULL OF ALL MATCHED RAPID-LINE CORNER POINTS AS:
-			#   1) THE INPAINT POLYGON — TIGHTER THAN THE GROUPED AABB UNION.
-			#   2) THE BASIS FOR region.box AND region.category — THE RAPIDOCR LINE POLYGONS
-			#      ARE TIGHT AROUND ACTUAL TEXT, SO THEIR HULL'S BOUNDING BOX IS THE REAL TEXT
-			#      EXTENT. THE ORIGINAL GROUPED BOX IS THE AABB UNION (OFTEN MUCH WIDER), WHICH
-			#      CAUSES classify_region TO MISFIRE AND THE TYPESETTER TO PICK ENORMOUS FONTS.
+
+			_bx, _by, bw, bh = detect.box_to_xywh(box)
 			all_pts = np.vstack([line.reshape(-1, 2) for line, _, _, _ in matched]).astype(np.float32)
 			hull = cv2.convexHull(all_pts)
 			if hull is not None and len(hull) >= 3:
 				hull_pts = hull.reshape(-1, 2).astype(np.float64)
+				_hx, _hy, hw, hh = detect.box_to_xywh(hull_pts)
+
+				# MULTI-LINE / STAT-CARD RESCUE: IF DETECTOR BOX IS SIGNIFICANTLY TALLER THAN MATCHED LINES
+				if bh >= 1.25 * hh and bh >= 45:
+					crop_res = ocr.recognize_crop(ocr.crop_region(ocr_img, box))
+					if crop_res and crop_res.text.strip():
+						crop_lines = [cl.strip() for cl in crop_res.text.split("\n") if cl.strip()]
+						current_lines = [t.strip() for _l, t, _s, _ang in matched if t.strip()]
+						if any(cl not in current_lines for cl in crop_lines):
+							region.text = crop_res.text.strip()
+							region.confidence = max(region.confidence, crop_res.score)
+							region.polygon = [[int(px), int(py)] for px, py in box]
+							region.box = Box(x=_bx, y=_by, w=bw, h=bh)
+							region.category = detect.classify_region(box, page_w, page_h)  # type: ignore[arg-type]
+							region.vertical = detect.is_vertical_box(box)
+							line_angles = [line_ang for _l, _t, _s, line_ang in matched if abs(line_ang) >= 1.2]
+							if line_angles:
+								med = float(np.median(line_angles))
+								region.angle = 0.0 if abs(med) < 1.2 else round(med, 2)
+							elif hull_pts is not None and len(hull_pts) >= 4:
+								poly_ang = detect.calculate_box_angle(hull_pts)
+								region.angle = 0.0 if abs(poly_ang) < 1.2 else round(poly_ang, 2)
+							else:
+								region.angle = detect.calculate_box_angle(box)
+							regions.append(region)
+							continue
+
 				region.polygon = [[int(p[0]), int(p[1])] for p in hull_pts]
-				# TRAILING-PUNCTUATION RECOVERY — A SINGLE-LINE REGION WHOSE TEXT ENDS IN DOTS OR
-				# !/? MAY BE TRUNCATED ("......" READ AS "...", "穿越者！？" READ AS "穿越者！"):
-				# WIDEN THE ERASE MASK SO THE MISSING GLYPHS GET INPAINTED TOO.
 				if len(matched) == 1 and _PUNCT_TAIL.search(region.text):
 					is_dots = bool(_ELLIPSIS_TAIL.search(region.text))
 					punct_only = bool(_PUNCT_ONLY.fullmatch(region.text))
@@ -385,41 +474,40 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 						else _punct_polygon(hull_pts, box, page_w)
 					)
 					if punct_only:
-						# A LONE GLYPH: PAD THE MASK (DETECTOR BOXES OFTEN CLIP THE GLYPH) —
-						# NEVER FABRICATE TEXT FOR IT.
 						widened = _pad_punct_polygon(widened, page_w)
 					if widened != region.polygon:
 						hull_right = float(hull_pts[:, 0].max())
 						hull_h = max(1.0, float(hull_pts[:, 1].max() - hull_pts[:, 1].min()))
 						widened_right = float(max(p[0] for p in widened))
 						region.polygon = widened
-						# THE EXTRACTED TEXT MUST SHOW THE GLYPHS THE MASK NOW COVERS. PUNCTUATION
-						# APPENDS ONLY WHEN THE GEOMETRY PROVED REAL EXTRA SPACE (≥0.35 LINE
-						# HEIGHT) — BOX PADDING ALONE MUST NOT FABRICATE A "？".
 						if is_dots:
 							region.text = _append_ellipsis(region.text)
 						elif not punct_only and widened_right - hull_right >= hull_h * 0.35:
 							region.text = _append_punctuation(region.text)
-					# THE TYPESET BOX FOLLOWS THE (WIDENED) MASK — OTHERWISE THE RENDERED
-					# TRANSLATION SITS OFF-CENTER RELATIVE TO THE FULL LINE.
 					bx, by, bw, bh = _polygon_bounds(region.polygon)
 					region.box = Box(x=bx, y=by, w=bw, h=bh)
 				else:
-					# REDERIVE BOX FROM THE HULL'S BOUNDING BOX (TIGHT — d12f433 BEHAVIOUR)
+					# REDERIVE BOX FROM THE HULL'S BOUNDING BOX
 					hx, hy, hw, hh = detect.box_to_xywh(hull_pts)
 					region.box = Box(x=hx, y=hy, w=max(1, hw), h=max(1, hh))
 				region.category = detect.classify_region(hull_pts, page_w, page_h)  # type: ignore[arg-type]
 				region.vertical = detect.is_vertical_box(hull_pts)
 			# 3. COMPUTE ORIENTATION ANGLE FROM MATCHED OCR LINE ANGLES (PARAGRAPH MEDIAN)
-			line_angles = [line_ang for _l, _t, _s, line_ang in matched]
+			line_angles = [line_ang for _l, _t, _s, line_ang in matched if abs(line_ang) >= 1.2]
 			if line_angles:
 				med = float(np.median(line_angles))
-				region.angle = 0.0 if abs(med) < 3.0 else round(med, 2)
+				region.angle = 0.0 if abs(med) < 1.2 else round(med, 2)
+			elif hull_pts is not None and len(hull_pts) >= 4:
+				poly_ang = detect.calculate_box_angle(hull_pts)
+				region.angle = 0.0 if abs(poly_ang) < 1.2 else round(poly_ang, 2)
+			else:
+				region.angle = detect.calculate_box_angle(box)
 		else:
-			ocr_result = ocr.recognize_crop(ocr.crop_region(img_bgr, box))
+			ocr_result = ocr.recognize_crop(ocr.crop_region(ocr_img, box))
 			if ocr_result:
 				region.text = ocr_result.text
 				region.confidence = ocr_result.score
+				region.angle = detect.calculate_box_angle(box)
 				# TRAILING-PUNCTUATION RECOVERY (CROP PATH) — SAME RULES AS THE MATCHED PATH.
 				if _PUNCT_TAIL.search(ocr_result.text):
 					is_dots = bool(_ELLIPSIS_TAIL.search(ocr_result.text))
@@ -469,13 +557,23 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					if last_char not in "。.;；:：!！?？)]】”’\"'":
 						unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
 						region.text = region.text.rstrip() + "\n" + unit
-				# A REAL HORIZONTAL EXTENSION TO THE RIGHT IS MISSED TRAILING PUNCTUATION
-				# (e.g. THE "！" OF "找到军师了！！") — REFLECT IT IN THE EXTRACTED TEXT TOO.
-				if line_h > 0 and added_w >= line_h * 0.35:
+				# A REAL HORIZONTAL EXTENSION TO THE RIGHT IS MISSED TRAILING PUNCTUATION OR ELLIPSIS
+				# (e.g. THE "！" OF "找到军师了！！" OR THE "……" OF "这里……") — REFLECT IT IN THE EXTRACTED TEXT TOO.
+				if line_h > 0 and added_w >= max(10.0, line_h * 0.25):
 					if _ELLIPSIS_TAIL.search(region.text):
 						region.text = _append_ellipsis(region.text)
-					else:
+					elif _EXCLAIM_TAIL.search(region.text) or _QUESTION_TAIL.search(region.text):
 						region.text = _append_punctuation(region.text)
+					elif region.text.strip() and region.text.rstrip()[-1] not in "。.;；:：!！?？)]】”’\"'":
+						unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
+						region.text = region.text.rstrip() + unit
+						# If union box extends further to the right to cover the dots, widen the mask
+						poly_pts = np.asarray(region.polygon, dtype=np.float64)
+						widened = _ellipsis_polygon(poly_pts, box, region.text, page_w)
+						if widened != region.polygon:
+							region.polygon = widened
+							bx, by, bw, bh = _polygon_bounds(widened)
+							region.box = Box(x=bx, y=by, w=bw, h=bh)
 		regions.append(region)
 
 	# -- STRAY-DOT CLEANUP: REC MODELS SOMETIMES SPLIT A FINAL "..." INTO THE LAST WORD PLUS A
@@ -567,11 +665,13 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		kept_final.sort(key=lambda r: (r.box.y, r.box.x))
 		final_regions = kept_final
 
-	# 4) DISCARD EMPTY OR DASH-ONLY FALSE DETECTIONS (e.g. "—", speed lines, drawing strokes)
+	# 4) DISCARD EMPTY, DASH-ONLY NOISE, AND STANDALONE WATERMARK REGIONS (e.g. "速漫库", "qumanku.com")
 	_IGNORED_NOISE_RE = re.compile(r"^[—―\-_~～\s]*$")
 	final_regions = [
 		r for r in final_regions
-		if r.text.strip() and not _IGNORED_NOISE_RE.fullmatch(r.text.strip())
+		if r.text.strip()
+		and not _IGNORED_NOISE_RE.fullmatch(r.text.strip())
+		and not detect.is_pure_watermark_region(r.text)
 	]
 
 	return AnalyzeResponse(

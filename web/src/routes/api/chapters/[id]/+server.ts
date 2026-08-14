@@ -5,7 +5,7 @@ import { eq, inArray } from 'drizzle-orm';
 // IMPORTED MODULES
 import { assertChapterExists } from '$lib/server/chapters';
 import { db } from '$lib/server/db';
-import { pages, regions, chapters } from '$lib/server/db/schema';
+import { pages, regions, chapters, books } from '$lib/server/db/schema';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params }) => {
@@ -33,12 +33,33 @@ export const GET: RequestHandler = async ({ params }) => {
 			: [];
 	const byPage = new Map<number, typeof regionRows>();
 	for (const r of regionRows) {
-		const list = byPage.get(r.pageId) ?? [];
-		list.push(r);
-		byPage.set(r.pageId, list);
+		const arr = byPage.get(r.pageId) ?? [];
+		arr.push(r);
+		byPage.set(r.pageId, arr);
 	}
 
+	const chapterRow = db
+		.select()
+		.from(chapters)
+		.where(eq(chapters.id, chapterId))
+		.get();
+
+	const bookRow = chapterRow
+		? db.select().from(books).where(eq(books.id, chapterRow.bookId)).get()
+		: null;
+
 	return json({
+		chapter: chapterRow
+			? {
+					id: chapterRow.id,
+					bookId: chapterRow.bookId,
+					seq: chapterRow.seq,
+					title: chapterRow.title,
+					titleTarget: chapterRow.titleTarget,
+					sourceLang: bookRow?.sourceLang || 'zh-CN',
+					targetLang: bookRow?.targetLang || 'en',
+				}
+			: null,
 		pages: pageRows.map((p) => ({
 			id: p.id,
 			seq: p.seq,

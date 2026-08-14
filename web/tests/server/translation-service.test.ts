@@ -211,4 +211,63 @@ describe('startChapterJob', () => {
 		await vi.waitFor(() => expect(handle.status).toBe('failed'));
 		expect(events).toContain('error');
 	});
+
+	it('maintains live telemetry snapshot and retains it after job completion (self-healing)', async () => {
+		const { getChapterJobSnapshot } = await import('$lib/server/translation-service');
+
+		const handle = startChapterJob(5, async (_signal, emit) => {
+			emit({
+				type: 'start',
+				chapterId: 5,
+				totalPages: 2,
+				pages: [
+					{ id: 101, seq: 0, status: 'pending' },
+					{ id: 102, seq: 1, status: 'pending' },
+				],
+			});
+			emit({
+				type: 'page-step-start',
+				chapterId: 5,
+				page: 0,
+				pageId: 101,
+				step: 'analyze',
+			});
+			emit({
+				type: 'page-step-end',
+				chapterId: 5,
+				page: 0,
+				pageId: 101,
+				step: 'analyze',
+				stepStatus: 'completed',
+				durationMs: 120,
+				stepDetails: { regionsCount: 3 },
+			});
+			emit({
+				type: 'usage',
+				usage: { model: 'deepseek-v4-flash', promptTokens: 100, cachedTokens: 0, completionTokens: 20, costUsd: 0.002 },
+			});
+			emit({
+				type: 'page-done',
+				chapterId: 5,
+				page: 0,
+				pageId: 101,
+				outputPath: 'output/5/0.png',
+				durationMs: 450,
+			});
+		});
+
+		await vi.waitFor(() => expect(handle.status).toBe('done'));
+
+		// RETENTION TEST: EVEN AFTER JOB IS FINISHED AND REMOVED FROM ACTIVE MAP, SNAPSHOT IS RETAINED
+		const snapshot = getChapterJobSnapshot(5);
+		expect(snapshot).not.toBeNull();
+		expect(snapshot?.chapterId).toBe(5);
+		expect(snapshot?.status).toBe('done');
+		expect(snapshot?.totalPages).toBe(2);
+		expect(snapshot?.completedPages).toBe(1);
+		expect(snapshot?.totalCostUsd).toBe(0.002);
+		expect(snapshot?.pages[0].timings.analyze?.durationMs).toBe(120);
+		expect(snapshot?.pages[0].outputPath).toBe('output/5/0.png');
+	});
 });
+

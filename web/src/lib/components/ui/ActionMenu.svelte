@@ -6,6 +6,7 @@
 		icon?: ComponentType;
 		// RENDER IN A DESTRUCTIVE (RED) STYLE — E.G. DELETE
 		danger?: boolean;
+		disabled?: boolean;
 	}
 
 	// MOVE THE MENU TO document.body SO A CLIPPING ANCESTOR (overflow-hidden LIST) CAN'T CUT IT OFF
@@ -174,10 +175,11 @@
 			<button
 				type="button"
 				role="menuitem"
-				use:ripple
-				on:click={() => choose(item)}
+				disabled={item.disabled}
+				use:ripple={{ disabled: item.disabled }}
+				on:click={() => !item.disabled && choose(item)}
 				class={cn(
-					'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors',
+					'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors disabled:pointer-events-none disabled:opacity-40',
 					item.danger
 						? 'text-red-600 hover:bg-red-500/10 dark:text-red-400'
 						: 'hover:bg-black/5 dark:hover:bg-white/5',

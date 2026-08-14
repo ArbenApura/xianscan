@@ -11,12 +11,14 @@
 		TRANSLATION_MODELS,
 		type Theme,
 	} from '$lib/stores/settings';
+	import { activeTranslatingChapters } from '$lib/stores/job-tracker';
 	import { SOURCE_LANGUAGE_OPTIONS, TARGET_LANGUAGE_OPTIONS } from '$lib/languages';
 	// IMPORTED ICONS
 	import BookOpen from 'lucide-svelte/icons/book-open';
 	import Languages from 'lucide-svelte/icons/languages';
 	import Palette from 'lucide-svelte/icons/palette';
 	import Cpu from 'lucide-svelte/icons/cpu';
+	import Sparkles from 'lucide-svelte/icons/sparkles';
 	import Settings from 'lucide-svelte/icons/settings';
 	import Check from 'lucide-svelte/icons/check';
 
@@ -28,8 +30,6 @@
 
 	// -- STATES -- //
 	let settingsOpen = false;
-	let themeMenuOpen = false;
-	let modelMenuOpen = false;
 
 	const THEMES: { id: Theme; label: string; bg: string; dot: string }[] = [
 		{ id: 'light', label: 'Light', bg: 'bg-[#fbfaf7]', dot: 'border-slate-300 bg-[#fbfaf7]' },
@@ -39,15 +39,24 @@
 		{ id: 'contrast', label: 'Contrast', bg: 'bg-black', dot: 'border-white bg-black' },
 	];
 
-	function setTheme(t: Theme) {
-		settings.update((s) => ({ ...s, theme: t }));
-		themeMenuOpen = false;
+	const modelOptions = [
+		{ value: 'deepseek-chat', label: 'DeepSeek Flash', icon: Cpu, hint: 'Default' },
+		{ value: 'deepseek-v4-pro', label: 'DeepSeek Pro', icon: Sparkles, hint: 'Pro' },
+	];
+
+	const themeOptions = THEMES.map((t) => ({
+		value: t.id,
+		label: t.label,
+		icon: Palette,
+	}));
+
+	function setTheme(t: Theme | string) {
+		settings.update((s) => ({ ...s, theme: t as Theme }));
 		toast.success(`Theme updated to ${t}`);
 	}
 
 	function setModel(m: string) {
 		settings.update((s) => ({ ...s, model: m }));
-		modelMenuOpen = false;
 		toast.success(`Translation model set to ${m === 'deepseek-v4-pro' ? 'Pro' : 'Flash'}`);
 	}
 
@@ -74,9 +83,11 @@
 				href="/app/"
 				class="flex items-center gap-2.5 text-base font-bold tracking-tight text-current transition opacity-90 hover:opacity-100"
 			>
-				<div class="flex h-7 w-7 items-center justify-center rounded-lg bg-[#b23a2e] text-xs font-black text-white shadow-sm">
-					譯
-				</div>
+				<img
+					src="/favicon.svg"
+					alt="Manua Translator"
+					class="h-7 w-7 rounded-lg shadow-sm object-contain"
+				/>
 				<span class="hidden sm:inline">Manua Translator</span>
 			</a>
 
@@ -107,111 +118,42 @@
 					<Languages size={14} />
 					<span>Glossary</span>
 				</a>
+
+				<!-- GLOBAL BACKGROUND TRANSLATION ACTIVITY PILL -->
+				{#each $activeTranslatingChapters as activeJob}
+					{@const snap = activeJob.snapshot}
+					{@const total = snap?.totalPages || snap?.pages.length || 0}
+					{@const done = snap?.completedPages || 0}
+					<a
+						href={`#`}
+						class="ml-2 flex items-center gap-1.5 rounded-full border border-[#b23a2e]/30 bg-[#b23a2e]/10 px-2.5 py-0.5 text-xs font-bold text-[#b23a2e] dark:text-[#e08a63] transition hover:bg-[#b23a2e]/20 animate-pulse"
+						title="Background Translation in Progress"
+					>
+						<span class="h-1.5 w-1.5 rounded-full bg-[#b23a2e] dark:bg-[#e08a63]"></span>
+						<span>Translating ({done}/{total})</span>
+					</a>
+				{/each}
 			</div>
 
 			<div class="ml-auto flex items-center gap-2">
-				<!-- MODEL SELECTOR BUTTON / DROPDOWN -->
-				<div class="relative">
-					<button
-						type="button"
-						class="flex items-center gap-1.5 rounded-lg border border-black/10 px-2.5 py-1 text-xs font-medium transition hover:border-[#b23a2e]/40 dark:border-white/10"
-						on:click={() => {
-							modelMenuOpen = !modelMenuOpen;
-							themeMenuOpen = false;
-						}}
-						use:ripple
-						aria-label="Select Model"
-					>
-						<Cpu size={13} class="text-[#b23a2e] dark:text-[#e08a63]" />
-						<span class="capitalize">{$settings.model.includes('pro') ? 'DeepSeek Pro' : 'DeepSeek Flash'}</span>
-					</button>
-
-					{#if modelMenuOpen}
-						<!-- BACKDROP DISMISS -->
-						<button
-							type="button"
-							class="fixed inset-0 z-40 bg-transparent"
-							on:click={() => (modelMenuOpen = false)}
-							aria-hidden="true"
-						></button>
-
-						<div class="absolute right-0 top-full z-50 mt-1.5 w-64 rounded-xl border border-black/10 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-[#1a1713]">
-							<div class="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider opacity-50">
-								Translation Model
-							</div>
-							{#each TRANSLATION_MODELS as m}
-								<button
-									type="button"
-									on:click={() => setModel(m.id)}
-									class={`flex w-full items-start justify-between rounded-lg p-2 text-left text-xs transition ${
-										$settings.model === m.id
-											? 'bg-[#b23a2e]/10 text-[#b23a2e] dark:text-[#e08a63]'
-											: 'hover:bg-black/5 dark:hover:bg-white/5'
-									}`}
-								>
-									<div>
-										<div class="font-semibold">{m.label}</div>
-										<div class="mt-0.5 text-[11px] opacity-60">{m.blurb}</div>
-									</div>
-									{#if $settings.model === m.id}
-										<Check size={14} class="mt-0.5 shrink-0" />
-									{/if}
-								</button>
-							{/each}
-						</div>
-					{/if}
+				<!-- MODEL SELECTOR POPOVER -->
+				<div class="w-36 sm:w-44">
+					<Select
+						items={modelOptions}
+						value={$settings.model}
+						on:change={(e) => setModel(e.detail)}
+						class="text-xs py-1"
+					/>
 				</div>
 
-				<!-- THEME SELECTOR BUTTON / POPUP -->
-				<div class="relative">
-					<button
-						type="button"
-						class="flex items-center gap-1.5 rounded-lg border border-black/10 px-2.5 py-1 text-xs font-medium transition hover:border-[#b23a2e]/40 dark:border-white/10"
-						on:click={() => {
-							themeMenuOpen = !themeMenuOpen;
-							modelMenuOpen = false;
-						}}
-						use:ripple
-						aria-label="Select Theme"
-					>
-						<Palette size={13} class="text-[#b23a2e] dark:text-[#e08a63]" />
-						<span class="capitalize hidden xs:inline">{$settings.theme}</span>
-					</button>
-
-					{#if themeMenuOpen}
-						<!-- BACKDROP DISMISS -->
-						<button
-							type="button"
-							class="fixed inset-0 z-40 bg-transparent"
-							on:click={() => (themeMenuOpen = false)}
-							aria-hidden="true"
-						></button>
-
-						<div class="absolute right-0 top-full z-50 mt-1.5 w-44 rounded-xl border border-black/10 bg-white p-1.5 shadow-xl dark:border-white/10 dark:bg-[#1a1713]">
-							<div class="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider opacity-50">
-								Theme
-							</div>
-							{#each THEMES as t}
-								<button
-									type="button"
-									on:click={() => setTheme(t.id)}
-									class={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs transition ${
-										$settings.theme === t.id
-											? 'bg-[#b23a2e]/10 text-[#b23a2e] dark:text-[#e08a63]'
-											: 'hover:bg-black/5 dark:hover:bg-white/5'
-									}`}
-								>
-									<div class="flex items-center gap-2">
-										<span class={`h-3 w-3 rounded-full border ${t.dot}`}></span>
-										<span class="font-medium">{t.label}</span>
-									</div>
-									{#if $settings.theme === t.id}
-										<Check size={14} />
-									{/if}
-								</button>
-							{/each}
-						</div>
-					{/if}
+				<!-- THEME SELECTOR POPOVER -->
+				<div class="w-28 sm:w-32">
+					<Select
+						items={themeOptions}
+						value={$settings.theme}
+						on:change={(e) => setTheme(e.detail)}
+						class="text-xs py-1"
+					/>
 				</div>
 
 				<!-- SETTINGS BUTTON -->
@@ -221,15 +163,16 @@
 					class="rounded-lg border border-black/10 p-1.5 text-current opacity-70 transition hover:opacity-100 dark:border-white/10"
 					aria-label="Settings"
 					use:ripple
+					title="Settings"
 				>
-					<Settings size={15} />
+					<Settings size={14} />
 				</button>
 			</div>
 		</nav>
 	</header>
 
 	<!-- PAGE CONTENT -->
-	<main class="mx-auto w-full max-w-6xl px-4 pb-16 sm:px-6">
+	<main class="mx-auto w-full max-w-6xl px-4 pt-6 pb-16 sm:px-6">
 		<slot />
 	</main>
 </div>

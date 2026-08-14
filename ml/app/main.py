@@ -7,9 +7,9 @@
 #   POST /pages/analyze  → multipart image → {width, height, backend, regions:[{id,box,polygon,
 #                           category,text,confidence,vertical}]}
 #   POST /pages/clean    → multipart image + `regions` JSON field → PNG WITH ORIGINAL TEXT ERASED
-from __future__ import annotations
-
+from contextlib import asynccontextmanager
 import json
+import logging
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -17,7 +17,61 @@ from fastapi.responses import Response
 from . import config, pipeline
 from .schemas import CleanRequestRegion
 
-app = FastAPI(title="manua-translator ML sidecar", version="0.1.0")
+logger = logging.getLogger("app.main")
+
+
+def warmup_models() -> dict[str, bool]:
+    """PRE-INITIALIZE AND WARM UP DETECTOR, OCR, AND INPAINTER MODELS ON STARTUP."""
+    status: dict[str, bool] = {}
+
+    # 1. ComicTextDetector ONNX
+    try:
+        if pipeline.detector is not None and pipeline.detector.available():
+            pipeline.detector._load()
+            status["detector"] = True
+            logger.info("ComicTextDetector initialized.")
+        else:
+            status["detector"] = False
+    except Exception as e:
+        status["detector"] = False
+        logger.warning("ComicTextDetector warmup skipped: %s", e)
+
+    # 2. RapidOCR Engine
+    try:
+        from . import ocr
+
+        ocr._get_engine()
+        status["ocr"] = True
+        logger.info("RapidOCR engine initialized.")
+    except Exception as e:
+        status["ocr"] = False
+        logger.warning("RapidOCR warmup skipped: %s", e)
+
+    # 3. LaMa Inpainter ONNX
+    try:
+        from . import inpaint
+
+        if inpaint.config.LAMA_MODEL_PATH.exists():
+            inpaint._get_lama()
+            status["inpainter"] = True
+            logger.info("LaMa inpainter initialized.")
+        else:
+            status["inpainter"] = False
+    except Exception as e:
+        status["inpainter"] = False
+        logger.warning("LaMa inpainter warmup skipped: %s", e)
+
+    return status
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """LIFESPAN HANDLER: IMMEDIATELY WARM UP MODELS AT APPLICATION STARTUP."""
+    warmup_models()
+    yield
+
+
+app = FastAPI(title="manua-translator ML sidecar", version="0.1.0", lifespan=lifespan)
 
 # SIZE CAP: A MANHUA PAGE IS ~2-8MB AS PNG/JPEG; REJECT ANYTHING ABSURD EARLY.
 MAX_UPLOAD_BYTES = 32 * 1024 * 1024

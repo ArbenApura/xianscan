@@ -92,3 +92,101 @@ export interface TranslationUsage {
 	completionTokens: number;
 	costUsd: number;
 }
+
+export type JobEventType =
+	| 'start'
+	| 'phase-change'
+	| 'page-added'
+	| 'page-cancelled'
+	| 'page-step-start'
+	| 'page-step-end'
+	| 'term-extract-step'
+	| 'page-done'
+	| 'usage'
+	| 'done'
+	| 'error';
+
+export type PipelineStep =
+	| 'queued'
+	| 'preprocess'
+	| 'analyze'
+	| 'persist_regions'
+	| 'term_extract'
+	| 'match_glossary'
+	| 'translate'
+	| 'persist_translations'
+	| 'clean'
+	| 'typeset'
+	| 'save_output'
+	| 'done'
+	| 'error';
+
+export const PIPELINE_STEP_LABELS: Record<PipelineStep, string> = {
+	queued: 'Queued',
+	preprocess: 'Watermark Clean',
+	analyze: 'Detect & OCR',
+	persist_regions: 'Save Regions',
+	term_extract: 'Glossary AI Extract',
+	match_glossary: 'Glossary Match',
+	translate: 'DeepSeek Translation',
+	persist_translations: 'Save Translations',
+	clean: 'Inpaint Artwork (LaMa)',
+	typeset: 'Typeset & Wrap',
+	save_output: 'Save Output',
+	done: 'Completed',
+	error: 'Failed',
+};
+
+export interface StepTiming {
+	step: PipelineStep;
+	status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+	startedAt?: number;
+	completedAt?: number;
+	durationMs?: number;
+	details?: {
+		regionsCount?: number;
+		cacheHit?: boolean;
+		model?: string;
+		tokens?: number;
+		costUsd?: number;
+		error?: string;
+	};
+}
+
+export interface PageProgressState {
+	pageIndex: number;
+	pageId: number;
+	seq: number;
+	status: 'pending' | 'processing' | 'done' | 'error';
+	currentStep?: PipelineStep;
+	currentStepLabel?: string;
+	timings: Partial<Record<PipelineStep, StepTiming>>;
+	totalDurationMs?: number;
+	failedStep?: PipelineStep;
+	errorMessage?: string;
+	outputPath?: string | null;
+}
+
+export type PipelinePhase = 'phase1_analyze' | 'phase2_extract' | 'phase3_typeset' | 'completed';
+
+export interface ChapterJobSnapshot {
+	chapterId: number;
+	status: 'running' | 'done' | 'failed' | 'superseded';
+	currentPhase: PipelinePhase;
+	startedAt: number;
+	completedAt?: number;
+	totalDurationMs?: number;
+	totalPages: number;
+	completedPages: number;
+	failedPages: number;
+	phase2Stats?: {
+		termCount?: number;
+		durationMs?: number;
+	};
+	totalCostUsd: number;
+	totalPromptTokens: number;
+	totalCompletionTokens: number;
+	cacheHitCount: number;
+	pages: PageProgressState[];
+}
+

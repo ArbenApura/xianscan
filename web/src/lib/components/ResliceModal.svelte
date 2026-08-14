@@ -238,7 +238,7 @@
 
 			<div class="mt-4 flex items-center justify-between border-t border-black/[0.06] pt-3 text-[11px] opacity-60 dark:border-white/[0.06]">
 				<span>Dialog is locked until completion</span>
-				<Button variant="secondary" size="xs" on:click={cancel}>
+				<Button variant="secondary" size="sm" on:click={cancel}>
 					<X size={12} /> Cancel Process
 				</Button>
 			</div>

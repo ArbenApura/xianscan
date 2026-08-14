@@ -1,5 +1,5 @@
 // TYPESETTING — RENDER TRANSLATED TEXT ONTO THE CLEANED PAGE WITH @napi-rs/canvas (SKIA).
-import { createCanvas, GlobalFonts, loadImage, type Image } from '@napi-rs/canvas';
+import { createCanvas, GlobalFonts, loadImage, type Image, type SKRSContext2D } from '@napi-rs/canvas';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
@@ -358,7 +358,7 @@ export interface TypesetOptions {
  * stacked vertically, centre-aligned, inside the region box.
  */
 export function typesetStatPanel(
-	ctx: CanvasRenderingContext2D,
+	ctx: SKRSContext2D | CanvasRenderingContext2D,
 	r: TypesetRegion,
 	segments: TextSegment[],
 	bgColor: TextColor,

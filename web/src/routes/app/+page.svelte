@@ -254,7 +254,6 @@
 			bind:value={title}
 			label="Book Title"
 			placeholder="e.g. 星尘 (Stardust)"
-			required
 		/>
 
 		<div class="grid grid-cols-2 gap-3">
@@ -282,10 +281,9 @@
 <ConfirmDialog
 	open={deleteConfirmOpen}
 	title="Delete Book Series?"
-	description={`Are you sure you want to delete "${bookToDelete?.title}"? All chapters, pages, and cached translations for this book will be permanently deleted.`}
+	message={`Are you sure you want to delete "${bookToDelete?.title}"? All chapters, pages, and cached translations for this book will be permanently deleted.`}
 	confirmLabel="Delete Book"
-	destructive
-	loading={deleting}
+	variant="danger"
 	on:confirm={confirmDeleteBook}
 	on:cancel={() => (deleteConfirmOpen = false)}
 />

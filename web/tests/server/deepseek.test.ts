@@ -95,6 +95,14 @@ describe('resolveModel', () => {
 	});
 });
 
+describe('thinkingParam', () => {
+	it('disables reasoning/thinking mode by default', async () => {
+		const { thinkingParam } = await import('$lib/server/deepseek');
+		expect(thinkingParam()).toEqual({ thinking: { type: 'disabled' } });
+	});
+});
+
+
 describe('withRetry', () => {
 	it('succeeds on the first attempt', async () => {
 		const fn = vi.fn().mockResolvedValue('ok');

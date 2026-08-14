@@ -158,7 +158,7 @@
 				</div>
 
 				<div class="flex flex-wrap items-center gap-3">
-					<Button variant="outline" on:click={() => goto(`/app/glossary?bookId=${book?.id}`)}>
+					<Button variant="secondary" on:click={() => goto(`/app/glossary?bookId=${book?.id}`)}>
 						<BookOpen size={16} /> Book Glossary
 					</Button>
 					<Button variant="primary" on:click={() => (createModalOpen = true)}>
@@ -253,7 +253,6 @@
 			bind:value={chapterTitle}
 			label="Chapter Title"
 			placeholder="e.g. 第1话 (Chapter 1)"
-			required
 		/>
 	</form>
 
@@ -269,10 +268,9 @@
 <ConfirmDialog
 	open={deleteConfirmOpen}
 	title="Delete Chapter?"
-	description={`Are you sure you want to delete "${chapterToDelete?.title || 'Chapter'} "? All uploaded page images and translation output for this chapter will be permanently removed.`}
+	message={`Are you sure you want to delete "${chapterToDelete?.title || 'Chapter'} "? All uploaded page images and translation output for this chapter will be permanently removed.`}
 	confirmLabel="Delete Chapter"
-	destructive
-	loading={deleting}
+	variant="danger"
 	on:confirm={confirmDeleteChapter}
 	on:cancel={() => (deleteConfirmOpen = false)}
 />

@@ -456,3 +456,98 @@ class TestClean:
 	def test_invalid_regions_json_is_400(self, page_png):
 		resp = client.post("/pages/clean", files={"image": ("page.png", page_png, "image/png")}, data={"regions": "not json"})
 		assert resp.status_code == 400
+
+	def test_standalone_watermark_region_is_filtered(self, monkeypatch):
+		monkeypatch.setattr(pipeline, "detector", BoxDetector([_box(10, 20, 120, 40), _box(100, 150, 200, 60)]))
+		monkeypatch.setattr(
+			pipeline.ocr,
+			"recognize_full",
+			lambda img: [
+				(_box(10, 20, 120, 40), "速漫库", 0.99),
+				(_box(100, 150, 200, 60), "这是真对话", 0.95),
+			],
+		)
+		res = pipeline.analyze_image(np.zeros((PAGE_H, PAGE_W, 3), dtype=np.uint8))
+		# The standalone watermark "速漫库" is filtered; only "这是真对话" survives
+		assert len(res.regions) == 1
+		assert res.regions[0].text == "这是真对话"
+
+	def test_sample1_tampered_watermark_speech_bubble(self, monkeypatch):
+		"""SAMPLE 1: Top speech bubble has 2 lines (咦！居然让你 / 抽到了这个，),
+		top-left watermark (速漫库) is filtered, and bottom bubble is preserved.
+		"""
+		monkeypatch.setattr(
+			pipeline,
+			"detector",
+			BoxDetector([
+				_box(13, 215, 170, 61),   # watermark logo (速漫库)
+				_box(510, 215, 306, 120),  # top speech bubble (enclosing both lines)
+				_box(374, 1468, 411, 108), # bottom bubble
+			]),
+		)
+		monkeypatch.setattr(
+			pipeline.ocr,
+			"recognize_full",
+			lambda img: [
+				(_box(13, 215, 170, 61), "速漫库", 0.99),
+				(_box(520, 220, 280, 45), "咦！居然让你", 0.98),
+				(_box(515, 275, 290, 50), "抽到了这个，", 0.97),
+				(_box(380, 1475, 390, 45), "这是啥？能让我看到", 0.99),
+				(_box(380, 1525, 390, 45), "真实世界的小药丸？", 0.99),
+			],
+		)
+		res = pipeline.analyze_image(np.zeros((1900, 900, 3), dtype=np.uint8))
+		# Watermark logo "速漫库" is filtered out
+		assert len(res.regions) == 2
+		# Top bubble groups both lines
+		assert "咦！居然让你" in res.regions[0].text
+		assert "抽到了这个，" in res.regions[0].text
+		# Bottom bubble groups both lines
+		assert "这是啥？能让我看到\n真实世界的小药丸？" == res.regions[1].text
+
+	def test_sample2_stat_card_no_duplication_and_full_lines(self, monkeypatch):
+		"""SAMPLE 2: Stat card with 【顶级人物十名。】 and (附带一头顶级宠物)
+		must not duplicate the pet text, must recover the top bracketed title, and
+		must calculate the tilt/rotation angle accurately.
+		"""
+		stat_box = _box(330, 1020, 360, 150)
+		monkeypatch.setattr(pipeline, "detector", BoxDetector([stat_box]))
+
+		# Simulate RapidOCR detecting the bottom line with ~9.2 degree tilt + duplicate
+		tilted_line1 = np.array([[345.0, 1050.0], [674.0, 1105.0], [665.0, 1159.0], [336.0, 1104.0]])
+		tilted_line2 = np.array([[347.0, 1052.0], [676.0, 1107.0], [667.0, 1161.0], [338.0, 1106.0]])
+		monkeypatch.setattr(
+			pipeline.ocr,
+			"recognize_full",
+			lambda img: [
+				(tilted_line1, "(附带一头顶级宠物)", 0.97),
+				(tilted_line2, "(附带一头顶级宠物)", 0.96), # near duplicate
+			],
+		)
+		# Crop recognizer sees the full stat card with both lines
+		monkeypatch.setattr(
+			pipeline.ocr,
+			"recognize_crop",
+			lambda img: OcrResult(text="【顶级人物十名。】\n(附带一头顶级宠物)", score=0.98),
+		)
+
+		res = pipeline.analyze_image(np.zeros((1600, 900, 3), dtype=np.uint8))
+		assert len(res.regions) == 1
+		r = res.regions[0]
+		# Must contain both lines without duplicating the second line
+		assert r.text == "【顶级人物十名。】\n(附带一头顶级宠物)"
+		assert r.text.count("(附带一头顶级宠物)") == 1
+		# Must calculate and preserve the tilt rotation angle (~9.2 degrees)
+		assert pytest.approx(r.angle, 0.5) == 9.2
+
+	def test_warmup_models_initializes_backends(self):
+		from app.main import warmup_models
+
+		status = warmup_models()
+		assert isinstance(status, dict)
+		assert "detector" in status
+		assert "ocr" in status
+		assert "inpainter" in status
+
+
+

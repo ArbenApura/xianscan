@@ -1,6 +1,6 @@
 // BARREL FOR THE SHARED UI PRIMITIVES — IMPORT FROM '$lib/components/ui' INSTEAD OF DEEP PATHS.
 
-export { default as ActionMenu } from './ActionMenu.svelte';
+export { default as ActionMenu, type MenuAction } from './ActionMenu.svelte';
 export { default as Avatar } from './Avatar.svelte';
 export { default as Badge } from './Badge.svelte';
 export { default as Button } from './Button.svelte';
@@ -21,3 +21,4 @@ export { default as Skeleton } from './Skeleton.svelte';
 export { default as TextArea } from './TextArea.svelte';
 export { default as TextField } from './TextField.svelte';
 export { default as Toggle } from './Toggle.svelte';
+

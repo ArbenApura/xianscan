@@ -189,7 +189,10 @@ describe('runChapterPipeline', () => {
 		// ONLY PAGE 1 WAS RE-ANALYZED — PAGE 0 WAS SKIPPED AND KEPT ITS OUTPUT
 		expect(pipeline.analyzeCalls - callsBefore).toBe(1);
 		// BOTH PAGES REPORT DONE (THE SKIPPED PAGE EMITS ITS page-done UP FRONT, IN ORDER)
-		expect(events).toEqual(['page-done', 'page-done']);
+		expect(events.filter((t) => t === 'page-done')).toEqual(['page-done', 'page-done']);
+		expect(events).toContain('start');
+		expect(events).toContain('page-step-start');
+		expect(events).toContain('page-step-end');
 		const got0 = db.select().from(pages).where(eq(pages.id, p0.id)).get();
 		const got1 = db.select().from(pages).where(eq(pages.id, p1.id)).get();
 		expect(got0?.status).toBe('done');
@@ -224,10 +227,10 @@ describe('runChapterPipeline', () => {
 			return originalAnalyze(image, signal);
 		};
 
-		const events: string[] = [];
+		const events: any[] = [];
 		await chapterWork(chapter.id, { pipeline: failing, dataRoot, llm: fakeLlm() })(
 			new AbortController().signal,
-			(e) => events.push(e.type),
+			(e) => events.push(e),
 		);
 
 		const pages2 = db
@@ -239,8 +242,10 @@ describe('runChapterPipeline', () => {
 		expect(pages2[0].status).toBe('done');
 		expect(pages2[1].status).toBe('error');
 		expect(pages2[1].error).toContain('sidecar exploded');
-		expect(events.filter((t) => t === 'error').length).toBe(1);
-		expect(events.filter((t) => t === 'page-done').length).toBe(1);
+		expect(events.filter((t) => t.type === 'error').length).toBe(1);
+		expect(events.filter((t) => t.type === 'page-done').length).toBe(1);
+		const errorEvent = events.find((t) => t.type === 'error');
+		expect(errorEvent.failedStep).toBe('analyze');
 	});
 
 	it('aborts between pages when the signal fires', async () => {
@@ -428,7 +433,61 @@ describe('runChapterPipeline', () => {
 			.all();
 		expect(rows.every((r) => r.status === 'done')).toBe(true);
 		// EVENTS ARRIVE IN PAGE ORDER EVEN THOUGH PAGES FINISH OUT OF ORDER
-		expect(events).toEqual(['page-done', 'page-done', 'page-done']);
+		expect(events.filter((t) => t === 'page-done')).toEqual(['page-done', 'page-done', 'page-done']);
+	});
+
+	it('emits high-resolution step telemetry events across all pipeline phases', async () => {
+		const { chapter } = seedChapterWithPage('c1-p0.png');
+		const telemetryEvents: any[] = [];
+		await chapterWork(chapter.id, { pipeline, dataRoot, llm: fakeLlm() })(
+			new AbortController().signal,
+			(e) => telemetryEvents.push(e),
+		);
+
+		const stepStartEvents = telemetryEvents.filter((e) => e.type === 'page-step-start');
+		const stepEndEvents = telemetryEvents.filter((e) => e.type === 'page-step-end');
+
+		expect(stepStartEvents.some((e) => e.step === 'analyze')).toBe(true);
+		expect(stepStartEvents.some((e) => e.step === 'translate')).toBe(true);
+		expect(stepStartEvents.some((e) => e.step === 'clean')).toBe(true);
+		expect(stepStartEvents.some((e) => e.step === 'typeset')).toBe(true);
+
+		const analyzeEnd = stepEndEvents.find((e) => e.step === 'analyze');
+		expect(analyzeEnd?.durationMs).toBeGreaterThanOrEqual(0);
+		expect(analyzeEnd?.stepDetails?.regionsCount).toBe(1);
+
+		const typesetEnd = stepEndEvents.find((e) => e.step === 'typeset');
+		expect(typesetEnd?.durationMs).toBeGreaterThanOrEqual(0);
+	});
+
+	it('only processes specified pageIds when provided', async () => {
+		seedBook(db, { id: 'b_target' });
+		const chapter = seedChapter(db, { bookId: 'b_target', seq: 0 });
+		const p1 = seedPage(db, { chapterId: chapter.id, seq: 0, filePath: 'uploads/p1.png' });
+		const p2 = seedPage(db, { chapterId: chapter.id, seq: 1, filePath: 'uploads/p2.png' });
+		mkdirSync(join(dataRoot, 'uploads'), { recursive: true });
+		writeFileSync(join(dataRoot, 'uploads', 'p1.png'), PAGE_PNG);
+		writeFileSync(join(dataRoot, 'uploads', 'p2.png'), PAGE_PNG);
+
+		const events: any[] = [];
+		// ONLY TARGET p2
+		await chapterWork(chapter.id, { pipeline, dataRoot, llm: fakeLlm() }, [p2.id])(
+			new AbortController().signal,
+			(e) => events.push(e),
+		);
+
+		const rows = db
+			.select()
+			.from(pages)
+			.where(eq(pages.chapterId, chapter.id))
+			.orderBy(pages.seq)
+			.all();
+
+		expect(rows[0].status).toBe('pending'); // p1 remains pending untouched
+		expect(rows[1].status).toBe('done'); // p2 was translated
+		expect(events.filter((e) => e.type === 'page-done').length).toBe(1);
+		expect(events.find((e) => e.type === 'page-done')?.pageId).toBe(p2.id);
 	});
 });
+
 

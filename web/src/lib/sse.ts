@@ -18,20 +18,37 @@ export function parseSseChunk(chunk: string): SseEvent[] {
 	return events;
 }
 
-// STREAM POST EVENTS FROM `path` UNTIL THE SERVER CLOSES THE STREAM OR THE CALLBACK RETURNS 'stop'.
+// STREAM EVENTS FROM `path` UNTIL THE SERVER CLOSES THE STREAM OR THE CALLBACK RETURNS 'stop'.
 // THROWS WHEN THE RESPONSE IS NOT OK (BEFORE ANY EVENT IS PROCESSED).
 export async function streamSse(
 	path: string,
-	body: unknown,
+	bodyOrOpts: unknown,
 	onEvent: (e: SseEvent) => void | 'stop',
 	signal?: AbortSignal,
 ): Promise<void> {
+	let method = 'POST';
+	let body: BodyInit | undefined = undefined;
+
+	if (bodyOrOpts && typeof bodyOrOpts === 'object' && 'method' in bodyOrOpts) {
+		const opts = bodyOrOpts as { method?: string; body?: unknown };
+		method = opts.method ?? 'POST';
+		if (opts.body !== undefined && method !== 'GET') {
+			body = JSON.stringify(opts.body);
+		}
+	} else if (bodyOrOpts !== undefined && bodyOrOpts !== null) {
+		body = JSON.stringify(bodyOrOpts);
+	}
+
 	const resp = await fetch(path, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify(body),
+		method,
+		headers: {
+			'content-type': 'application/json',
+			accept: 'text/event-stream',
+		},
+		body,
 		signal,
 	});
+
 	if (!resp.ok || !resp.body) {
 		throw new Error(`SSE request failed (${resp.status})`);
 	}
@@ -54,3 +71,4 @@ export async function streamSse(
 		if (onEvent(event) === 'stop') return;
 	}
 }
+

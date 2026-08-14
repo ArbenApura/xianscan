@@ -71,6 +71,80 @@ class WatermarkRemover:
 
         return mask
 
+    def create_bubble_watermark_mask(
+        self,
+        img_bgr: np.ndarray,
+        bubble_thresh: int = 190,
+        min_sat: int = 25,
+        min_val: int = 40,
+        min_color_diff: int = 20,
+    ) -> np.ndarray:
+        """GENERATE A BINARY MASK FOR CHROMATIC WATERMARKS / LOGO OVERLAYS COLLIDING WITH SPEECH BUBBLES."""
+        h, w = img_bgr.shape[:2]
+
+        # 1. IDENTIFY LIGHT SPEECH BUBBLE CANDIDATE BACKGROUNDS
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        _, bright_mask = cv2.threshold(gray, bubble_thresh, 255, cv2.THRESH_BINARY)
+
+        # FIND BRIGHT CONNECTED REGIONS (BUBBLES) AND FILL CONTOURS
+        bubble_mask = np.zeros((h, w), dtype=np.uint8)
+        contours, _ = cv2.findContours(bright_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area > 500:
+                hull = cv2.convexHull(cnt)
+                cv2.drawContours(bubble_mask, [hull], -1, 255, -1)
+
+        # MORPHOLOGICAL CLOSING FOR MULTI-LOBE BUBBLE CANDIDATES
+        bubble_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (45, 45))
+        bubble_candidates = cv2.morphologyEx(bubble_mask | bright_mask, cv2.MORPH_CLOSE, bubble_kernel)
+
+        # 2. DETECT CHROMATIC WATERMARK PIXELS (SATURATION OR INTER-CHANNEL RGB DIVERGENCE)
+        # BUBBLE BACKGROUND IS WHITE (LOW SAT, HIGH VAL); COMIC TEXT IS DEEP BLACK (LOW SAT, LOW VAL).
+        # WATERMARK OVERLAYS (TEAL, RED, ORANGE, GOLD, CYAN, BLUE) ARE HIGHLY CHROMATIC.
+        hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+
+        b, g, r = img_bgr[:, :, 0], img_bgr[:, :, 1], img_bgr[:, :, 2]
+        max_c = np.maximum(np.maximum(r, g), b)
+        min_c = np.minimum(np.minimum(r, g), b)
+        color_diff = max_c - min_c
+
+        chromatic = ((sat >= min_sat) | (color_diff >= min_color_diff)) & (val >= min_val)
+
+        # 3. COLLISION: CHROMATIC PIXELS INSIDE SPEECH BUBBLE CANDIDATES
+        colliding = (chromatic & (bubble_candidates > 0)).astype(np.uint8) * 255
+
+        # FILTER OUT MINISCULE NOISE ARTIFACTS (< 8 PIXELS)
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(colliding, connectivity=8)
+        mask = np.zeros((h, w), dtype=np.uint8)
+        for i in range(1, num_labels):
+            area = stats[i, cv2.CC_STAT_AREA]
+            if area >= 8:
+                mask[labels == i] = 255
+
+        if np.any(mask):
+            # DILATE TO COVER ANTI-ALIASED WATERMARK LETTER BOUNDARIES
+            dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            mask = cv2.dilate(mask, dilate_kernel, iterations=1)
+
+        return mask
+
+    def remove_colliding_watermarks(
+        self,
+        img_bgr: np.ndarray,
+        bubble_thresh: int = 195,
+    ) -> tuple[np.ndarray, bool]:
+        """FORCEFULLY INPAINT CHROMATIC WATERMARKS COLLIDING WITH SPEECH BUBBLES BEFORE OCR."""
+        mask = self.create_bubble_watermark_mask(img_bgr, bubble_thresh=bubble_thresh)
+        if np.count_nonzero(mask) < 30:
+            return img_bgr, False
+
+        # INPAINT CHROMATIC OVERLAY USING FAST-MARCHING / TELEA RESTORING LOCAL WHITE BUBBLE CONTEXT
+        cleaned = cv2.inpaint(img_bgr, mask, 3, cv2.INPAINT_TELEA)
+        return cleaned, True
+
     def process(
         self,
         img_bgr: np.ndarray,

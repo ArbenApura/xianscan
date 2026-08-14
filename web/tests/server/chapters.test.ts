@@ -265,4 +265,36 @@ describe('nextPageSeq & reorderPages', () => {
 
 		fs.rmSync(dataRoot, { recursive: true, force: true });
 	});
+
+	it('GET /api/chapters/[id] returns chapter record metadata alongside pages', async () => {
+		seedBook(db, { id: 'b1' });
+		const chapter = seedChapter(db, {
+			bookId: 'b1',
+			seq: 3,
+			title: '第4话 初露锋芒',
+		});
+		seedPage(db, { chapterId: chapter.id, seq: 0, filePath: `uploads/${chapter.id}/0.png` });
+
+		const { GET } = await import('../../src/routes/api/chapters/[id]/+server');
+		const res = await GET({ params: { id: String(chapter.id) } } as any);
+		const data = await res.json();
+
+		expect(data.chapter).not.toBeNull();
+		expect(data.chapter.id).toBe(chapter.id);
+		expect(data.chapter.seq).toBe(3);
+		expect(data.chapter.title).toBe('第4话 初露锋芒');
+		expect(data.pages).toHaveLength(1);
+	});
+
+	it('DELETE /api/chapters/[id]/job aborts a running chapter job', async () => {
+		seedBook(db, { id: 'b1' });
+		const chapter = seedChapter(db, { bookId: 'b1', seq: 0 });
+
+		const { DELETE } = await import('../../src/routes/api/chapters/[id]/job/+server');
+		const res = await DELETE({ params: { id: String(chapter.id) } } as any);
+		const data = await res.json();
+		expect(data.ok).toBe(true);
+	});
 });
+
+
