@@ -208,11 +208,27 @@ def _region_from_box(box: np.ndarray, index: int, page_w: int, page_h: int) -> R
     )
 
 
-def _is_multiline_comic_blob(cb: np.ndarray, rapid_boxes: list[np.ndarray]) -> bool:
-	"""Check if a ComicTextDetector box is a redundant multi-line blob that spans across multiple
-	vertically stacked RapidOCR lines already detected. We only drop multi-line blobs when RapidOCR
-	has ALREADY detected 2 or more distinct vertical lines inside it."""
+def _is_multiline_comic_blob(
+	cb: np.ndarray,
+	rapid_boxes: list[np.ndarray],
+	page_h: int = 0,
+	page_w: int = 0,
+) -> bool:
+	"""Check if a ComicTextDetector box is a redundant multi-line or oversized multi-panel blob.
+	We drop:
+	  1. Oversized blobs spanning across multiple panels (height > 35% page_h and width > 35% page_w).
+	  2. Multi-line blobs where height is > 2.8x average line height and height > 160px.
+	  3. Blobs where RapidOCR has ALREADY detected 2 or more distinct vertical lines inside it.
+	"""
 	cx, cy, cw, ch = detect.box_to_xywh(cb)
+
+	# 1. OVERSIZED MULTI-PANEL BLOB CHECK
+	if page_h > 0 and page_w > 0:
+		if ch > 0.35 * page_h and cw > 0.35 * page_w:
+			return True
+	elif ch > 380 and cw > 350:
+		return True
+
 	overlapping_rapid = []
 	for rb in rapid_boxes:
 		rx, ry, rw, rh = detect.box_to_xywh(rb)
@@ -224,16 +240,23 @@ def _is_multiline_comic_blob(cb: np.ndarray, rapid_boxes: list[np.ndarray]) -> b
 			inter_area = (ix1 - ix0) * (iy1 - iy0)
 			if inter_area > 0.15 * min(cw * ch, rw * rh):
 				overlapping_rapid.append((rx, ry, rw, rh))
-	if len(overlapping_rapid) < 2:
-		return False  # RapidOCR did NOT detect multiple lines — preserve comic box to rescue missing lines!
 
-	# If it overlaps with multiple vertically stacked lines, it is redundant
-	for i in range(len(overlapping_rapid)):
-		for j in range(i + 1, len(overlapping_rapid)):
-			r1 = overlapping_rapid[i]
-			r2 = overlapping_rapid[j]
-			if abs(r1[1] - r2[1]) > 0.4 * min(r1[3], r2[3]):
-				return True
+	if not overlapping_rapid:
+		return False
+
+	# 2. EXCESSIVE HEIGHT RATIO OVER DETECTED TEXT LINES
+	avg_rh = sum(r[3] for r in overlapping_rapid) / len(overlapping_rapid)
+	if ch > 2.8 * avg_rh and ch > 160:
+		return True
+
+	# 3. SPANS MULTIPLE VERTICALLY STACKED LINES ALREADY DETECTED
+	if len(overlapping_rapid) >= 2:
+		for i in range(len(overlapping_rapid)):
+			for j in range(i + 1, len(overlapping_rapid)):
+				r1 = overlapping_rapid[i]
+				r2 = overlapping_rapid[j]
+				if abs(r1[1] - r2[1]) > 0.4 * min(r1[3], r2[3]):
+					return True
 
 	return False
 
@@ -270,6 +293,54 @@ def _deduplicate_ocr_lines(lines: list[tuple]) -> list[tuple]:
 	return kept
 
 
+def _apply_mask_growth(
+	region: Region,
+	comic_mask: np.ndarray | None,
+	hull_pts: np.ndarray | None,
+	matched_count: int,
+	box: np.ndarray,
+	page_w: int,
+) -> None:
+	if comic_mask is None or not region.polygon or detect._is_watermark_line(region.text):
+		return
+	prev_bottom = max(p[1] for p in region.polygon)
+	prev_right = max(p[0] for p in region.polygon)
+	grown = _grow_polygon_by_mask(region.polygon, comic_mask)
+	if grown is not None and grown != region.polygon:
+		region.polygon = grown
+		bx, by, bw, bh = _polygon_bounds(grown)
+		region.box = Box(x=bx, y=by, w=bw, h=bh)
+		added_h = max(p[1] for p in grown) - prev_bottom
+		added_w = max(p[0] for p in grown) - prev_right
+		if hull_pts is not None and matched_count > 0:
+			line_h = (hull_pts[:, 1].max() - hull_pts[:, 1].min()) / matched_count
+		elif matched_count == 0:
+			line_h = float(detect.box_to_xywh(box)[3])
+		else:
+			line_h = 0.0
+		# A SHORT BAND ADDED BELOW THE TEXT IS A DOTS LINE ONLY IF THE TEXT DOES NOT END IN A TERMINATING PUNCTUATION
+		if line_h > 0 and 0.35 * line_h <= added_h <= 1.05 * line_h:
+			last_char = region.text.rstrip()[-1] if region.text.strip() else ""
+			if last_char not in "。.;；:：!！?？)]】”’\"'":
+				unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
+				region.text = region.text.rstrip() + "\n" + unit
+		# A REAL HORIZONTAL EXTENSION TO THE RIGHT IS MISSED TRAILING PUNCTUATION OR ELLIPSIS
+		if line_h > 0 and added_w >= max(10.0, line_h * 0.25):
+			if _ELLIPSIS_TAIL.search(region.text):
+				region.text = _append_ellipsis(region.text)
+			elif _EXCLAIM_TAIL.search(region.text) or _QUESTION_TAIL.search(region.text):
+				region.text = _append_punctuation(region.text)
+			elif region.text.strip() and region.text.rstrip()[-1] not in "。.;；:：!！?？)]】”’\"'":
+				unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
+				region.text = region.text.rstrip() + unit
+				poly_pts = np.asarray(region.polygon, dtype=np.float64)
+				widened = _ellipsis_polygon(poly_pts, box, region.text, page_w)
+				if widened != region.polygon:
+					region.polygon = widened
+					bx, by, bw, bh = _polygon_bounds(widened)
+					region.box = Box(x=bx, y=by, w=bw, h=bh)
+
+
 def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	page_h, page_w = img_bgr.shape[:2]
 
@@ -294,14 +365,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 	# RECOVER CHINESE TEXT OBSCURED OR COVERED BY COLORED WATERMARK STAMPS (e.g. "点将:" UNDER "COLAMANHUA.com")
 	try:
-		hsv = cv2.cvtColor(ocr_img, cv2.COLOR_BGR2HSV)
-		sat = hsv[:, :, 1]
-		val = hsv[:, :, 2]
-		b, g, r = ocr_img[:, :, 0], ocr_img[:, :, 1], ocr_img[:, :, 2]
-		max_c = np.maximum(np.maximum(r, g), b)
-		min_c = np.minimum(np.minimum(r, g), b)
-		color_diff = max_c - min_c
-		color_wm = (((sat >= 30) | (color_diff >= 25)) & (val >= 40)).astype(np.uint8) * 255
+		color_wm = watermark_remover.create_bubble_watermark_mask(ocr_img)
 		if np.count_nonzero(color_wm) > 500:
 			clean_wm_img = cv2.inpaint(ocr_img, color_wm, 3, cv2.INPAINT_TELEA)
 			clean_lines = ocr.recognize_full(clean_wm_img)
@@ -370,7 +434,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	kept_comic_boxes = []
 	kept_comic_scores = []
 	for cb, cs in zip(comic_boxes, comic_scores):
-		if not _is_multiline_comic_blob(cb, rapid_boxes):
+		if not _is_multiline_comic_blob(cb, rapid_boxes, page_h, page_w):
 			kept_comic_boxes.append(cb)
 			kept_comic_scores.append(cs)
 
@@ -428,80 +492,110 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					unique_matched.append(m)
 			matched = unique_matched
 
-			matched.sort(key=lambda m: (m[0][:, 1].min(), m[0][:, 0].min()))
-			region.text = "\n".join(t for _l, t, _s, _ang in matched if t.strip())
-			region.confidence = float(max(s for _l, _t, s, _ang in matched)) if matched else 0.0
-
-			_bx, _by, bw, bh = detect.box_to_xywh(box)
-			all_pts = np.vstack([line.reshape(-1, 2) for line, _, _, _ in matched]).astype(np.float32)
-			hull = cv2.convexHull(all_pts)
-			if hull is not None and len(hull) >= 3:
-				hull_pts = hull.reshape(-1, 2).astype(np.float64)
-				_hx, _hy, hw, hh = detect.box_to_xywh(hull_pts)
-
-				# MULTI-LINE / STAT-CARD RESCUE: IF DETECTOR BOX IS SIGNIFICANTLY TALLER THAN MATCHED LINES
-				if bh >= 1.25 * hh and bh >= 45:
-					crop_res = ocr.recognize_crop(ocr.crop_region(ocr_img, box))
-					if crop_res and crop_res.text.strip():
-						crop_lines = [cl.strip() for cl in crop_res.text.split("\n") if cl.strip()]
-						current_lines = [t.strip() for _l, t, _s, _ang in matched if t.strip()]
-						if any(cl not in current_lines for cl in crop_lines):
-							region.text = crop_res.text.strip()
-							region.confidence = max(region.confidence, crop_res.score)
-							region.polygon = [[int(px), int(py)] for px, py in box]
-							region.box = Box(x=_bx, y=_by, w=bw, h=bh)
-							region.category = detect.classify_region(box, page_w, page_h)  # type: ignore[arg-type]
-							region.vertical = detect.is_vertical_box(box)
-							line_angles = [line_ang for _l, _t, _s, line_ang in matched if abs(line_ang) >= 1.2]
-							if line_angles:
-								med = float(np.median(line_angles))
-								region.angle = 0.0 if abs(med) < 1.2 else round(med, 2)
-							elif hull_pts is not None and len(hull_pts) >= 4:
-								poly_ang = detect.calculate_box_angle(hull_pts)
-								region.angle = 0.0 if abs(poly_ang) < 1.2 else round(poly_ang, 2)
-							else:
-								region.angle = detect.calculate_box_angle(box)
-							regions.append(region)
-							continue
-
-				region.polygon = [[int(p[0]), int(p[1])] for p in hull_pts]
-				if len(matched) == 1 and _PUNCT_TAIL.search(region.text):
-					is_dots = bool(_ELLIPSIS_TAIL.search(region.text))
-					punct_only = bool(_PUNCT_ONLY.fullmatch(region.text))
-					widened = (
-						_ellipsis_polygon(hull_pts, box, region.text, page_w)
-						if is_dots
-						else _punct_polygon(hull_pts, box, page_w)
-					)
-					if punct_only:
-						widened = _pad_punct_polygon(widened, page_w)
-					if widened != region.polygon:
-						hull_right = float(hull_pts[:, 0].max())
-						hull_h = max(1.0, float(hull_pts[:, 1].max() - hull_pts[:, 1].min()))
-						widened_right = float(max(p[0] for p in widened))
-						region.polygon = widened
-						if is_dots:
-							region.text = _append_ellipsis(region.text)
-						elif not punct_only and widened_right - hull_right >= hull_h * 0.35:
-							region.text = _append_punctuation(region.text)
-					bx, by, bw, bh = _polygon_bounds(region.polygon)
-					region.box = Box(x=bx, y=by, w=bw, h=bh)
+			# DISCONNECTED PARAGRAPH SPLIT: IF MATCHED LINES ARE SEPARATED BY LARGE VERTICAL GAPS (> 1.2x LINE HEIGHT)
+			# THEY BELONG TO DIFFERENT SPEECH BUBBLES IN DIFFERENT PANELS AND MUST BE SPLIT INTO SEPARATE REGIONS.
+			sub_groups: list[list[tuple]] = []
+			for m in matched:
+				m_line = m[0]
+				mx, my, mw, mh = detect.box_to_xywh(m_line)
+				if not sub_groups:
+					sub_groups.append([m])
 				else:
-					# REDERIVE BOX FROM THE HULL'S BOUNDING BOX
-					hx, hy, hw, hh = detect.box_to_xywh(hull_pts)
-					region.box = Box(x=hx, y=hy, w=max(1, hw), h=max(1, hh))
-				region.category = detect.classify_region(hull_pts, page_w, page_h)  # type: ignore[arg-type]
-				region.vertical = detect.is_vertical_box(hull_pts)
-			# 3. COMPUTE ORIENTATION ANGLE FROM MATCHED OCR LINE ANGLES (PARAGRAPH MEDIAN)
-			line_angles = [line_ang for _l, _t, _s, line_ang in matched if abs(line_ang) >= 1.2]
-			if line_angles:
-				med = float(np.median(line_angles))
-				region.angle = 0.0 if abs(med) < 1.2 else round(med, 2)
-			elif hull_pts is not None and len(hull_pts) >= 4:
-				poly_ang = detect.calculate_box_angle(hull_pts)
-				region.angle = 0.0 if abs(poly_ang) < 1.2 else round(poly_ang, 2)
-			else:
-				region.angle = detect.calculate_box_angle(box)
+					last_m = sub_groups[-1][-1][0]
+					lx, ly, lw, lh = detect.box_to_xywh(last_m)
+					gap = my - (ly + lh)
+					if gap > 1.2 * max(mh, lh):
+						sub_groups.append([m])
+					else:
+						sub_groups[-1].append(m)
+
+			for s_idx, s_matched in enumerate(sub_groups):
+				s_region = Region(
+					id=f"r{len(regions)}",
+					box=Box(x=0, y=0, w=1, h=1),
+					polygon=[],
+					category="dialogue",
+					text="\n".join(t for _l, t, _s, _ang in s_matched if t.strip()),
+					confidence=float(max(s for _l, _t, s, _ang in s_matched)) if s_matched else 0.0,
+					vertical=False,
+					angle=0.0,
+				)
+
+				_bx, _by, bw, bh = detect.box_to_xywh(box)
+				all_pts = np.vstack([line.reshape(-1, 2) for line, _, _, _ in s_matched]).astype(np.float32)
+				hull = cv2.convexHull(all_pts)
+				hull_pts: np.ndarray | None = None
+				if hull is not None and len(hull) >= 3:
+					hull_pts = hull.reshape(-1, 2).astype(np.float64)
+					_hx, _hy, hw, hh = detect.box_to_xywh(hull_pts)
+
+					# MULTI-LINE / STAT-CARD RESCUE: ONLY FOR COMPACT SINGLE-BUBBLE / CARD DETECTIONS
+					if len(sub_groups) == 1 and 1.25 * hh <= bh <= 2.6 * hh and 45 <= bh <= 260:
+						crop_res = ocr.recognize_crop(ocr.crop_region(ocr_img, box))
+						if crop_res and crop_res.text.strip():
+							crop_lines = [cl.strip() for cl in crop_res.text.split("\n") if cl.strip()]
+							current_lines = [t.strip() for _l, t, _s, _ang in s_matched if t.strip()]
+							if len(crop_lines) > len(current_lines) and crop_res.score >= 0.70:
+								s_region.text = crop_res.text.strip()
+								s_region.confidence = max(s_region.confidence, crop_res.score)
+								s_region.polygon = [[int(px), int(py)] for px, py in box]
+								s_region.box = Box(x=_bx, y=_by, w=bw, h=bh)
+								s_region.category = detect.classify_region(box, page_w, page_h)  # type: ignore[arg-type]
+								s_region.vertical = detect.is_vertical_box(box)
+								line_angles = [line_ang for _l, _t, _s, line_ang in s_matched if abs(line_ang) >= 1.2]
+								if line_angles:
+									med = float(np.median(line_angles))
+									s_region.angle = 0.0 if abs(med) < 1.2 else round(med, 2)
+								else:
+									s_region.angle = 0.0
+								regions.append(s_region)
+								continue
+
+					s_region.polygon = [[int(p[0]), int(p[1])] for p in hull_pts]
+					if len(s_matched) == 1 and _PUNCT_TAIL.search(s_region.text):
+						is_dots = bool(_ELLIPSIS_TAIL.search(s_region.text))
+						punct_only = bool(_PUNCT_ONLY.fullmatch(s_region.text))
+						widened = (
+							_ellipsis_polygon(hull_pts, box, s_region.text, page_w)
+							if is_dots
+							else _punct_polygon(hull_pts, box, page_w)
+						)
+						if punct_only:
+							widened = _pad_punct_polygon(widened, page_w)
+						if widened != s_region.polygon:
+							hull_right = float(hull_pts[:, 0].max())
+							hull_h = max(1.0, float(hull_pts[:, 1].max() - hull_pts[:, 1].min()))
+							widened_right = float(max(p[0] for p in widened))
+							s_region.polygon = widened
+							if is_dots:
+								s_region.text = _append_ellipsis(s_region.text)
+							elif not punct_only and widened_right - hull_right >= hull_h * 0.35:
+								s_region.text = _append_punctuation(s_region.text)
+						bx, by, bw, bh = _polygon_bounds(s_region.polygon)
+						s_region.box = Box(x=bx, y=by, w=bw, h=bh)
+					else:
+						# REDERIVE BOX FROM THE HULL'S BOUNDING BOX
+						hx, hy, hw, hh = detect.box_to_xywh(hull_pts)
+						s_region.box = Box(x=hx, y=hy, w=max(1, hw), h=max(1, hh))
+					s_region.category = detect.classify_region(hull_pts, page_w, page_h)  # type: ignore[arg-type]
+					s_region.vertical = detect.is_vertical_box(hull_pts)
+				else:
+					s_region.polygon = [[int(px), int(py)] for px, py in box]
+					s_region.box = Box(x=_bx, y=_by, w=bw, h=bh)
+					s_region.category = detect.classify_region(box, page_w, page_h)  # type: ignore[arg-type]
+					s_region.vertical = detect.is_vertical_box(box)
+
+				# COMPUTE ORIENTATION ANGLE FROM MATCHED OCR LINE ANGLES (PARAGRAPH MEDIAN)
+				line_angles = [line_ang for _l, _t, _s, line_ang in s_matched if abs(line_ang) >= 1.2]
+				if line_angles:
+					med = float(np.median(line_angles))
+					s_region.angle = 0.0 if abs(med) < 1.2 else round(med, 2)
+				else:
+					s_region.angle = 0.0
+
+				# MASK-GUIDED GROWTH FOR s_region
+				_apply_mask_growth(s_region, comic_mask, hull_pts, len(s_matched), box, page_w)
+				regions.append(s_region)
 		else:
 			ocr_result = ocr.recognize_crop(ocr.crop_region(ocr_img, box))
 			if ocr_result:
@@ -531,50 +625,9 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					bx, by, bw, bh = _polygon_bounds(region.polygon)
 					region.box = Box(x=bx, y=by, w=bw, h=bh)
 
-		# MASK-GUIDED GROWTH: TEXT PIXELS THE BOX EXTRACTION MISSED (e.g. A "......" LINE AT THE
-		# BOTTOM OF A BUBBLE THAT PRODUCED NO BOX) STILL SHOW IN THE DETECTOR'S PROBABILITY MASK —
-		# GROW THE INPAINT POLYGON (AND THE TYPESET BOX) TO COVER THEM, AND REFLECT A GROWN DOTS
-		# LINE IN THE EXTRACTED TEXT. NEVER GROW WATERMARK OR SCANLATION REGIONS INTO STORY TEXT.
-		if comic_mask is not None and region.polygon and not detect._is_watermark_line(region.text):
-			prev_bottom = max(p[1] for p in region.polygon)
-			prev_right = max(p[0] for p in region.polygon)
-			grown = _grow_polygon_by_mask(region.polygon, comic_mask)
-			if grown is not None and grown != region.polygon:
-				region.polygon = grown
-				bx, by, bw, bh = _polygon_bounds(grown)
-				region.box = Box(x=bx, y=by, w=bw, h=bh)
-				added_h = max(p[1] for p in grown) - prev_bottom
-				added_w = max(p[0] for p in grown) - prev_right
-				if hull_pts is not None and len(matched):
-					line_h = (hull_pts[:, 1].max() - hull_pts[:, 1].min()) / len(matched)
-				elif not matched:
-					line_h = float(detect.box_to_xywh(box)[3])
-				else:
-					line_h = 0.0
-				# A SHORT BAND ADDED BELOW THE TEXT IS A DOTS LINE ONLY IF THE TEXT DOES NOT END IN A TERMINATING PUNCTUATION
-				if line_h > 0 and 0.35 * line_h <= added_h <= 1.05 * line_h:
-					last_char = region.text.rstrip()[-1] if region.text.strip() else ""
-					if last_char not in "。.;；:：!！?？)]】”’\"'":
-						unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
-						region.text = region.text.rstrip() + "\n" + unit
-				# A REAL HORIZONTAL EXTENSION TO THE RIGHT IS MISSED TRAILING PUNCTUATION OR ELLIPSIS
-				# (e.g. THE "！" OF "找到军师了！！" OR THE "……" OF "这里……") — REFLECT IT IN THE EXTRACTED TEXT TOO.
-				if line_h > 0 and added_w >= max(10.0, line_h * 0.25):
-					if _ELLIPSIS_TAIL.search(region.text):
-						region.text = _append_ellipsis(region.text)
-					elif _EXCLAIM_TAIL.search(region.text) or _QUESTION_TAIL.search(region.text):
-						region.text = _append_punctuation(region.text)
-					elif region.text.strip() and region.text.rstrip()[-1] not in "。.;；:：!！?？)]】”’\"'":
-						unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
-						region.text = region.text.rstrip() + unit
-						# If union box extends further to the right to cover the dots, widen the mask
-						poly_pts = np.asarray(region.polygon, dtype=np.float64)
-						widened = _ellipsis_polygon(poly_pts, box, region.text, page_w)
-						if widened != region.polygon:
-							region.polygon = widened
-							bx, by, bw, bh = _polygon_bounds(widened)
-							region.box = Box(x=bx, y=by, w=bw, h=bh)
-		regions.append(region)
+				# MASK-GUIDED GROWTH FOR crop region
+				_apply_mask_growth(region, comic_mask, None, 0, box, page_w)
+				regions.append(region)
 
 	# -- STRAY-DOT CLEANUP: REC MODELS SOMETIMES SPLIT A FINAL "..." INTO THE LAST WORD PLUS A
 	# SEPARATE LONE-DOT LINE (e.g. "大姐大，\n轻，轻点\n."): A TRAILING LONE-DOT LINE JOINS THE LINE ABOVE IT.

@@ -210,7 +210,9 @@ def calculate_box_angle(box: np.ndarray | list[list[int | float]]) -> float:
 	while angle_deg < -90.0:
 		angle_deg += 180.0
 
-	if abs(angle_deg) < 1.5:
+	# Slant angles > 55 degrees are vertical box aspect ratio artifacts, not text baseline slants.
+	# English typeset text is always horizontal; only moderate slants [-55°, 55°] are rotated.
+	if abs(angle_deg) < 1.5 or abs(angle_deg) > 55.0:
 		return 0.0
 
 	return round(angle_deg, 2)
@@ -496,9 +498,10 @@ def deduplicate_boxes(
 			iy = max(0.0, min(float(y0 + h), float(ky0 + kh)) - max(float(y0), float(ky0)))
 			inter = ix * iy
 			min_area = min(box_area, karea)
+			max_area = max(box_area, karea)
 			overlap_ratio = inter / min_area if min_area > 0 else 0.0
 
-			if iou >= iou_thresh or overlap_ratio >= 0.60:
+			if iou >= iou_thresh or (overlap_ratio >= 0.60 and max_area / min_area <= 2.5):
 				ux0 = min(x0, kx0)
 				uy0 = min(y0, ky0)
 				ux1 = max(x0 + w, kx0 + kw)

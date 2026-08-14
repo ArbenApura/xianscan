@@ -45,10 +45,9 @@ export const FONT_MONO = 'CC Wild Words';
 export const FONT_FALLBACK_NAME = 'Friendly Sans';
 export const FONT_FALLBACK = ', "Friendly Sans", Arial, "Segoe UI", sans-serif';
 
-// RENDER MARGINS INSIDE THE DETECTED BOX — 10% INSET ENSURES TEXT STAYS INSIDE CURVED BUBBLE EDGES
-const BOX_INSET = 0.10;
-const MAX_LINES = 8;
-const MIN_FONT_SIZE = 8;
+// RENDER MARGINS INSIDE THE DETECTED BOX — 8% INSET ENSURES MAXIMUM USABLE SPACE WHILE STAYING INSIDE BUBBLE EDGES
+const BOX_INSET = 0.08;
+const MIN_FONT_SIZE = 6;
 const LINE_HEIGHT = 1.2;
 // TEXT OUTLINE (THE BLACK/WHITE STROKE DRAWN UNDER THE FILL) — SIZED RELATIVE TO THE FONT WITH A
 // FLOOR FOR SMALL TEXT. HEAVY ENOUGH TO KEEP TRANSLATED TEXT READABLE ON BUSY ARTWORK.
@@ -207,9 +206,8 @@ export function wrapText(ctx: { measureText(t: string): { width: number } }, tex
 				lines.push(current);
 			}
 		}
-		if (lines.length >= MAX_LINES) break;
 	}
-	return lines.slice(0, MAX_LINES);
+	return lines;
 }
 
 /**
@@ -276,7 +274,7 @@ export function fitFontSize(
 		ctx.font = fontSpec(mid, fontFamily);
 		const lines = reflowText(ctx, text, maxW);
 		const lineH = mid * LINE_HEIGHT;
-		if (lines.length * lineH <= maxH && lines.length <= MAX_LINES) lo = mid;
+		if (lines.length * lineH <= maxH) lo = mid;
 		else hi = mid - 1;
 	}
 	return lo;

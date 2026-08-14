@@ -100,9 +100,11 @@ describe('wrapText', () => {
 		expect(lines.join('')).toBe('supercalifragilisticexpialidocious');
 	});
 
-	it('caps the line count', () => {
+	it('wraps all words without truncation on long paragraphs', () => {
 		const long = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
-		expect(wrapText(ctx(), long, 30).length).toBeLessThanOrEqual(8);
+		const wrapped = wrapText(ctx(), long, 60);
+		expect(wrapped.length).toBeGreaterThan(8);
+		expect(wrapped.join(' ')).toBe(long);
 	});
 
 	it('treats \\n as a hard line break (multi-line bubble paragraphs)', () => {
@@ -170,7 +172,7 @@ describe('fitFontSize', () => {
 		const c = createCanvas(10, 10);
 		const x = c.getContext('2d');
 		const size = fitFontSize(x, 'A very long sentence here', 'Arial', 40, 20, 40);
-		expect(size).toBeGreaterThanOrEqual(8); // THE FLOOR, NOT A CRASH
+		expect(size).toBeGreaterThanOrEqual(6); // THE FLOOR, NOT A CRASH
 	});
 
 	it('scales a short line up to fill a tall box when maxSize is given (dialogue)', () => {
@@ -269,6 +271,82 @@ describe('typesetPage', () => {
 				text: '[TOP-TIER CHARACTERS: TEN.]\n(With a Top-tier Pet)',
 				category: 'dialogue',
 				angle: 9.26,
+			},
+		]);
+		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+		expect(await brightPixels(out)).toBeGreaterThan(0);
+	});
+
+	it('renders a long narrative monologue without truncation or cutoff (Sample 3)', async () => {
+		const longTranslation =
+			"No one knows what the outside world is like. Legend says that in their heyday, humans had vast empires, but now they've all turned to ash and ceased to exist. This city, hidden away, survived the Dark Age intact.";
+		const out = await typesetPage(blankPng(800, 1131, 'white'), [
+			{
+				id: 'r2',
+				box: { x: 60, y: 737, w: 252, h: 164 },
+				text: longTranslation,
+				category: 'dialogue',
+			},
+		]);
+		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+		expect(await brightPixels(out)).toBeGreaterThan(0);
+
+		// Verify that reflowText preserves all words across all lines
+		const ctxMock = { font: '', measureText: (t: string) => ({ width: t.length * 7 }) };
+		const maxW = 252 * (1 - 2 * 0.08);
+		const lines = reflowText(ctxMock, longTranslation.toUpperCase(), maxW);
+		const joined = lines.join(' ');
+		expect(joined).toContain('NO ONE KNOWS');
+		expect(joined).toContain('SURVIVED THE DARK AGE INTACT.');
+	});
+
+	it('renders all 5 regions of Page 656 narrative page without text cutoff or collision', async () => {
+		const page656Regions: TypesetRegion[] = [
+			{
+				id: '3399',
+				box: { x: 21, y: 14, w: 392, h: 59 },
+				text: "The world beyond the Sacred Ancestor Mountain Range has been overrun by demon beasts. The people here haven't had contact with the outside world for centuries.",
+				category: 'dialogue',
+			},
+			{
+				id: '3400',
+				box: { x: 536, y: 736, w: 183, h: 108 },
+				text: 'Though often attacked by the snowstorm demon beasts from the mountains, this city has been repeatedly rebuilt after each devastating war.',
+				category: 'dialogue',
+			},
+			{
+				id: '3401',
+				box: { x: 60, y: 737, w: 252, h: 164 },
+				text: "No one knows what the outside world is like. Legend says that in their heyday, humans had vast empires, but now they've all turned to ash and ceased to exist. This city, hidden away, survived the Dark Age intact.",
+				category: 'dialogue',
+			},
+			{
+				id: '3402',
+				box: { x: 18, y: 1003, w: 356, h: 30 },
+				text: 'The mottled city walls stand as an immortal monument!!',
+				category: 'dialogue',
+			},
+			{
+				id: '3403',
+				box: { x: 353, y: 1003, w: 308, h: 73 },
+				text: 'And this city, the hope of humanity, is called...',
+				category: 'dialogue',
+			},
+		];
+
+		const out = await typesetPage(blankPng(800, 1131, 'white'), page656Regions);
+		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+		expect(await brightPixels(out)).toBeGreaterThan(0);
+	});
+
+	it('renders vertical oval bubble horizontally without 90 degree sideways rotation (Sample 4)', async () => {
+		const out = await typesetPage(blankPng(800, 1131, 'white'), [
+			{
+				id: '3470',
+				box: { x: 200, y: 387, w: 91, h: 163 },
+				text: 'I heard the new teacher is from the Sacred Clan, and a Silver Spirit Master too!',
+				category: 'dialogue',
+				angle: 0.0,
 			},
 		]);
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));

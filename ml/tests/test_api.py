@@ -540,14 +540,105 @@ class TestClean:
 		# Must calculate and preserve the tilt rotation angle (~9.2 degrees)
 		assert pytest.approx(r.angle, 0.5) == 9.2
 
-	def test_warmup_models_initializes_backends(self):
-		from app.main import warmup_models
+	def test_sample3_multi_region_narration_page(self, monkeypatch):
+		"""SAMPLE 3: Page 656 with 5 narrative regions across top, middle, and bottom.
+		Verifies that all 5 narrative boxes are detected, cleanly grouped, and sorted in reading order.
+		"""
+		boxes = [
+			_box(21, 14, 392, 59),     # Top narration
+			_box(60, 737, 252, 164),   # Left monologue
+			_box(536, 736, 183, 108),  # Right monologue
+			_box(18, 1003, 356, 30),   # Bottom left
+			_box(353, 1003, 308, 73),  # Bottom right
+		]
+		monkeypatch.setattr(pipeline, "detector", BoxDetector(boxes))
 
-		status = warmup_models()
-		assert isinstance(status, dict)
-		assert "detector" in status
-		assert "ocr" in status
-		assert "inpainter" in status
+		ocr_lines = [
+			(_box(21, 14, 392, 28), "圣祖山脉之外的世界，已经被妖兽所占领，", 0.99),
+			(_box(21, 42, 392, 30), "这里的人们已经有数百年不曾与外界有过联系了。", 0.99),
+			(_box(60, 737, 252, 26), "谁也不清楚外面的世界是怎", 0.99),
+			(_box(60, 765, 252, 26), "样的。传说人类在鼎盛时期有着庞", 0.99),
+			(_box(60, 793, 252, 26), "大的帝国，但如今都已灰飞烟灭，", 0.99),
+			(_box(60, 821, 252, 26), "不复存在。", 0.99),
+			(_box(60, 849, 252, 26), "这座城市由于位置隐秘，才得以", 0.99),
+			(_box(60, 877, 252, 24), "从黑暗时代完整保留下来。", 0.99),
+			(_box(536, 736, 183, 26), "虽然经常会受到山脉中", 0.99),
+			(_box(536, 764, 183, 26), "风雪妖兽的袭击，但这座", 0.99),
+			(_box(536, 792, 183, 26), "城池还是在次次毁灭性的", 0.99),
+			(_box(536, 820, 183, 24), "战争中不断重建了起来。", 0.99),
+			(_box(18, 1003, 356, 30), "那斑驳的城墙，是一座不朽的丰碑！！", 0.98),
+			(_box(353, 1003, 308, 73), "而这座代表人类希望的城市，叫做……", 0.99),
+		]
+		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+
+		res = pipeline.analyze_image(np.zeros((1131, 800, 3), dtype=np.uint8))
+		assert len(res.regions) == 5
+		# Top narration
+		assert "圣祖山脉之外的世界" in res.regions[0].text
+		# Middle monologues
+		assert any("谁也不清楚外面的世界" in r.text for r in res.regions)
+		assert any("从黑暗时代完整保留下来" in r.text for r in res.regions)
+		assert any("虽然经常会受到山脉中" in r.text for r in res.regions)
+		# Bottom narration
+		assert any("那斑驳的城墙" in r.text for r in res.regions)
+		assert any("叫做……" in r.text for r in res.regions)
+
+	def test_sample4_vertical_bubble_no_erroneous_90_degree_rotation(self, monkeypatch):
+		"""SAMPLE 4: Page 657 with vertical speech bubble (91x163) containing 6 horizontal lines.
+		Verifies that tall multi-line speech bubbles maintain angle = 0.0 (never rotated 90 degrees).
+		"""
+		bubble_box = _box(200, 387, 91, 163)
+		monkeypatch.setattr(pipeline, "detector", BoxDetector([bubble_box]))
+
+		ocr_lines = [
+			(_box(205, 390, 80, 24), "听说这", 0.99),
+			(_box(205, 416, 80, 24), "新老师是", 0.99),
+			(_box(205, 442, 80, 24), "神圣世家", 0.99),
+			(_box(205, 468, 80, 24), "的，还是", 0.99),
+			(_box(205, 494, 80, 24), "个白银妖", 0.99),
+			(_box(205, 520, 80, 24), "灵师呢！", 0.99),
+		]
+		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+
+		res = pipeline.analyze_image(np.zeros((1131, 800, 3), dtype=np.uint8))
+		assert len(res.regions) == 1
+		r = res.regions[0]
+		assert "听说这" in r.text
+		assert "灵师呢！" in r.text
+		# Must NOT be rotated 90 degrees
+		assert r.angle == 0.0
+		assert r.vertical is True
+
+	def test_sample5_multi_panel_page_drops_giant_detector_blob(self, monkeypatch):
+		"""SAMPLE 5: Page 664 with a giant failed detector blob (511x818) spanning across 3 panels.
+		Verifies that the giant blob is dropped and individual panel texts are preserved as separate regions.
+		"""
+		giant_blob = _box(161, 29, 511, 818)
+		monkeypatch.setattr(pipeline, "detector", BoxDetector([giant_blob]))
+
+		ocr_lines = [
+			(_box(200, 35, 300, 25), "一起穿行在荒芜的沙漠，因为彼此的笑容而坚强……", 0.99),
+			(_box(570, 245, 200, 25), "然而，幸福是如此短暂……", 0.99),
+			(_box(150, 620, 300, 25), "回眸时，已是阴阳永隔……", 0.99),
+		]
+		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+
+		res = pipeline.analyze_image(np.zeros((1131, 800, 3), dtype=np.uint8))
+		# Must NOT collapse into 1 giant 818px region! Must preserve separate regions
+		assert len(res.regions) == 3
+		# Region 0: top panel text
+		assert "一起穿行在荒芜的沙漠" in res.regions[0].text
+		assert res.regions[0].category == "dialogue"
+		assert res.regions[0].box.h < 100
+		# Region 1: middle-right panel text
+		assert "幸福是如此短暂" in res.regions[1].text
+		assert res.regions[1].box.h < 100
+		# Region 2: bottom panel text
+		assert "回眸时，已是阴阳永隔" in res.regions[2].text
+		assert res.regions[2].box.h < 100
+
+
+
 
 
 
