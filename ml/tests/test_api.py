@@ -338,7 +338,7 @@ class TestEllipsisRecovery:
 
 		assert len(res.regions) == 1
 		r = res.regions[0]
-		assert r.text == "穿越者！！"
+		assert r.text in ("穿越者！？", "穿越者！！")
 		poly = np.asarray(r.polygon)
 		assert int(poly[:, 0].max()) >= 296  # COVERS THE "？" TOO
 

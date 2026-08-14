@@ -322,15 +322,17 @@ def _deduplicate_ocr_lines(lines: list[tuple]) -> list[tuple]:
 			k_pts, k_text, k_score = k_item[:3]
 			kx, ky, kw, kh = detect.box_to_xywh(k_pts)
 			iou = detect.box_iou(pts, k_pts)
-			cx1, cy1 = x + w / 2, y + h / 2
-			cx2, cy2 = kx + kw / 2, ky + kh / 2
-			dist = np.hypot(cx1 - cx2, cy1 - cy2)
+
+			y_overlap = max(0.0, min(float(y + h), float(ky + kh)) - max(float(y), float(ky)))
+			min_h = max(1.0, float(min(h, kh)))
+			y_overlap_ratio = y_overlap / min_h
+
 			same_text = (
 				(text.strip() == k_text.strip())
 				or (text.strip() and text.strip() in k_text.strip())
 				or (k_text.strip() and k_text.strip() in text.strip())
 			)
-			if (iou >= 0.30) or (same_text and (dist < max(h, kh) * 1.5 or iou >= 0.15)):
+			if (iou >= 0.30) or (same_text and y_overlap_ratio >= 0.50 and iou >= 0.15):
 				if len(text.strip()) > len(k_text.strip()) or (len(text.strip()) == len(k_text.strip()) and score > k_score):
 					kept[k_idx] = (pts, text, max(score, k_score), line_ang)
 				duplicate = True
@@ -425,9 +427,30 @@ def _apply_mask_growth(
 
 
 
+def _is_single_ctd_bubble(line_pts: np.ndarray, comic_boxes: list[np.ndarray]) -> bool:
+	"""Check if a ComicTextDetector box covers the overwhelming majority of a line's width."""
+	if not comic_boxes:
+		return False
+	lx, ly, lw, lh = detect.box_to_xywh(line_pts)
+	l_area = max(1.0, float(lw * lh))
+	for cb in comic_boxes:
+		cx, cy, cw, ch = detect.box_to_xywh(cb)
+		ix0 = max(lx, cx)
+		iy0 = max(ly, cy)
+		ix1 = min(lx + lw, cx + cw)
+		iy1 = min(ly + lh, cy + ch)
+		if ix1 > ix0 and iy1 > iy0:
+			inter = (ix1 - ix0) * (iy1 - iy0)
+			c_area = max(1.0, float(cw * ch))
+			if (cw >= 0.80 * lw or inter / l_area >= 0.60) and (inter / c_area >= 0.70 or abs(ly - cy) < 0.3 * lh):
+				return True
+	return False
+
+
 def _split_lines_by_internal_punctuation(
 	rapid_lines: list[tuple],
 	ocr_img: np.ndarray,
+	comic_boxes: list[np.ndarray] | None = None,
 ) -> list[tuple]:
 	"""SPLIT OCR LINES THAT ACCIDENTALLY FUSE TWO DISTINCT SPEECH BUBBLES / CLAUSES INTO ONE.
 
@@ -450,6 +473,11 @@ def _split_lines_by_internal_punctuation(
 		text_str = t.strip()
 		match = punct_pattern.search(text_str)
 		if match:
+			# If ComicTextDetector explicitly recognized this as a single unified text bubble, do not split!
+			if comic_boxes and _is_single_ctd_bubble(pts, comic_boxes):
+				new_lines.append((pts, t, s, ang))
+				continue
+
 			split_idx = match.end()
 			part1 = text_str[:split_idx].strip()
 			part2 = text_str[split_idx:].strip()
@@ -568,13 +596,48 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			(lh >= 100 and (lw / char_count) >= 90 and s < 0.85)
 			or (lh >= 180 and lw >= 350 and not has_chinese)
 			or (lh >= 350 and lw >= 350 and char_count <= 6 and not has_chinese)
+			or (not has_chinese and lh >= 80 and s < 0.90 and char_count <= 4)
+			or (not has_chinese and char_count <= 2 and (lh >= 120 or lw >= 120 or (lh >= 80 and (lh / lw >= 2.5 or lw / lh >= 2.5))))
 		)
 		if is_giant_artwork:
 			continue
 		clean_rapid_lines.append((pts, t, s, line_angle))
-	rapid_lines = clean_rapid_lines
+
+	# RECOVER CHINESE TEXT FUSED WITH TRAILING/LEADING WATERMARK DOMAINS (e.g. "生活人ugMerge.com" -> "生活人才")
+	recovered_rapid_lines = []
+	for pts, t, s, line_angle in clean_rapid_lines:
+		clean_t = t.strip()
+		x, y, w, h = detect.box_to_xywh(pts)
+		has_chinese = bool(detect._CHINESE_RE.search(clean_t))
+		wm_match = re.search(
+			r'[A-Za-z0-9_.-]*(?:Merge|manga|manhua|qumanku|baozimh|colamanga|colamanhua|acloudmerge|oamanhua|nga|\.com|\.net|\.org|\.cc|\.top|\.xyz|\.vip)',
+			clean_t,
+			re.IGNORECASE,
+		)
+		if has_chinese and wm_match:
+			c_chars = len(detect._CHINESE_RE.findall(clean_t))
+			clipped_w = max(1, min(w, int(h * (c_chars + 1.2))))
+			crop = ocr.crop_region(
+				ocr_img,
+				np.array([[x, y], [x + clipped_w, y], [x + clipped_w, y + h], [x, y + h]], dtype=np.float64),
+				margin=2,
+			)
+			crop_res = ocr.recognize_crop(crop)
+			if crop_res and detect._CHINESE_RE.search(crop_res.text):
+				clean_t = crop_res.text.strip()
+				s = max(s, crop_res.score)
+			else:
+				chinese_part = clean_t[:wm_match.start()].rstrip(" ,.:;-_")
+				if chinese_part:
+					clean_t = chinese_part + ("，" if ("，" in clean_t or "," in clean_t) and not chinese_part.endswith(("，", ",")) else "")
+			pts = np.array([[x, y], [x + clipped_w, y], [x + clipped_w, y + h], [x, y + h]], dtype=np.float64)
+			line_angle = detect.calculate_box_angle(pts)
+		elif not has_chinese and detect._is_watermark_line(clean_t):
+			continue
+		recovered_rapid_lines.append((pts, clean_t, s, line_angle))
+	rapid_lines = recovered_rapid_lines
 	rapid_lines = _deduplicate_ocr_lines(rapid_lines)
-	rapid_lines = _split_lines_by_internal_punctuation(rapid_lines, ocr_img)
+	rapid_lines = _split_lines_by_internal_punctuation(rapid_lines, ocr_img, comic_boxes=comic_boxes)
 
 	# RECOVER / DISCOVER LINES INSIDE COMIC BOXES THAT FULL-PAGE OCR MISSED (e.g. TITLE LOGOS, HIGH-CONTRAST SFX, SUBTITLES)
 	rapid_boxes_xywh = [detect.box_to_xywh(r[0]) for r in rapid_lines]
@@ -595,17 +658,37 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 		crop = ocr.crop_region(ocr_img, cb, margin=2)
 		c_res = ocr.recognize_crop(crop)
-		if c_res and c_res.lines:
+		c_lines = getattr(c_res, "lines", None)
+		if c_res and not c_lines and getattr(c_res, "text", None):
+			c_lines = [(cb - [cx - 2, cy - 2], c_res.text, c_res.score)]
+		if c_res and c_lines:
 			offset_x = max(0, cx - 2)
 			offset_y = max(0, cy - 2)
-			for c_box, c_txt, c_score in c_res.lines:
+			for c_box, c_txt, c_score in c_lines:
 				clean_t = c_txt.strip()
-				if not clean_t or len(clean_t) < 2 or c_score < 0.60:
+				if not clean_t or (len(clean_t) < 2 and not bool(_PUNCT_ONLY.fullmatch(clean_t))) or c_score < 0.60:
 					continue
 				shifted_box = c_box.copy()
 				shifted_box[:, 0] += offset_x
 				shifted_box[:, 1] += offset_y
 				sx, sy, sw, sh = detect.box_to_xywh(shifted_box)
+				# If clean_t is pure punctuation and follows an existing text line on the same row, merge it directly
+				merged_tail = False
+				if bool(_PUNCT_ONLY.fullmatch(clean_t)):
+					for idx, (r_pts, r_txt, r_sc, r_ang) in enumerate(rapid_lines):
+						rx, ry, rw, rh = detect.box_to_xywh(r_pts)
+						y_overlap = min(sy + sh, ry + rh) - max(sy, ry)
+						if y_overlap >= 0.50 * min(sh, rh) and rx - 20 <= sx <= rx + rw + max(50, int(rh * 2.0)):
+							m_x1 = max(rx + rw, sx + sw)
+							m_y0 = min(ry, sy)
+							m_y1 = max(ry + rh, sy + sh)
+							merged_box = np.array([[rx, m_y0], [m_x1, m_y0], [m_x1, m_y1], [rx, m_y1]], dtype=np.float64)
+							rapid_lines[idx] = (merged_box, r_txt + clean_t, max(r_sc, c_score), r_ang)
+							merged_tail = True
+							break
+				if merged_tail:
+					continue
+
 				char_count = max(1, len(re.sub(r'\s+', '', clean_t)))
 				has_c_chinese = bool(detect._CHINESE_RE.search(clean_t))
 				if (sh >= 180 and sw >= 350 and not has_c_chinese) or (sh >= 350 and sw >= 350 and char_count <= 6 and not has_c_chinese):
@@ -634,9 +717,16 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	kept_comic_boxes = []
 	kept_comic_scores = []
 	for cb, cs in zip(comic_boxes, comic_scores):
-		if not _is_multiline_comic_blob(cb, rapid_boxes, page_h, page_w):
-			kept_comic_boxes.append(cb)
-			kept_comic_scores.append(cs)
+		if _is_multiline_comic_blob(cb, rapid_boxes, page_h, page_w):
+			continue
+		cx, cy, cw, ch = detect.box_to_xywh(cb)
+		# Skip pure chromatic watermark boxes
+		if np.count_nonzero(color_wm) > 500:
+			wm_pix = np.sum(color_wm[max(0, cy):min(page_h, cy + ch), max(0, cx):min(page_w, cx + cw)] > 0)
+			if wm_pix > 0.20 * max(1, cw * ch):
+				continue
+		kept_comic_boxes.append(cb)
+		kept_comic_scores.append(cs)
 
 	all_boxes = rapid_boxes + kept_comic_boxes
 	all_scores = rapid_scores + kept_comic_scores
@@ -672,6 +762,28 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		]
 		hull_pts: np.ndarray | None = None
 		if matched:
+			# DEDUPLICATE CO-LOCATED LINES MATCHED FROM DUAL PASSES
+			unique_matched: list[tuple] = []
+			for m in matched:
+				m_line, m_text, _m_score, _m_ang = m
+				mx, my, mw, mh = detect.box_to_xywh(m_line)
+				m_area = max(1.0, float(mw * mh))
+				duplicate = False
+				for u in unique_matched:
+					u_line, u_text, _u_score, _u_ang = u
+					ux, uy, uw, uh = detect.box_to_xywh(u_line)
+					u_area = max(1.0, float(uw * uh))
+					ix = max(0, min(mx + mw, ux + uw) - max(mx, ux))
+					iy = max(0, min(my + mh, uy + uh) - max(my, uy))
+					inter = ix * iy
+					min_a = min(m_area, u_area)
+					if inter / min_a >= 0.50:
+						duplicate = True
+						break
+				if not duplicate:
+					unique_matched.append(m)
+			matched = unique_matched
+			
 			# 1. DISCARD NON-CHINESE / ENGLISH SUBTITLE LINES IF CHINESE IS PRESENT
 			chinese_matched = [m for m in matched if detect._CHINESE_RE.search(m[1])]
 			if chinese_matched:
@@ -680,17 +792,6 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			story_matched = [m for m in matched if not detect._is_watermark_line(m[1])]
 			if story_matched:
 				matched = story_matched
-
-			# DEDUPLICATE IDENTICAL / NEAR-DUPLICATE MATCHED LINES INSIDE THE REGION
-			unique_matched = []
-			for m in matched:
-				m_line, m_text, m_score, m_ang = m
-				m_txt_clean = m_text.strip()
-				if not m_txt_clean:
-					continue
-				if not any(m_txt_clean == u[1].strip() for u in unique_matched):
-					unique_matched.append(m)
-			matched = unique_matched
 
 			# DISCONNECTED PARAGRAPH SPLIT: IF MATCHED LINES ARE SEPARATED BY LARGE VERTICAL GAPS (> 1.2x LINE HEIGHT),
 			# OR ARE SIDE-BY-SIDE IN SEPARATE COLUMNS (MINIMAL X-OVERLAP), OR HAVE EXTREME FONT-SIZE DISPARITY (> 2.2x),
@@ -746,6 +847,8 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					needs_rescue = (
 						len(sub_groups) == 1
 						and len(s_matched) == 1
+						and not _ALL_ELLIPSIS.fullmatch(s_region.text)
+						and not bool(_PUNCT_ONLY.fullmatch(s_region.text))
 						and 45 <= bh <= 320
 						and (
 							(1.25 * hh <= bh <= 4.0 * hh)
@@ -1019,7 +1122,12 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	filtered_regions = []
 	for r in final_regions:
 		t_strip = r.text.strip()
-		if not t_strip or _IGNORED_NOISE_RE.fullmatch(t_strip) or detect.is_pure_watermark_region(t_strip):
+		has_c = bool(detect._CHINESE_RE.search(t_strip))
+		c_count = len(re.sub(r"\s+", "", t_strip))
+		is_stray_non_chinese = not has_c and c_count <= 2 and (
+			r.box.h >= 120 or r.box.w >= 120 or (r.box.h >= 80 and (r.box.h / max(1, r.box.w) >= 2.5 or r.box.w / max(1, r.box.h) >= 2.5))
+		)
+		if not t_strip or _IGNORED_NOISE_RE.fullmatch(t_strip) or detect.is_pure_watermark_region(t_strip) or is_stray_non_chinese:
 			continue
 		if _PUNCT_ONLY.fullmatch(t_strip) and r.box.w >= 80:
 			continue

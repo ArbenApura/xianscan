@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import { goto } from '$app/navigation';
@@ -26,6 +26,10 @@
 	let expanded = false;
 	let now = Date.now();
 	let timer: ReturnType<typeof setInterval> | null = null;
+
+	onMount(() => {
+		batchTracker.sync();
+	});
 
 	$: active = $batchTracker.active;
 	$: status = $batchTracker.status;

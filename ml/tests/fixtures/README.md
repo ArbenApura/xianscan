@@ -21,6 +21,12 @@ This directory stores permanent, version-controlled image samples used by `pytes
 | [`page_58442.png`](page_58442.png) | 900 × 1641 | Chapter 35 / Page 58442 | **Alphanumeric & Numeric Prefix Preservation**: Ensures numbers and stat counts preceding Chinese text (*"1000000恐惧值"*) are preserved without being stripped. |
 | [`page_58443.png`](page_58443.png) | 900 × 2203 | Chapter 35 / Page 58443 | **Giant Artwork & Watermark Bypass**: Ensures large background illustration impact numbers (*"1000000"* art drawing) and watermarks are bypassed with 0 false regions. |
 | [`page_58444.png`](page_58444.png) | 900 × 1029 | Chapter 35 / Page 58444 | **Trailing Ellipsis Unification**: Ensures trailing ellipsis dots (*"……"*) are unified with dialogue bubbles rather than split into rogue *'1'* false detections. |
+| [`page_58509.png`](page_58509.png) | 900 × 1957 | Chapter 36 / Page 58509 | **Watermark-Collided Bubble Paragraph Unification**: Ensures a speech bubble (*"喂，你的手在抖..."*) colliding with watermark stamps (*"COLAMANGA.com"* / *"ACloudMerge.com"*) unifies its 3 lines and discards stray watermark fragments (*"loudMer"*). |
+| [`page_58515.png`](page_58515.png) | 900 × 1846 | Chapter 36 / Page 58515 | **Single-Bubble Mid-Line Exclamation Preservation**: Ensures scream/interjection lines (*"啊啊啊啊！！！一想起来，"*) inside single bubbles are not severed into disconnected fragments. |
+| [`page_58520.png`](page_58520.png) | 900 × 2396 | Chapter 36 / Page 58520 | **Separate Speech Bubble Period Isolation**: Ensures distinct consecutive speech bubbles (*"好啦。"* and *"不说这些了。"*) ending in full stops are kept separate across panel boundaries. |
+| [`page_58536.png`](page_58536.png) | 900 × 1162 | Chapter 37 / Page 58536 | **Watermark-Collided Button Text Recovery**: Ensures button text (*"生活人才"*) colliding with watermark stamps (*"ACloudMerge.com"*) is cleanly extracted and colon-terminated prompt labels (*"点将："*) are isolated. |
+| [`page_58539.png`](page_58539.png) | 900 × 1484 | Chapter 37 / Page 58539 | **Stray Artwork Contour Suppression**: Ensures 1-character stray artwork outlines (*"V"*) on full-art pages are bypassed with 0 false regions. |
+| [`page_58544.png`](page_58544.png) | 900 × 1748 | Chapter 37 / Page 58544 | **System Card Multi-Line Unification & Card Box Isolation**: Ensures multi-line cards (*"嘟！获得顶级伐木工..."*) unify repeated lines while distinct card boxes (*"嘟！获得顶级女巫。"* and *"(附赠顶级宠物。)"*) remain isolated. |
 
 ---
 

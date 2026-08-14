@@ -102,7 +102,37 @@ function createBatchTrackerStore() {
 		}
 	}
 
+	let livenessTimer: ReturnType<typeof setInterval> | null = null;
+
+	function startLivenessWatchdog() {
+		if (livenessTimer || !browser) return;
+		livenessTimer = setInterval(async () => {
+			const currentState = get({ subscribe });
+			if (!currentState.active || currentState.status !== 'running') {
+				stopLivenessWatchdog();
+				return;
+			}
+			const currentChapter = currentState.queue[currentState.currentIndex];
+			if (currentChapter && currentChapter.status === 'processing') {
+				const jtState = get(jobTracker);
+				const job = jtState.jobs[currentChapter.id];
+				// If not connected or connection lost while supposed to be processing, auto-sync from server
+				if (!job || job.connectionState === 'idle' || !job.running) {
+					await jobTracker.syncChapter(currentChapter.id);
+				}
+			}
+		}, 2500);
+	}
+
+	function stopLivenessWatchdog() {
+		if (livenessTimer) {
+			clearInterval(livenessTimer);
+			livenessTimer = null;
+		}
+	}
+
 	function detachJobWatcher() {
+		stopLivenessWatchdog();
 		if (unsubscribeJobTracker) {
 			unsubscribeJobTracker();
 			unsubscribeJobTracker = null;
@@ -113,6 +143,7 @@ function createBatchTrackerStore() {
 
 	// Watch jobTracker to advance the queue automatically
 	function attachJobWatcher() {
+		startLivenessWatchdog();
 		if (unsubscribeJobTracker) return;
 
 		unsubscribeJobTracker = jobTracker.subscribe((trackerState) => {
@@ -194,66 +225,67 @@ function createBatchTrackerStore() {
 			}
 
 			// ----------------------------------------------------
-			// STEP 1: ALWAYS SMART RE-SLICE CHAPTER PAGES FIRST
+			// STEP 1: ALWAYS SMART RE-SLICE CHAPTER PAGES FIRST (IF PAGES EXIST)
 			// ----------------------------------------------------
-			update((s) => {
-				const q = [...s.queue];
-				if (q[expectedIndex]) {
-					q[expectedIndex] = {
-						...q[expectedIndex],
-						status: 'reslicing',
-						resliceMessage: 'Analyzing canvas & finding optimal speech gutters...',
-						error: null,
-					};
-				}
-				const next: BatchTranslationState = {
-					...s,
-					queue: q,
-					currentPhase: 'reslice',
-				};
-				saveState(next);
-				return next;
-			});
-
-			currentResliceController = new AbortController();
-			const resliceResult = await resliceChapter(
-				currentChapter.id,
-				(msg) => {
-					update((s) => {
-						const q = [...s.queue];
-						if (q[expectedIndex] && q[expectedIndex].status === 'reslicing') {
-							q[expectedIndex] = {
-								...q[expectedIndex],
-								resliceMessage: msg,
-							};
-						}
-						return { ...s, queue: q };
-					});
-				},
-				currentResliceController.signal,
-			);
-			currentResliceController = null;
-
-			// Check if batch paused, skipped, or cancelled during reslice
-			const stateAfterReslice = get({ subscribe });
-			if (!stateAfterReslice.active || stateAfterReslice.status !== 'running' || stateAfterReslice.currentIndex !== expectedIndex) {
-				isProcessingQueue = false;
-				return;
-			}
-
-			// Update page count from reslice result if available
-			if (resliceResult && resliceResult.newCount > 0) {
+			if (currentChapter.pageCount > 0) {
 				update((s) => {
 					const q = [...s.queue];
 					if (q[expectedIndex]) {
 						q[expectedIndex] = {
 							...q[expectedIndex],
-							pageCount: resliceResult.newCount,
-							totalPages: resliceResult.newCount,
+							status: 'reslicing',
+							resliceMessage: 'Analyzing canvas & finding optimal speech gutters...',
+							error: null,
 						};
 					}
-					return { ...s, queue: q };
+					const next: BatchTranslationState = {
+						...s,
+						queue: q,
+						currentPhase: 'reslice',
+					};
+					saveState(next);
+					return next;
 				});
+
+				currentResliceController = new AbortController();
+				const resliceResult = await resliceChapter(
+					currentChapter.id,
+					(msg) => {
+						update((s) => {
+							const q = [...s.queue];
+							if (q[expectedIndex] && q[expectedIndex].status === 'reslicing') {
+								q[expectedIndex] = {
+									...q[expectedIndex],
+									resliceMessage: msg,
+								};
+							}
+							return { ...s, queue: q };
+						});
+					},
+					currentResliceController.signal,
+				);
+				currentResliceController = null;
+
+				// Check if batch paused, skipped, or cancelled during reslice
+				const stateAfterReslice = get({ subscribe });
+				if (!stateAfterReslice.active || stateAfterReslice.status !== 'running' || stateAfterReslice.currentIndex !== expectedIndex) {
+					return;
+				}
+
+				// Update page count from reslice result if available
+				if (resliceResult && resliceResult.newCount > 0) {
+					update((s) => {
+						const q = [...s.queue];
+						if (q[expectedIndex]) {
+							q[expectedIndex] = {
+								...q[expectedIndex],
+								pageCount: resliceResult.newCount,
+								totalPages: resliceResult.newCount,
+							};
+						}
+						return { ...s, queue: q };
+					});
+				}
 			}
 
 			// ----------------------------------------------------
@@ -281,11 +313,10 @@ function createBatchTrackerStore() {
 			lastWatchedChapterId = currentChapter.id;
 			lastWatchedStatus = 'processing';
 
-			try {
-				await jobTracker.startTranslation(currentChapter.id, { force: state.force });
-			} catch (err: any) {
+			// Launch chapter translation (non-blocking so queue lock is freed while job executes)
+			void jobTracker.startTranslation(currentChapter.id, { force: state.force }).catch((err: any) => {
 				onChapterFailed(currentChapter, err?.message || 'Failed to start translation');
-			}
+			});
 		} finally {
 			isProcessingQueue = false;
 		}

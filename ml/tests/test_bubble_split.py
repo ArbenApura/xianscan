@@ -401,3 +401,186 @@ def test_page_58443_artwork_illustration_bypassed():
     assert len(resp.regions) == 0, f"Expected 0 dialogue regions on artwork page 58443, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
 
 
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58544.png").exists(),
+    reason="Page 58544 sample fixture not found",
+)
+def test_page_58544_stat_card_paragraph_unification():
+    """Page 58544 regression test:
+    1. Multi-line system notification stat cards must group into complete unified paragraphs.
+    2. Card 2 ('嘟！获得顶级伐木工。\\n嘟！获得顶级伐...\\n嘟！获得顶级伐...') must be unified as 1 paragraph.
+    3. Card 3 ('嘟！获得顶级伐……木工！\\n嘟！获得顶级女巫。\\n(附赠顶级宠物。)') must be unified as 1 paragraph.
+    4. Sub-item / parenthetical lines like '(附赠顶级宠物。)' must not be orphaned into separate fragments.
+    """
+    img_path = FIXTURES_DIR / "page_58544.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    # Card 2: Lumberjack multi-line card
+    card2 = next((r for r in resp.regions if "伐木工" in r.text), None)
+    assert card2 is not None, f"Card 2 (伐木工) must be detected. Found: {[r.text for r in resp.regions]}"
+    assert "获得顶级伐木工" in card2.text, f"Line 1 missing from Card 2: {repr(card2.text)}"
+    assert "获得顶级伐" in card2.text, f"Line 2/3 missing from Card 2: {repr(card2.text)}"
+
+    # Card 4: Witch notification card
+    card_witch = next((r for r in resp.regions if r.text.strip() == "嘟！获得顶级女巫。"), None)
+    assert card_witch is not None, f"Card '嘟！获得顶级女巫。' must be its own separate region. Found: {[r.text for r in resp.regions]}"
+
+    # Card 5: Bonus pet notification card
+    card_pet = next((r for r in resp.regions if r.text.strip() == "(附赠顶级宠物。)"), None)
+    assert card_pet is not None, f"Card '(附赠顶级宠物。)' must be its own separate region. Found: {[r.text for r in resp.regions]}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58536.png").exists(),
+    reason="Page 58536 sample fixture not found",
+)
+def test_page_58536_watermark_collided_button_text_recovery():
+    """Page 58536 regression test:
+    1. '生活人才' button text colliding with orange/red 'ACloudMerge.com' watermark
+       must be recovered cleanly as '生活人才' without watermark garbage.
+    2. '点将：' label must remain separate from '生活人才' button (terminal colon guard).
+    3. '战斗人才' button must be cleanly detected.
+    4. Non-text icon drawings ('iii') must be suppressed.
+    """
+    img_path = FIXTURES_DIR / "page_58536.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    # 1. 生活人才 button
+    life_talent = next((r for r in resp.regions if "生活人才" in r.text), None)
+    assert life_talent is not None, f"Button '生活人才' must be recovered cleanly. Found: {[r.text for r in resp.regions]}"
+    assert "Merge" not in life_talent.text, f"Watermark domain must be stripped from '生活人才': {repr(life_talent.text)}"
+
+    # 2. 点将： label
+    summon_label = next((r for r in resp.regions if "点将" in r.text), None)
+    assert summon_label is not None, f"Label '点将：' must be detected. Found: {[r.text for r in resp.regions]}"
+    assert "生活" not in summon_label.text, f"'点将：' label must not be merged with '生活人才': {repr(summon_label.text)}"
+
+    # 3. 战斗人才 button
+    combat_talent = next((r for r in resp.regions if "战斗人才" in r.text), None)
+    assert combat_talent is not None, f"Button '战斗人才' must be detected. Found: {[r.text for r in resp.regions]}"
+
+    # 4. Ensure no rogue 'iii' icon drawing region exists
+    rogue_icon = next((r for r in resp.regions if r.text.strip().lower() in ("iii", "888", "iin")), None)
+    assert rogue_icon is None, f"Non-text icon drawing must be suppressed: {rogue_icon}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58515.png").exists(),
+    reason="Page 58515 sample fixture not found",
+)
+def test_page_58515_single_bubble_exclamation_intact():
+    """Page 58515 regression test:
+    1. A single speech bubble containing mid-line exclamation marks ('啊啊啊啊！！！一想起来，\\n简直羞耻到爆啊！！')
+       must remain a single unified paragraph and NOT get split into separate fragments.
+    2. Page must produce exactly 2 dialogue regions.
+    """
+    img_path = FIXTURES_DIR / "page_58515.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 2, f"Expected exactly 2 dialogue regions on page 58515, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    # Bubble 1: Top dialogue bubble
+    b1 = next((r for r in resp.regions if "这种事" in r.text), None)
+    assert b1 is not None, "Top bubble (这种事我才不要!) must be detected"
+
+    # Bubble 2: Embarrassed scream bubble
+    b2 = next((r for r in resp.regions if "羞耻到爆" in r.text), None)
+    assert b2 is not None, "Embarrassed scream bubble must be detected"
+    assert "啊啊啊啊！！！一想起来" in b2.text, f"Line 1 was severed or incomplete: {repr(b2.text)}"
+    assert "简直羞耻到爆啊" in b2.text, f"Line 2 was missing: {repr(b2.text)}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58509.png").exists(),
+    reason="Page 58509 sample fixture not found",
+)
+def test_page_58509_watermark_bubble_unification():
+    """Page 58509 regression test:
+    1. A speech bubble colliding with an 'ACloudMerge.com' / 'COLAMANGA.com' watermark
+       must have its 3 dialogue lines ('喂，你的手在抖，\\n咖啡都洒出来了，\\n怎么了？')
+       unified into a single paragraph.
+    2. Stray watermark text ('loudMer') must NOT become a dialogue region.
+    """
+    img_path = FIXTURES_DIR / "page_58509.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    # 1. Top speech bubble
+    top_bubble = next((r for r in resp.regions if "咖啡" in r.text), None)
+    assert top_bubble is not None, f"Top coffee bubble must be detected. Found: {[r.text for r in resp.regions]}"
+    assert "你的手在抖" in top_bubble.text, f"Line 1 missing from top bubble: {repr(top_bubble.text)}"
+    assert "咖啡都洒出来了" in top_bubble.text, f"Line 2 missing from top bubble: {repr(top_bubble.text)}"
+    assert "怎么了" in top_bubble.text, f"Line 3 missing from top bubble: {repr(top_bubble.text)}"
+
+    # 2. Watermark must not be present as a region
+    wm_reg = next((r for r in resp.regions if "loudmer" in r.text.lower() or "cloud" in r.text.lower()), None)
+    assert wm_reg is None, f"Watermark 'loudMer' must be discarded: {wm_reg}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58539.png").exists(),
+    reason="Page 58539 sample fixture not found",
+)
+def test_page_58539_stray_v_contour_suppressed():
+    """Page 58539 regression test:
+    1. A full art illustration page with 0 dialogue bubbles must have 0 dialogue regions.
+    2. Stray non-Chinese 1-character artwork outline detections (e.g. 'V' contour near wrist)
+       must be completely suppressed with 0 regions created.
+    """
+    img_path = FIXTURES_DIR / "page_58539.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 0, f"Expected 0 dialogue regions on page 58539, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58520.png").exists(),
+    reason="Page 58520 sample fixture not found",
+)
+def test_page_58520_separate_bubble_periods():
+    """Page 58520 regression test:
+    1. '好啦。' and '不说这些了。' sit in two distinct speech bubbles separated across panel boundaries.
+       Because '好啦。' ends with a full-stop '。' and has a vertical gap, they must NOT be merged into
+       a single paragraph.
+    2. '听了这么多系统的事，\\n你现在有何感想？' inside a single bubble must remain a unified 2-line paragraph.
+    """
+    img_path = FIXTURES_DIR / "page_58520.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    # 1. '好啦。' bubble
+    b1 = next((r for r in resp.regions if r.text.strip() == "好啦。"), None)
+    assert b1 is not None, f"'好啦。' must be its own separate region. Found: {[r.text for r in resp.regions]}"
+
+    # 2. '不说这些了。' bubble
+    b2 = next((r for r in resp.regions if r.text.strip() == "不说这些了。"), None)
+    assert b2 is not None, f"'不说这些了。' must be its own separate region. Found: {[r.text for r in resp.regions]}"
+
+    # 3. System question multi-line bubble
+    b3 = next((r for r in resp.regions if "感想" in r.text), None)
+    assert b3 is not None, f"System question bubble must be detected. Found: {[r.text for r in resp.regions]}"
+    assert "听了这么多系统的事" in b3.text and "你现在有何感想" in b3.text, f"System question lines must be unified: {repr(b3.text)}"
+
+
+
+
+
+
+
+

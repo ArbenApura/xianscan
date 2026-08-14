@@ -262,10 +262,12 @@ _URL_RE = re.compile(r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|http)', re.IGNOR
 _CHINESE_RE = re.compile(r'[\u4e00-\u9fa5\u3400-\u4dbf\U00020000-\U0002A6DF\u3000-\u303f\uff00-\uffef\u2026]')
 _WATERMARK_RE = re.compile(
 	r'(\.com|\.net|\.org|\.cn|\.cc|\.xyz|\.top|\.me|\.tv|\.app|http|'
-	r'速漫库|速漫|漫库|qumanku|包子|baozimh|colamanga|colamanhua|acloudmerge|oamanhua|'
+	r'速漫库|速漫|漫库|qumanku|quman|包子|baozimh|baozi|colamanga|colamanhua|colam|'
+	r'acloudmerge|acloud|loudmer|udmer|merd|oamanhua|'
+	r'merge|cloud|manga|manhua|comic|'
 	r'yumanhua|mangabox|comick|腾讯|微信|公众号|qq群|企鹅群|群号|'
 	r'严禁转载|独家|扫图|录入|修图|嵌字|翻译|汉化组|'
-	r'免费漫画|最新免费|漫画网|看漫画|首发|独家首发|漫客[栈拌]|漫客|mkzhan)',
+	r'免费漫画|最新免费|漫画网|看漫画|首发|独家首发|漫客[栈拌]|漫客|mkzhan|nga\.com)',
 	re.IGNORECASE,
 )
 
@@ -277,8 +279,6 @@ def _is_watermark_line(text: str | None) -> bool:
 	if not trimmed:
 		return False
 	if _WATERMARK_RE.search(trimmed):
-		return True
-	if not bool(_CHINESE_RE.search(trimmed)):
 		return True
 	return False
 
@@ -296,11 +296,14 @@ def is_pure_watermark_region(text: str | None) -> bool:
 		cleaned = re.sub(r'[\s0-9a-zA-Z_.\-:：/\\!！?？.。…·~～()（）\[\]【】]', '', cleaned)
 		if len(cleaned) <= 1:
 			return True
+	if not bool(_CHINESE_RE.search(trimmed)):
+		if bool(_URL_RE.search(trimmed)) or bool(_WATERMARK_RE.search(trimmed)):
+			return True
 	return False
 
 
 
-_TERMINAL_PUNCTUATION = tuple("。!！?？…）】”\"'~～")
+_TERMINAL_PUNCTUATION = tuple("。!！?？…）】”\"'~～:：;；")
 
 
 def merge_text_lines(
@@ -457,6 +460,7 @@ def group_paragraphs(
 	# WHEN A CANDIDATE LINE'S X-CENTER DEVIATES BY MORE THAN centroid_drift_max × max(w, lw)
 	# FROM THE PARAGRAPH'S ESTABLISHED CENTER, IT BELONGS TO A DIFFERENT BUBBLE.
 	para_cx_lists: list[list[float]] = []
+	para_texts: list[list[str]] = []
 
 	for box, score, txt in zip(boxes, scores, texts):
 		x, y, w, h = box_to_xywh(box)
@@ -465,6 +469,7 @@ def group_paragraphs(
 			para_scores.append(score)
 			para_is_url.append(_is_url_or_non_chinese(txt))
 			para_cx_lists.append([x + w / 2.0])
+			para_texts.append([txt])
 
 	horizontal = sorted(
 		((b, s, t) for b, s, t in zip(boxes, scores, texts) if box_to_xywh(b)[3] <= box_to_xywh(b)[2] * 2.2),
@@ -488,14 +493,22 @@ def group_paragraphs(
 
 			# VERTICAL CONTIGUITY: THE NEW LINE SITS AT OR BELOW THE PARAGRAPH'S BOTTOM LINE.
 			gap = y - (ly + lh)
-			is_trailing_tail = (w <= max(60, int(lw * 0.6)) and h <= lh * 1.5) or bool(re.search(r"[…\.。！!？?]$", txt))
-			max_allowed_gap = (gap_factor * 1.4 * min(h, lh)) if is_trailing_tail else (gap_factor * min(h, lh))
+			is_parenthetical = bool(re.match(r"^[（\(\[【〔*]", txt.strip())) or bool(re.search(r"[）\)\]】〕]$", txt.strip()))
+			is_trailing_tail = (w <= max(60, int(lw * 0.6)) and h <= lh * 1.5) or is_parenthetical
+			gap_multiplier = 2.8 if is_parenthetical else (1.4 if is_trailing_tail else 1.0)
+			max_allowed_gap = gap_factor * gap_multiplier * min(h, lh)
 			if gap > max_allowed_gap or y < ly - 0.35 * min(h, lh):
 				continue
 
-			# FONT-SIZE GATE: ONLY LINES OF SIMILAR FONT SIZE GROUP (OR SHORT TRAILING LINE / ELLIPSIS).
+			# A line ending with terminal full-stop '。' or colon ':：' is a completed sentence/command.
+			# If the previous line ended with terminal punctuation and there is a vertical gap, they are separate bubbles.
+			last_txt = para_texts[p_idx][-1] if para_texts[p_idx] else ""
+			if last_txt and bool(re.search(r"[。:：;；]$", last_txt.strip())) and gap >= 0.20 * min(h, lh):
+				continue
+
+			# FONT-SIZE GATE: ONLY LINES OF SIMILAR FONT SIZE GROUP (OR SHORT TRAILING LINE / ELLIPSIS / PARENTHETICAL).
 			height_ratio = max(h, lh) / max(1.0, float(min(h, lh)))
-			if is_trailing_tail:
+			if is_trailing_tail or is_parenthetical:
 				if height_ratio > 2.5:
 					continue
 			elif height_ratio > height_sim_max:
@@ -518,6 +531,8 @@ def group_paragraphs(
 
 			para.append(box)
 			para_cx_lists[p_idx].append(new_cx)
+			para_texts[p_idx].append(txt)
+			para_scores[p_idx] = max(para_scores[p_idx], score)
 			placed = True
 			break
 
@@ -526,6 +541,7 @@ def group_paragraphs(
 			para_scores.append(score)
 			para_is_url.append(box_url)
 			para_cx_lists.append([x + w / 2.0])
+			para_texts.append([txt])
 
 	merged = []
 	mscores = []

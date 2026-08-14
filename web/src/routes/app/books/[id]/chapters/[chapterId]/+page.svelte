@@ -243,8 +243,7 @@
 	});
 
 	onDestroy(() => {
-		// Do not abort backend job, just detach client SSE stream listener
-		if (chapterId) jobTracker.disconnect(chapterId);
+		// Do not disconnect global jobTracker on reader exit so background batch HUD & alerts continue streaming
 	});
 
 	// RELOAD CHAPTER DATA WHEN PROGRESS COMPLETES
