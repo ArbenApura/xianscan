@@ -313,6 +313,28 @@ def test_sample_58382_real_image_fixture():
 	assert "搞得我玩这个游戏的\n目的全部丧失了嘛！\n阿发这小子，见到非\n揍他一顿！" in texts
 
 
+def test_sample_58373_cover_logo_preserved():
+	"""Page 58373: The large artistic title logo (网游之近战法师) must be preserved as artwork
+	and NOT erased or converted into broken fragmented text. Staff credits must be detected.
+	"""
+	from pathlib import Path
+	fixture_path = Path(__file__).parent / "fixtures" / "page_58373.png"
+	if not fixture_path.exists():
+		pytest.skip("Fixture page_58373.png not found")
+
+	img = cv2.imread(str(fixture_path))
+	assert img is not None, "Failed to read fixture image"
+
+	res = pipeline.analyze_image(img)
+	texts = [r.text for r in res.regions]
+	# The title logo artwork must NOT be detected as a text region
+	for t in texts:
+		assert "山子" not in t, f"Artistic logo fragment '山子' must not be in regions: {texts}"
+	# Staff credits must be present
+	assert any("原作" in t or "主笔" in t for t in texts), f"Staff credits must be detected: {texts}"
+
+
+
 
 
 

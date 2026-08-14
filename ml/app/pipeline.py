@@ -531,7 +531,19 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			else:
 				clean_t = "……"
 		normalized_rapid_lines.append((pts, clean_t, s, line_angle))
-	rapid_lines = _deduplicate_ocr_lines(normalized_rapid_lines)
+
+	# FILTER OUT OVERSIZED ILLUSTRATION / LOGO ARTWORK BOXES (MASSIVE HEIGHT BUT ONLY A FEW CHARACTERS)
+	# GENUINE CHINESE TEXT LINES HAVE SQUARE GLYPHS (w_per_char ≈ height).
+	# AN ARTWORK BOX ENCLOSING A GRAPHIC LOGO WITH h >= 100 AND w/len(text) >= 90 AND score < 0.85 IS AN ILLUSTRATION ARTIFACT.
+	clean_rapid_lines = []
+	for pts, t, s, line_angle in normalized_rapid_lines:
+		_lx, _ly, lw, lh = detect.box_to_xywh(pts)
+		char_count = max(1, len(re.sub(r'\s+', '', t)))
+		if lh >= 100 and (lw / char_count) >= 90 and s < 0.85:
+			continue
+		clean_rapid_lines.append((pts, t, s, line_angle))
+	rapid_lines = clean_rapid_lines
+	rapid_lines = _deduplicate_ocr_lines(rapid_lines)
 	rapid_lines = _split_lines_by_internal_punctuation(rapid_lines, ocr_img)
 
 	# RECOVER / DISCOVER LINES INSIDE COMIC BOXES THAT FULL-PAGE OCR MISSED (e.g. TITLE LOGOS, HIGH-CONTRAST SFX, SUBTITLES)
