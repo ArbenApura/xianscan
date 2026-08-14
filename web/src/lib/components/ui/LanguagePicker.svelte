@@ -34,6 +34,7 @@
 	// -- OPTIONAL PROPS -- //
 
 	export let allowNone = false;
+	export let excludeCode: string | null = null;
 	let klass = '';
 	export { klass as class };
 
@@ -67,14 +68,15 @@
 	$: selectedName = languageName(value);
 	$: selectedEndonym = isNone ? '' : (ALL.find((l) => l.value === value)?.endonym ?? '');
 	$: q = query.trim().toLowerCase();
+	$: availableList = excludeCode ? ALL.filter((l) => l.value !== excludeCode) : ALL;
 	$: filtered = q
-		? ALL.filter(
+		? availableList.filter(
 				(l) =>
 					l.name.toLowerCase().includes(q) ||
 					l.endonym.toLowerCase().includes(q) ||
 					l.value.toLowerCase().includes(q),
 			)
-		: ALL;
+		: availableList;
 	$: groups = ([1, 2, 3] as const)
 		.map((tier) => ({ tier, label: TIER_LABEL[tier], items: filtered.filter((l) => l.tier === tier) }))
 		.filter((g) => g.items.length > 0) satisfies Group[];

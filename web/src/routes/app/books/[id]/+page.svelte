@@ -962,7 +962,7 @@
 
 				<div>
 					<span class="mb-1 block text-xs font-semibold opacity-60">Target Language</span>
-					<LanguagePicker bind:value={editBookTargetLang} />
+					<LanguagePicker bind:value={editBookTargetLang} excludeCode={editBookSourceLang} />
 				</div>
 			</div>
 

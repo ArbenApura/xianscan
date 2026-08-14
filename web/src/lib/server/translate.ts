@@ -11,6 +11,7 @@
 // THE API RESPONSE (computeUsage), ALL LLM CALLS GO THROUGH queued() + withRetry().
 import type { LangPair, TermDraft, TranslationUsage } from '$lib/types';
 import type OpenAI from 'openai';
+import { languageName } from '$lib/languages';
 // IMPORTED MODULES
 import { computeUsage, deepseek, queued, resolveModel, thinkingParam, withRetry } from './deepseek';
 
@@ -48,12 +49,16 @@ const MAX_EXPANSION = 6;
 // -- PROMPTS -- //
 
 export function systemPrompt(src: string, tgt: string): string {
-	return `You are a professional manhua (Chinese comic) localizer translating ${src} dialogue into natural ${tgt}.
+	const srcName = languageName(src);
+	const tgtName = languageName(tgt);
+	const srcLabel = srcName === src ? src : `${srcName} (${src})`;
+	const tgtLabel = tgtName === tgt ? tgt : `${tgtName} (${tgt})`;
+	return `You are a professional manhua (comic) localizer translating ${srcLabel} dialogue into natural ${tgtLabel}.
 Rules:
-- Comic dialogue: short, punchy, natural spoken English. Match the speaker's tone.
+- Comic dialogue: short, punchy, natural spoken ${tgtName}. Match the speaker's tone.
 - Punctuation & Reaction Bubbles:
   * NEVER invent or use em-dashes (— or --) for pauses, thinking, or sentence breaks. Use natural commas (,), periods (.), or ellipses (...) matching the source punctuation.
-  * Character Speech & Reaction Bubbles: If a dialogue region contains ellipses, exclamation marks, question marks, or reaction punctuation (e.g. "……", "……！", "……？", "？！", "！", "？"), ALWAYS translate it to natural English punctuation (e.g. "...", "...!", "...?", "?!", "!", "?"). Do NOT return an empty string for character speech or pause bubbles!
+  * Character Speech & Reaction Bubbles: If a dialogue region contains ellipses, exclamation marks, question marks, or reaction punctuation (e.g. "……", "……！", "……？", "？！", "！", "？"), ALWAYS translate it to natural ${tgtName} punctuation (e.g. "...", "...!", "...?", "?!", "!", "?"). Do NOT return an empty string for character speech or pause bubbles!
   * Only output a dash if the original source text explicitly contains a dash/hyphen.
 - Watermark & Scanlation Tag Filtering:
   * Piracy Watermarks & Aggregator Ads: If a text region is a third-party pirate watermark, scanlation group recruitment ad, website URL/domain, aggregator watermark, scanlation QQ/Discord group, or uploader logo (e.g. BaoziManhua, Colamanga, Qumanku, 速漫库, 包子漫画, "扫图", "汉化组招募", "严禁转载", "独家", "修图", "首发", etc.), return an EMPTY STRING "" for its id.
@@ -66,7 +71,7 @@ Rules:
 - Preserve names exactly as the glossary says.
 
 Wuxia/manhua stat-panel and item-card rules (apply when the text has 【】title brackets or a rarity grade):
-- Title lines enclosed in 【】brackets → output as [ENGLISH TITLE IN CAPS] (first line, keep the square brackets). Example: 【铁滑车】→ [IRON CHARIOT]. ONLY add [brackets] when the SOURCE text has 【】 — do NOT add brackets to items that start directly with a rarity grade word.
+- Title lines enclosed in 【】brackets → output as [${tgtName.toUpperCase()} TITLE IN CAPS] (first line, keep the square brackets). Example: 【铁滑车】→ [IRON CHARIOT]. ONLY add [brackets] when the SOURCE text has 【】 — do NOT add brackets to items that start directly with a rarity grade word.
 - Rarity-grade items WITHOUT 【】 (e.g. 神话级火箭铁滑车): output the rarity+name as the FIRST line with no brackets. Example: 神话级火箭铁滑车 → MYTHIC ROCKET IRON CHARIOT (no brackets, first line).
 - Translate vehicle/weapon names accurately: 滑车 = chariot (war vehicle), not sledge or cart; 战刀 = battle saber; 弩 = crossbow, etc.
 - Rarity grade words (传说级, 史诗级, 稀有级, 精良级, 普通级, 神话级, etc.) → translate as LEGENDARY, EPIC, RARE, FINE, COMMON, MYTHIC etc. Keep fused with item type on same line.
@@ -82,6 +87,8 @@ Reply with ONLY a JSON object; no markdown fences, no commentary.`;
 // SYSTEM MESSAGE BETWEEN THE SYSTEM PROMPT AND THE USER MESSAGE (NOT INSIDE THE PROMPT STRING).
 export function glossaryBlock(terms: TermDraft[], src: string, tgt: string): string | null {
 	if (terms.length === 0) return null;
+	const srcName = languageName(src);
+	const tgtName = languageName(tgt);
 	const lines = [...terms]
 		// NaN-PROOF: A MISSING pinned (undefined) MUST SORT AS false — NEVER NaN (V8 TREATS NaN AS "EQUAL")
 		.sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false))
@@ -91,7 +98,7 @@ export function glossaryBlock(terms: TermDraft[], src: string, tgt: string): str
 			const context = t.context ? ` — ${t.context}` : '';
 			return `★${t.source}${aliases} = ${t.target}${gender}${context}`;
 		});
-	return `Glossary (${src} → ${tgt}) — use these exact renderings for the listed terms, even when the context would suggest otherwise:
+	return `Glossary (${srcName} → ${tgtName}) — use these exact renderings for the listed terms, even when the context would suggest otherwise:
 ${lines.join('\n')}`;
 }
 
@@ -235,17 +242,21 @@ import { chunkForExtraction } from './glossary';
 export const MAX_CONTEXT_TERMS = 100;
 
 export function extractionSystemPrompt(src: string, tgt: string): string {
-	return `You build a translation glossary from a ${src} manhua (comic) chapter so that names, titles, and techniques stay 100% consistent across all pages.
+	const srcName = languageName(src);
+	const tgtName = languageName(tgt);
+	const srcLabel = srcName === src ? src : `${srcName} (${src})`;
+	const tgtLabel = tgtName === tgt ? tgt : `${tgtName} (${tgt})`;
+	return `You build a translation glossary from a ${srcLabel} manhua (comic) chapter so that names, titles, and techniques stay 100% consistent across all pages.
 
 Return ONLY a JSON object of exactly this shape — no markdown fences, no comments, no extra text:
-{"terms":[{"source":"<exact ${src} characters verbatim from text>","target":"<natural ${tgt} translation>","category":"character|location|organization|technique|item|realm|creature|title|concept|other","gender":"neuter|masculine|feminine","aliases":["<other ${src} forms/nicknames>"],"pinned":false,"context":"<brief description>"}]}
+{"terms":[{"source":"<exact ${srcName} characters verbatim from text>","target":"<natural ${tgtName} translation>","category":"character|location|organization|technique|item|realm|creature|title|concept|other","gender":"neuter|masculine|feminine","aliases":["<other ${srcName} forms/nicknames>"],"pinned":false,"context":"<brief description>"}]}
 
 Rules:
 1. "source": MUST be copied EXACTLY as it appears in the text (identical characters, no added or removed spaces) so exact string match will find it on every page.
 2. "target":
    - Personal character names: Romanize into Pinyin / Latin script with Title Case (e.g. 叶凡 → Ye Fan; 李澈 → Li Che). Space-separate family and given names.
    - Place names: Romanize the proper name and translate the place type (e.g. 雲霄村 → Yunxiao Village; 紫山 → Purple Mountain).
-   - Descriptive terms (techniques, martial arts, cultivation realms, weapons, items, artifacts): Translate by MEANING into natural ${tgt} (e.g. 斩龙剑 → Dragon Slaying Sword; 筑基期 → Foundation Establishment).
+   - Descriptive terms (techniques, martial arts, cultivation realms, weapons, items, artifacts): Translate by MEANING into natural ${tgtName} (e.g. 斩龙剑 → Dragon Slaying Sword; 筑基期 → Foundation Establishment).
 3. "category": 'character', 'location', 'organization', 'technique', 'item', 'realm', 'creature', 'title', 'concept', 'other'.
 4. "gender": 'masculine' or 'feminine' ONLY when the text explicitly indicates it (pronouns, titles like master/sister/brother/prince); otherwise 'neuter'.
 5. "aliases": Array of other short forms, nicknames, or forms of address in the text (e.g. for 叶凡, aliases: ["小凡", "凡儿"]).

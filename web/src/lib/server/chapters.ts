@@ -51,6 +51,24 @@ export async function createChapter(bookId: string, title: string): Promise<{ id
 // OLD NAMES, SO A SEQ-BASED NAME CAN REUSE A FILE STILL REFERENCED BY ANOTHER PAGE — THE OLD SCHEME
 // OVERWROTE THE LAST REMAINING PAGE'S IMAGE ON THE NEXT UPLOAD, MAKING THE LAST TWO PAGES SHOW THE
 // SAME PICTURE (EVERY RE-UPLOAD RE-DUPLICATED IT).
+// CONVERT ARBITRARY IMAGE BUFFER (PNG/JPEG/AVIF) TO OPTIMIZED WEBP.
+async function convertBufferToWebP(buffer: Buffer, originalExt: string): Promise<{ data: Buffer; ext: string }> {
+	if (originalExt === '.webp') return { data: buffer, ext: '.webp' };
+	try {
+		const { loadImage } = await import('@napi-rs/canvas');
+		const img = await loadImage(buffer);
+		const { createCanvas } = await import('@napi-rs/canvas');
+		const canvas = createCanvas(img.width, img.height);
+		const ctx = canvas.getContext('2d');
+		ctx.drawImage(img, 0, 0);
+		const webpBuf = await canvas.encode('webp', 85);
+		return { data: webpBuf, ext: '.webp' };
+	} catch {
+		// FALLBACK TO ORIGINAL BUFFER IF ENCODER FAILS
+		return { data: buffer, ext: originalExt };
+	}
+}
+
 export async function uploadPages(chapterId: number, files: File[]): Promise<number> {
 	let count = 0;
 	let seq = nextPageSeq(chapterId);
@@ -59,8 +77,10 @@ export async function uploadPages(chapterId: number, files: File[]): Promise<num
 	for (const file of files) {
 		const ext = extname(file.name).toLowerCase();
 		if (!ALLOWED_EXT.has(ext)) throw error(400, `Unsupported image type "${ext}" — use PNG/JPEG/WebP/AVIF.`);
-		const fileName = `${randomUUID()}${ext}`;
-		writeFileSync(join(uploadDir, fileName), Buffer.from(await file.arrayBuffer()));
+		const rawBuf = Buffer.from(await file.arrayBuffer());
+		const { data: webpBuf, ext: finalExt } = await convertBufferToWebP(rawBuf, ext);
+		const fileName = `${randomUUID()}${finalExt}`;
+		writeFileSync(join(uploadDir, fileName), webpBuf);
 		db.insert(pages)
 			.values({ chapterId, seq, filePath: `uploads/${chapterId}/${fileName}` })
 			.run();

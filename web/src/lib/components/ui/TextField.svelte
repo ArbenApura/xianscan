@@ -9,6 +9,7 @@
 	export let placeholder = '';
 	export let type: 'text' | 'url' | 'search' = 'text';
 	export let inputClass = '';
+	export let required = false;
 </script>
 
 <!-- TEXT FIELD: OPTIONAL LABEL + THEMED INPUT, FORWARDS NATIVE EVENTS -->
@@ -22,6 +23,7 @@
 			type="search"
 			bind:value
 			{placeholder}
+			{required}
 			class={cn(
 				'w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm outline-none transition-colors placeholder:opacity-40 focus:border-[#c0392b] focus:ring-2 focus:ring-[#c0392b]/30 dark:border-white/[0.06]',
 				inputClass,
@@ -35,6 +37,7 @@
 			type="url"
 			bind:value
 			{placeholder}
+			{required}
 			class={cn(
 				'w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm outline-none transition-colors placeholder:opacity-40 focus:border-[#c0392b] focus:ring-2 focus:ring-[#c0392b]/30 dark:border-white/[0.06]',
 				inputClass,
@@ -48,6 +51,7 @@
 			type="text"
 			bind:value
 			{placeholder}
+			{required}
 			class={cn(
 				'w-full rounded-lg border border-black/10 bg-transparent px-3 py-2 text-sm outline-none transition-colors placeholder:opacity-40 focus:border-[#c0392b] focus:ring-2 focus:ring-[#c0392b]/30 dark:border-white/[0.06]',
 				inputClass,

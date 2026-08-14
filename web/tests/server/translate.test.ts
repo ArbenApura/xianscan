@@ -303,6 +303,34 @@ describe('parseExtractedTerms & extractTerms', () => {
 		expect(establishedMsg).toBeDefined();
 		expect(String(establishedMsg?.content)).toContain('叶凡 = Ye Fan');
 	});
+
+	it('supports Japanese target language in systemPrompt and translation flow', async () => {
+		const jaPair = { sourceLang: 'zh-Hans', targetLang: 'ja' };
+		const p = systemPrompt(jaPair.sourceLang, jaPair.targetLang);
+		expect(p).toContain('Japanese');
+		expect(p).toContain('zh-Hans');
+
+		const fakeClient = {
+			chat: {
+				completions: {
+					create: async (params: { messages: OpenAI.Chat.ChatCompletionMessageParam[] }) => {
+						const sysMsg = params.messages.find((m) => m.role === 'system')?.content as string;
+						expect(sysMsg).toContain('Japanese');
+						return {
+							choices: [{ message: { content: '{"r1": "こんにちは！"}' } }],
+							usage: { prompt_tokens: 10, completion_tokens: 5 },
+						};
+					},
+				},
+			},
+		} as unknown as OpenAI;
+
+		const res = await translatePage(
+			[{ id: 'r1', text: '你好！', category: 'dialogue' }],
+			[],
+			jaPair,
+			{ client: fakeClient },
+		);
+		expect(res.byRegion.get('r1')).toBe('こんにちは！');
+	});
 });
-
-

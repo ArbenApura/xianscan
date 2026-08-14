@@ -43,7 +43,7 @@ export const FONT_DIALOGUE = 'CC Wild Words';
 export const FONT_SFX = 'CC Wild Words';
 export const FONT_MONO = 'CC Wild Words';
 export const FONT_FALLBACK_NAME = 'Friendly Sans';
-export const FONT_FALLBACK = ', "Friendly Sans", Arial, "Segoe UI", sans-serif';
+export const FONT_FALLBACK = ', "Friendly Sans", "Yu Gothic Bold", "Yu Gothic", "Microsoft YaHei Bold", "Microsoft YaHei", Arial, "Segoe UI", sans-serif';
 
 // RENDER MARGINS INSIDE THE DETECTED BOX — 8% INSET ENSURES MAXIMUM USABLE SPACE WHILE STAYING INSIDE BUBBLE EDGES
 const BOX_INSET = 0.08;
@@ -83,6 +83,12 @@ function registerFonts(): void {
 		if (process.platform === 'win32') {
 			GlobalFonts.registerFromPath('C:\\Windows\\Fonts\\arial.ttf', 'Arial');
 			GlobalFonts.registerFromPath('C:\\Windows\\Fonts\\segoeui.ttf', 'Segoe UI');
+			GlobalFonts.registerFromPath('C:\\Windows\\Fonts\\YuGothB.ttc', 'Yu Gothic Bold');
+			GlobalFonts.registerFromPath('C:\\Windows\\Fonts\\YuGothM.ttc', 'Yu Gothic');
+			GlobalFonts.registerFromPath('C:\\Windows\\Fonts\\msyhbd.ttc', 'Microsoft YaHei Bold');
+			GlobalFonts.registerFromPath('C:\\Windows\\Fonts\\msyh.ttc', 'Microsoft YaHei');
+			GlobalFonts.registerFromPath('C:\\Windows\\Fonts\\malgunbd.ttf', 'Malgun Gothic Bold');
+			GlobalFonts.registerFromPath('C:\\Windows\\Fonts\\malgun.ttf', 'Malgun Gothic');
 		}
 	} catch {
 		// FALLBACK TO SKIA SYSTEM FONT RESOLUTION
@@ -94,22 +100,24 @@ function registerFonts(): void {
 }
 
 const SPECIAL_FONT_CHARS = /[\[\]{}【】〔〕_|^~`<>]/;
+// Matches Japanese Hiragana, Katakana, Kanji, and Korean Hangul
+const CJK_REGEX = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
 
 export function fontFor(category: TypesetRegion['category'], text?: string): string {
-	if (text && SPECIAL_FONT_CHARS.test(text)) {
+	if (text && (SPECIAL_FONT_CHARS.test(text) || CJK_REGEX.test(text))) {
 		return FONT_FALLBACK_NAME;
 	}
 	return category === 'sfx' ? FONT_SFX : FONT_DIALOGUE;
 }
 
-export function fontSpec(size: number, categoryOrFont?: TypesetRegion['category'] | string): string {
+export function fontSpec(size: number, categoryOrFont?: TypesetRegion['category'] | string, text?: string): string {
 	const fontName = !categoryOrFont
-		? FONT_DIALOGUE
+		? (text && CJK_REGEX.test(text) ? FONT_FALLBACK_NAME : FONT_DIALOGUE)
 		: categoryOrFont === 'sfx' || categoryOrFont === 'dialogue' || categoryOrFont === 'mono' || categoryOrFont === 'other'
-		? fontFor(categoryOrFont)
+		? fontFor(categoryOrFont, text)
 		: categoryOrFont;
 	if (fontName === FONT_FALLBACK_NAME) {
-		return `${size}px "${FONT_FALLBACK_NAME}", Arial, "Segoe UI", sans-serif`;
+		return `bold ${size}px "${FONT_FALLBACK_NAME}", "Yu Gothic Bold", "Yu Gothic", "Microsoft YaHei Bold", "Microsoft YaHei", Arial, "Segoe UI", sans-serif`;
 	}
 	return `${size}px "${fontName}"${FONT_FALLBACK}`;
 }
@@ -243,6 +251,22 @@ export function wrapText(ctx: { measureText(t: string): { width: number } }, tex
 
 	for (const paragraph of text.split('\n')) {
 		let current = '';
+		// Check if paragraph contains CJK characters (Japanese/Chinese/Korean)
+		if (CJK_REGEX.test(paragraph)) {
+			for (let i = 0; i < paragraph.length; i++) {
+				const char = paragraph[i];
+				const candidate = `${current}${char}`;
+				if (ctx.measureText(candidate).width <= maxWidth) {
+					current = candidate;
+				} else {
+					if (current) lines.push(current);
+					current = char;
+				}
+			}
+			if (current) lines.push(current);
+			continue;
+		}
+
 		for (const word of paragraph.split(/\s+/)) {
 			if (!word) continue;
 			if (!current) {
@@ -388,8 +412,14 @@ export function fitSingleLineSize(
  */
 export function sanitizeForFont(text: string): string {
 	if (!text) return '';
-	return text
-		.trim()
+	const trimmed = text.trim();
+	if (CJK_REGEX.test(trimmed)) {
+		return trimmed
+			.replace(/\s*[—–]+\s*/g, ' ')
+			.replace(/[ \t]{2,}/g, ' ')
+			.trim();
+	}
+	return trimmed
 		.replace(/[【〔]/g, '[')
 		.replace(/[】〕]/g, ']')
 		.replace(/[《「『]/g, '"')
@@ -411,6 +441,9 @@ export function sanitizeForFont(text: string): string {
 export function renderText(r: TypesetRegion): string {
 	// Stat-panel body text keeps sentence case; everything else is uppercased.
 	const sanitized = sanitizeForFont(r.text.trim());
+	if (CJK_REGEX.test(sanitized)) {
+		return sanitized;
+	}
 	const segs = parseStatPanel(sanitized);
 	if (segs) {
 		return segs.map((s) => s.text).join('\n');
@@ -620,8 +653,8 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 			continue;
 		}
 
-		// STANDARD PATH — flat uppercase word-wrap
-		const text = rawText.toUpperCase();
+		// STANDARD PATH — flat word-wrap
+		const text = CJK_REGEX.test(rawText) ? rawText : rawText.toUpperCase();
 		const { x, y, w, h } = r.box;
 
 		// TINY ACTION/EMOTE BADGE (e.g. "转", "汗", "!", size <= 32px):
@@ -653,7 +686,7 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		const categoryCap = r.category === 'sfx' ? MAX_SFX_FONT_SIZE : MAX_DIALOGUE_FONT_SIZE * scale;
 		const maxSize = Math.min(rawMax, categoryCap);
 		const size = fitFontSize(ctx, text, font, w, h, startSize, maxSize);
-		ctx.font = fontSpec(size, font);
+		ctx.font = fontSpec(size, font, text);
 		const isSingleWord = !text.includes(' ') && !text.includes('\n');
 		const maxW = Math.max(10, isSingleWord && w <= 60 ? w - 4 : w * (1 - 2 * BOX_INSET));
 		const lines = reflowText(ctx, text, maxW);

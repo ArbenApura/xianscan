@@ -83,21 +83,36 @@ export const GET: RequestHandler = async ({ params }) => {
 export const PATCH: RequestHandler = async ({ params, request }) => {
 	await assertBookExists(params.id);
 	const parsed = PatchBody.safeParse(await request.json().catch(() => null));
-	if (!parsed.success) throw error(400, 'Invalid update data.');
+	if (!parsed.success) throw error(400, 'Invalid update body.');
 
-	const updates: Record<string, unknown> = {
-		updatedAt: Date.now(),
-	};
-	if (parsed.data.title !== undefined) updates.title = parsed.data.title.trim();
-	if (parsed.data.titleTarget !== undefined) updates.titleTarget = parsed.data.titleTarget ? parsed.data.titleTarget.trim() : null;
-	if (parsed.data.sourceLang !== undefined) updates.sourceLang = parsed.data.sourceLang;
-	if (parsed.data.targetLang !== undefined) updates.targetLang = parsed.data.targetLang;
-	if (parsed.data.pinned !== undefined) updates.pinned = parsed.data.pinned;
-	if (parsed.data.archived !== undefined) updates.archived = parsed.data.archived;
+	const currentBook = db.select().from(books).where(eq(books.id, params.id)).get();
+	if (!currentBook) throw error(404, 'Book not found.');
 
-	db.update(books).set(updates).where(eq(books.id, params.id)).run();
+	const newSourceLang = parsed.data.sourceLang ?? currentBook.sourceLang;
+	const newTargetLang = parsed.data.targetLang ?? currentBook.targetLang;
 
-	const updated = db.select().from(books).where(eq(books.id, params.id)).get();
+	if (newSourceLang === newTargetLang) {
+		throw error(400, 'Target translation language must be different from source language.');
+	}
+
+	const updateData: Record<string, unknown> = {};
+	if (parsed.data.title !== undefined) updateData.title = parsed.data.title.trim();
+	if (parsed.data.titleTarget !== undefined) {
+		updateData.titleTarget = parsed.data.titleTarget ? parsed.data.titleTarget.trim() : null;
+	}
+	if (parsed.data.sourceLang !== undefined) updateData.sourceLang = parsed.data.sourceLang;
+	if (parsed.data.targetLang !== undefined) updateData.targetLang = parsed.data.targetLang;
+	if (parsed.data.pinned !== undefined) updateData.pinned = parsed.data.pinned;
+	if (parsed.data.archived !== undefined) updateData.archived = parsed.data.archived;
+	updateData.updatedAt = Date.now();
+
+	const updated = db
+		.update(books)
+		.set(updateData)
+		.where(eq(books.id, params.id))
+		.returning()
+		.get();
+
 	return json({ book: updated });
 };
 

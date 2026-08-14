@@ -117,14 +117,21 @@ export const GET: RequestHandler = async () => {
 export const POST: RequestHandler = async ({ request }) => {
 	const parsed = PostBody.safeParse(await request.json().catch(() => null));
 	if (!parsed.success) throw error(400, 'Invalid book.');
+	const sourceLang = parsed.data.sourceLang || DEFAULT_SOURCE_LANG;
+	const targetLang = parsed.data.targetLang || DEFAULT_TARGET_LANG;
+
+	if (sourceLang === targetLang) {
+		throw error(400, 'Target translation language must be different from source language.');
+	}
+
 	const id = randomUUID();
 	db.insert(books)
 		.values({
 			id,
 			title: parsed.data.title.trim(),
 			titleTarget: parsed.data.titleTarget ? parsed.data.titleTarget.trim() : null,
-			sourceLang: parsed.data.sourceLang || DEFAULT_SOURCE_LANG,
-			targetLang: parsed.data.targetLang || DEFAULT_TARGET_LANG,
+			sourceLang,
+			targetLang,
 		})
 		.run();
 	return json({ id }, { status: 201 });

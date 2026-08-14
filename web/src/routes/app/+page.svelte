@@ -688,7 +688,7 @@
 							title={`Open ${book.titleTarget || book.title}`}
 						>
 							<LazyImage
-								src={book.coverChapterId ? `/api/pages/${book.coverChapterId}/file?kind=thumb&w=140` : ''}
+								src={book.coverPageId ? `/api/pages/${book.coverPageId}/file?kind=thumb&w=140` : ''}
 								alt={book.titleTarget || book.title}
 								fallbackText={book.titleTarget || book.title}
 								aspectRatio="aspect-[2/3]"
@@ -893,7 +893,7 @@
 
 			<div>
 				<span class="mb-1 block text-xs font-semibold opacity-60">Target Language</span>
-				<LanguagePicker bind:value={targetLang} />
+				<LanguagePicker bind:value={targetLang} excludeCode={sourceLang} />
 			</div>
 		</div>
 	</form>
@@ -930,7 +930,7 @@
 
 				<div>
 					<span class="mb-1 block text-xs font-semibold opacity-60">Target Language</span>
-					<LanguagePicker bind:value={editTargetLang} />
+					<LanguagePicker bind:value={editTargetLang} excludeCode={editSourceLang} />
 				</div>
 			</div>
 
