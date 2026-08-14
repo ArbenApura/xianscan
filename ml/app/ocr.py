@@ -73,7 +73,17 @@ def recognize_crop(img_bgr: np.ndarray) -> OcrResult | None:
 	h, w = img_bgr.shape[:2]
 	if h < 8 or w < 8:
 		return None
-	txts, scores, boxes = _run_engine(img_bgr)
+
+	target_h = max(32, int(np.ceil(h / 32.0) * 32))
+	target_w = max(32, int(np.ceil(w / 32.0) * 32))
+	dh = target_h - h
+	dw = target_w - w
+	padded = cv2.copyMakeBorder(
+		img_bgr, dh // 2, dh - dh // 2, dw // 2, dw - dw // 2, cv2.BORDER_CONSTANT, value=[255, 255, 255]
+	)
+	txts, scores, boxes = _run_engine(padded)
+	if not txts:
+		txts, scores, boxes = _run_engine(img_bgr)
 	if not txts:
 		return None
 	# ORDER BY (TOP EDGE, LEFT EDGE) — READING ORDER WITHIN THE CROP

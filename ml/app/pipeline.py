@@ -604,13 +604,24 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					hull_pts = hull.reshape(-1, 2).astype(np.float64)
 					_hx, _hy, hw, hh = detect.box_to_xywh(hull_pts)
 
-					# MULTI-LINE / STAT-CARD RESCUE: ONLY FOR COMPACT SINGLE-BUBBLE / CARD DETECTIONS
-					if len(sub_groups) == 1 and 1.25 * hh <= bh <= 2.6 * hh and 45 <= bh <= 260:
-						crop_res = ocr.recognize_crop(ocr.crop_region(ocr_img, box))
+					# MULTI-LINE / STAT-CARD RESCUE: FOR COMPACT SINGLE-BUBBLE / CARD DETECTIONS OR MISMATCHED SINGLE-LINE CROPS
+					needs_rescue = (
+						len(sub_groups) == 1
+						and 45 <= bh <= 280
+						and (
+							(1.25 * hh <= bh <= 2.6 * hh)
+							or s_region.confidence < 0.78
+							or (len(s_matched) == 1 and detect.is_vertical_box(hull_pts))
+						)
+					)
+					if needs_rescue:
+						crop_res = ocr.recognize_crop(ocr.crop_region(ocr_img, box, margin=2))
 						if crop_res and crop_res.text.strip():
 							crop_lines = [cl.strip() for cl in crop_res.text.split("\n") if cl.strip()]
 							current_lines = [t.strip() for _l, t, _s, _ang in s_matched if t.strip()]
-							if len(crop_lines) > len(current_lines) and crop_res.score >= 0.70:
+							if (len(crop_lines) > len(current_lines) and crop_res.score >= 0.70) or (
+								crop_res.score > s_region.confidence + 0.15 and crop_res.score >= 0.75
+							):
 								s_region.text = crop_res.text.strip()
 								s_region.confidence = max(s_region.confidence, crop_res.score)
 								s_region.polygon = [[int(px), int(py)] for px, py in box]
@@ -732,16 +743,32 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	for region in regions:
 		if final_regions and _PUNCT_ONLY.fullmatch(region.text.strip()):
 			prev = final_regions[-1]
-			# VERTICAL: THE PUNCTUATION SITS BELOW THE TEXT (X-RANGES OVERLAP, GENEROUS GAP —
+			prev_lines = [l for l in prev.text.split("\n") if l.strip()]
+			prev_line_count = max(1, len(prev_lines))
+			est_line_h = max(12.0, float(prev.box.h) / prev_line_count)
+
+			# A genuine lone punctuation mark (., ?, !) is compact (not a wide watermark banner or logo)
+			is_compact_punct = region.box.w <= max(60, int(est_line_h * 2.5)) and region.box.h <= max(80, int(est_line_h * 2.5))
+
+			# VERTICAL: THE PUNCTUATION SITS BELOW THE TEXT (X-RANGES OVERLAP, GAP WITHIN FEW LINE-HEIGHTS —
 			# BUBBLES OFTEN HAVE WHITESPACE BETWEEN THE LAST WORD AND A TRAILING ".").
+			# NEVER MERGE IF THE GAP IS ACROSS PANELS (MAX GAP SCALED BY LINE HEIGHT, NOT MULTI-LINE PARAGRAPH HEIGHT)
+			# OR IF THE PREVIOUS TEXT ALREADY HAS TERMINAL PUNCTUATION AND THE CANDIDATE IS ANOTHER DUPLICATE TERMINAL MARK.
 			v_gap = region.box.y - (prev.box.y + prev.box.h)
 			x_overlap = min(region.box.x + region.box.w, prev.box.x + prev.box.w) - max(region.box.x, prev.box.x)
-			vert_ok = v_gap <= prev.box.h * 6.0 and x_overlap >= min(region.box.w, prev.box.w) * 0.2
+			already_terminated = prev.text.rstrip().endswith(("！", "!", "。", "？", "?", "…"))
+			is_duplicate_terminal = already_terminated and region.text.strip() in "！!。.？?"
+			vert_ok = (
+				is_compact_punct
+				and not is_duplicate_terminal
+				and 0 <= v_gap <= max(est_line_h * 5.0, 180.0)
+				and x_overlap >= min(region.box.w, prev.box.w) * 0.2
+			)
 			# HORIZONTAL: THE PUNCTUATION SITS RIGHT OF THE TEXT ON THE SAME LINE (e.g. THE "？"
 			# OF "穿越者！？" — OFTEN A BIT FAR FROM THE EXCLAMATION).
 			h_gap = region.box.x - (prev.box.x + prev.box.w)
 			y_overlap = min(region.box.y + region.box.h, prev.box.y + prev.box.h) - max(region.box.y, prev.box.y)
-			horiz_ok = 0.0 <= h_gap <= prev.box.h * 2.5 and y_overlap >= region.box.h * 0.5
+			horiz_ok = is_compact_punct and 0.0 <= h_gap <= est_line_h * 2.5 and y_overlap >= region.box.h * 0.5
 			if vert_ok or horiz_ok:
 				p_text = prev.text.rstrip()
 				r_text = region.text.strip()
@@ -797,12 +824,15 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 	# 4) DISCARD EMPTY, DASH-ONLY NOISE, AND STANDALONE WATERMARK REGIONS (e.g. "速漫库", "qumanku.com")
 	_IGNORED_NOISE_RE = re.compile(r"^[—―\-_~～\s]*$")
-	final_regions = [
-		r for r in final_regions
-		if r.text.strip()
-		and not _IGNORED_NOISE_RE.fullmatch(r.text.strip())
-		and not detect.is_pure_watermark_region(r.text)
-	]
+	filtered_regions = []
+	for r in final_regions:
+		t_strip = r.text.strip()
+		if not t_strip or _IGNORED_NOISE_RE.fullmatch(t_strip) or detect.is_pure_watermark_region(t_strip):
+			continue
+		if _PUNCT_ONLY.fullmatch(t_strip) and r.box.w >= 80:
+			continue
+		filtered_regions.append(r)
+	final_regions = filtered_regions
 
 	return AnalyzeResponse(
 		width=page_w,

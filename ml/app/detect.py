@@ -263,7 +263,7 @@ _WATERMARK_RE = re.compile(
 	r'速漫库|速漫|漫库|qumanku|包子|baozimh|colamanga|colamanhua|acloudmerge|oamanhua|'
 	r'yumanhua|mangabox|comick|腾讯|微信|公众号|qq群|企鹅群|群号|'
 	r'严禁转载|独家|扫图|录入|修图|嵌字|翻译|汉化组|'
-	r'免费漫画|最新免费|漫画网|看漫画|首发|独家首发)',
+	r'免费漫画|最新免费|漫画网|看漫画|首发|独家首发|漫客栈|mkzhan)',
 	re.IGNORECASE,
 )
 
@@ -306,8 +306,8 @@ def merge_text_lines(
 	scores: list[float],
 	texts: list[str] | None = None,
 	overlap_min: float = 0.40,
-	gap_factor: float = 0.80,
-	height_sim_max: float = 2.0,
+	gap_factor: float = 0.55,
+	height_sim_max: float = 1.35,
 ) -> tuple[list[np.ndarray], list[float]]:
 	"""MERGE HORIZONTAL TEXT BOXES THAT SIT ON THE SAME LINE (PORT OF manga-image-translator's
 	textline_merge CONCEPT — THE DB REPRESENTER SPLITS ONE LINE WHEREVER THE LINE MAP DIPS).

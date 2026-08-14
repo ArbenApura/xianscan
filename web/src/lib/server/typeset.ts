@@ -180,20 +180,93 @@ function _classifyLine(line: string): TextSegment[] {
 
 export function wrapText(ctx: { measureText(t: string): { width: number } }, text: string, maxWidth: number): string[] {
 	const lines: string[] = [];
+
+	function breakLongWord(word: string): { head: string[]; tail: string } {
+		let current = word;
+		const heads: string[] = [];
+
+		// If current ends in trailing punctuation (e.g. "WORD..."), don't hyphenate into the dots
+		const punctMatch = current.match(/^(.*?)([.!?,:;~…"']+)?$/);
+		const stem = punctMatch && punctMatch[1] ? punctMatch[1] : current;
+		const trailingPunct = punctMatch && punctMatch[2] ? punctMatch[2] : '';
+
+		// If the entire word only overflows by its trailing punctuation, force it on line
+		if (ctx.measureText(current).width > maxWidth && trailingPunct) {
+			const stemWidth = ctx.measureText(stem).width;
+			if (stemWidth <= maxWidth) {
+				return { head: [], tail: current };
+			}
+		}
+
+		while (ctx.measureText(current).width > maxWidth && current.length > 1) {
+			// First, check how many characters of current fit on the boundary rect WITHOUT hyphen
+			let kRaw = current.length - 1;
+			while (kRaw > 0 && ctx.measureText(current.slice(0, kRaw)).width > maxWidth) {
+				kRaw--;
+			}
+			const overflowLetters = current.length - kRaw;
+			// STRICT RULE: If only 1 letter overflows the boundary rect (e.g. "ANOTHE" fits, only "R" overflows),
+			// force the whole word on the line without breaking!
+			if (overflowLetters <= 1) {
+				break;
+			}
+
+			// If 2 or more letters overflow, proceed to break off with a hyphen '-'
+			let k = current.length - 2;
+			while (k > 0 && ctx.measureText(current.slice(0, k) + '-').width > maxWidth) {
+				k--;
+			}
+			if (k <= 0) {
+				k = current.length - 2;
+				while (k > 0 && ctx.measureText(current.slice(0, k)).width > maxWidth) {
+					k--;
+				}
+			}
+			const remainderLen = current.length - k;
+			if (remainderLen <= 1) {
+				break;
+			}
+			if (k >= 2) {
+				const prefix = current.slice(0, k);
+				heads.push(prefix.endsWith('-') ? prefix : `${prefix}-`);
+				current = current.slice(k);
+			} else if (current.length >= 4) {
+				const prefix = current.slice(0, 2);
+				heads.push(prefix.endsWith('-') ? prefix : `${prefix}-`);
+				current = current.slice(2);
+			} else {
+				break; // Force remaining short token
+			}
+		}
+		return { head: heads, tail: current };
+	}
+
 	for (const paragraph of text.split('\n')) {
 		let current = '';
 		for (const word of paragraph.split(/\s+/)) {
 			if (!word) continue;
-			const candidate = current ? `${current} ${word}` : word;
-			if (ctx.measureText(candidate).width <= maxWidth || !current) {
-				current = candidate;
-				while (ctx.measureText(current).width > maxWidth && current.length > 1) {
-					lines.push(current.slice(0, -1));
-					current = current.slice(-1);
+			if (!current) {
+				if (ctx.measureText(word).width <= maxWidth) {
+					current = word;
+				} else {
+					const { head, tail } = breakLongWord(word);
+					lines.push(...head);
+					current = tail;
 				}
 			} else {
-				lines.push(current);
-				current = word;
+				const candidate = `${current} ${word}`;
+				if (ctx.measureText(candidate).width <= maxWidth) {
+					current = candidate;
+				} else {
+					lines.push(current);
+					if (ctx.measureText(word).width <= maxWidth) {
+						current = word;
+					} else {
+						const { head, tail } = breakLongWord(word);
+						lines.push(...head);
+						current = tail;
+					}
+				}
 			}
 		}
 		if (current) {

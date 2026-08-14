@@ -190,6 +190,14 @@
 		}
 	}
 
+	async function handleResliceComplete() {
+		resliceModalOpen = false;
+		await reload();
+		if (chapterId) {
+			await jobTracker.syncChapter(chapterId);
+		}
+	}
+
 	async function startTranslation(force = false) {
 		const pendingPages = pages.filter((p) => p.status !== 'done');
 		if (pendingPages.length === 0 && pages.length > 0 && !force) {
@@ -545,7 +553,8 @@
 	{chapterId}
 	pageCount={pages.length}
 	on:close={() => (resliceModalOpen = false)}
-	on:success={reload}
+	on:complete={handleResliceComplete}
+	on:success={handleResliceComplete}
 />
 
 <!-- CLEAR CHAPTER CONFIRMATION -->

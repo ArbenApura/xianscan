@@ -15,6 +15,7 @@
 
 	const dispatch = createEventDispatcher<{
 		complete: { originalCount: number; newCount: number };
+		success: { originalCount: number; newCount: number };
 		close: void;
 	}>();
 
@@ -130,6 +131,7 @@
 		resetStepStatuses();
 		if (wasDone) {
 			dispatch('complete', { originalCount, newCount });
+			dispatch('success', { originalCount, newCount });
 		} else {
 			dispatch('close');
 		}

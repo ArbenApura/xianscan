@@ -94,16 +94,20 @@ describe('wrapText', () => {
 		expect(lines.join(' ')).toBe('the quick brown fox jumps over the lazy dog');
 	});
 
-	it('character-breaks a single over-long word instead of dropping it', () => {
+	it('character-breaks a single over-long word instead of dropping it with hyphens', () => {
 		const lines = wrapText(ctx(), 'supercalifragilisticexpialidocious', 60);
 		expect(lines.length).toBeGreaterThan(1);
-		expect(lines.join('')).toBe('supercalifragilisticexpialidocious');
+		expect(lines.map((l) => l.replace(/-$/, '')).join('')).toBe('supercalifragilisticexpialidocious');
+		// Non-last lines should end in '-'
+		for (const line of lines.slice(0, -1)) {
+			expect(line.endsWith('-')).toBe(true);
+		}
 	});
 
 	it('wraps all words without truncation on long paragraphs', () => {
 		const long = Array.from({ length: 30 }, (_, i) => `word${i}`).join(' ');
-		const wrapped = wrapText(ctx(), long, 60);
-		expect(wrapped.length).toBeGreaterThan(8);
+		const wrapped = wrapText(ctx(), long, 140);
+		expect(wrapped.length).toBeGreaterThan(4);
 		expect(wrapped.join(' ')).toBe(long);
 	});
 
@@ -126,6 +130,25 @@ describe('wrapText', () => {
 		const lines = wrapText(measure, 'TRANSMIGRATION.. .', 160);
 		expect(lines.join('')).toBe('TRANSMIGRATION...'); // THE DOT ATTACHED WITHOUT A SPACE
 		expect(lines.some((l) => /^[.．…·!！?？]+$/.test(l))).toBe(false);
+	});
+
+	it('strictly forces word on line rather than breaking off a single letter (ANOTHER ONE DOWN!)', () => {
+		// "ANOTHER" is 70px wide (7 chars * 10px). If maxWidth is 65px (where "ANOTHE" fits without hyphen),
+		// it must NOT break off "R" onto the next line (ANOTHE / R ONE / DOWN!).
+		// It must force "ANOTHER" on line 1, wrapping to ["ANOTHER", "ONE", "DOWN!"].
+		const measure = { measureText: (t: string) => ({ width: t.length * 10 }) };
+		const lines = wrapText(measure, 'ANOTHER ONE DOWN!', 65);
+		expect(lines).toEqual(['ANOTHER', 'ONE', 'DOWN!']);
+		expect(lines.includes('ANOTHE')).toBe(false);
+		expect(lines.some((l) => l.startsWith('R '))).toBe(false);
+	});
+
+	it('allows breaking with hyphen when two or more letters break off', () => {
+		// "ANOTHER" (70px). If maxWidth is 50px (4 chars + '-' = 50px fit, remainder is "HER" = 3 chars),
+		// it breaks cleanly into ["ANOT-", "HER"].
+		const measure = { measureText: (t: string) => ({ width: t.length * 10 }) };
+		const lines = wrapText(measure, 'ANOTHER', 50);
+		expect(lines).toEqual(['ANOT-', 'HER']);
 	});
 });
 
