@@ -316,10 +316,88 @@ def test_page_828_stacked_bubble_lines_unified():
     assert bubble.box.h >= 100, f"Bubble box height should cover all 4 lines (h >= 100): {bubble.box}"
 
 
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58442.png").exists(),
+    reason="Page 58442 sample fixture not found",
+)
+def test_page_58442_numeric_prefix_preserved():
+    """Page 58442 regression test:
+    Numeric prefixes before Chinese text (e.g. '1000000恐惧值' and '售价：')
+    must be fully preserved and NOT stripped away by OCR / cleanup filters.
+    """
+    img_path = FIXTURES_DIR / "page_58442.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) >= 1, "At least 1 region must be detected on page 58442"
+    price_region = next((r for r in resp.regions if "恐惧值" in r.text or "售价" in r.text), None)
+    assert price_region is not None, "Price / Fear Value region must be detected"
+    assert "1000000" in price_region.text, f"Number '1000000' must be preserved in text: {repr(price_region.text)}"
+    assert "售价" in price_region.text, f"'售价' must be present in text: {repr(price_region.text)}"
+    assert "恐惧值" in price_region.text, f"'恐惧值' must be present in text: {repr(price_region.text)}"
+    assert price_region.text == "售价：\n1000000恐惧值", f"Expected exact text '售价：\\n1000000恐惧值', got {repr(price_region.text)}"
 
 
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58444.png").exists(),
+    reason="Page 58444 sample fixture not found",
+)
+def test_page_58444_ellipsis_trailing_segment_unified():
+    """Page 58444 regression test:
+    1. The trailing ellipsis dots of '只能换一颗土豆……' must be unified with the top bubble,
+       NOT split into a rogue separate '1' region.
+    2. All 3 speech bubbles on page 58444 must be detected cleanly as 3 separate regions.
+    """
+    img_path = FIXTURES_DIR / "page_58444.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 3, f"Expected exactly 3 dialogue regions on page 58444, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    # Bubble 1: Top speech bubble
+    b1 = next((r for r in resp.regions if "恐惧值" in r.text or "土豆" in r.text), None)
+    assert b1 is not None, "Top bubble must be detected"
+    assert "一百万恐惧值" in b1.text, f"Line 1 missing in top bubble: {repr(b1.text)}"
+    assert "只能换一颗土豆" in b1.text, f"Line 2 missing in top bubble: {repr(b1.text)}"
+
+    # Ensure no rogue '1' region exists
+    rogue_one = next((r for r in resp.regions if r.text.strip() == "1"), None)
+    assert rogue_one is None, f"Found unexpected rogue '1' region: {rogue_one}"
+
+    # Bubble 2: Middle speech bubble
+    b2 = next((r for r in resp.regions if "顶级人物" in r.text or "需要一百万" in r.text), None)
+    assert b2 is not None, "Middle bubble must be detected"
+    assert "兑换一个顶级人物" in b2.text, f"Line 1 missing in middle bubble: {repr(b2.text)}"
+    assert "需要一百万" in b2.text, f"Line 2 missing in middle bubble: {repr(b2.text)}"
+
+    # Bubble 3: Bottom speech bubble
+    b3 = next((r for r in resp.regions if "子龙" in r.text), None)
+    assert b3 is not None, "Bottom bubble must be detected"
+    assert "顶级子龙" in b3.text, f"Line 1 missing in bottom bubble: {repr(b3.text)}"
+    assert "相当于一颗土豆" in b3.text, f"Line 2 missing in bottom bubble: {repr(b3.text)}"
 
 
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58443.png").exists(),
+    reason="Page 58443 sample fixture not found",
+)
+def test_page_58443_artwork_illustration_bypassed():
+    """Page 58443 regression test:
+    1. Giant background impact artwork/numbers (e.g. '1000000' stylized red numbers behind character)
+       must be bypassed as illustration artwork and NOT mis-extracted as text/dialogue regions.
+    2. Header watermarks (e.g. 'COLAMANGA .com', 'AcloudMerge.com') must be filtered out.
+    3. The page contains no dialogue bubbles and should produce 0 dialogue regions.
+    """
+    img_path = FIXTURES_DIR / "page_58443.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
 
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 0, f"Expected 0 dialogue regions on artwork page 58443, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
 
 

@@ -365,7 +365,19 @@ def merge_text_lines(
 			min_w = min(w, lx1 - lx0)
 			is_same_line_detection = (x_inter >= 0.40 * min_w) and (overlap >= 0.40 * min_h)
 
-			if not is_same_line_detection and max(h, lh) / max(1.0, float(min_h)) > height_sim_max:
+			# TRAILING PUNCTUATION / ELLIPSIS / DASH SEGMENT:
+			# A short trailing segment (dots ……, dashes ——, punctuation) sits within the line's Y-band and immediately right of the line
+			has_words = bool(txt.strip() and _CHINESE_RE.search(txt))
+			is_trailing_segment = (
+				(overlap >= 0.70 * min_h)
+				and (x >= lx0)
+				and (gap <= gap_factor * max(h, lh))
+				and (gap >= -0.50 * max(h, lh))
+				and not has_words
+				and (h <= 0.65 * lh or w <= 160 or not txt.strip() or bool(_PUNCT_ONLY.fullmatch(txt.strip()) or _ALL_ELLIPSIS.fullmatch(txt.strip())))
+			)
+
+			if not is_same_line_detection and not is_trailing_segment and max(h, lh) / max(1.0, float(min_h)) > height_sim_max:
 				continue
 			# SUSPICIOUS X-OVERLAP GUARD: WHEN TWO BOXES OVERLAP IN X BY MORE THAN
 			# 0.30 x max_line_height (gap << 0) AND THE RESULTING UNION IS SIGNIFICANTLY
@@ -375,7 +387,7 @@ def merge_text_lines(
 			# PAGE-678: LEFT BUBBLE'S LAST LINE x=[82,210] AND RIGHT BUBBLE'S FIRST LINE
 			# x=[184,384] HAVE gap=-26, union_w=302 vs max_w=200 (1.51x) -> REJECT.
 			# A NEAR-DUPLICATE (TWO DETECTORS, SAME LINE) HAS union_w <= max_w*1.20 -> ALLOW.
-			if gap < -max(h, lh) * 0.30:
+			if gap < -max(h, lh) * 0.30 and not is_trailing_segment:
 				union_w = max(x1, lx1) - min(x, lx0)
 				if union_w > max(w, lx1 - lx0) * 1.20:
 					continue  # DIFFERENT SPEECH BUBBLES -- DO NOT HORIZONTALLY MERGE

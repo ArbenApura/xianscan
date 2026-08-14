@@ -27,6 +27,8 @@
 	import Modal from '$lib/components/ui/Modal.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import LanguagePicker from '$lib/components/ui/LanguagePicker.svelte';
+	import BatchProgressWidget from '$lib/components/BatchProgressWidget.svelte';
+	import { batchProgress } from '$lib/stores/batch-tracker';
 
 	// -- STATES -- //
 	let settingsOpen = false;
@@ -151,20 +153,31 @@
 					</a>
 				</div>
 
-				<!-- LIVE BACKGROUND TRANSLATION ACTIVITY BADGE -->
-				{#each $activeTranslatingChapters as activeJob}
-					{@const snap = activeJob.snapshot}
-					{@const total = snap?.totalPages || snap?.pages.length || 0}
-					{@const done = snap?.completedPages || 0}
+				<!-- LIVE BACKGROUND TRANSLATION ACTIVITY BADGES -->
+				{#if $batchProgress.active && ($batchProgress.status === 'running' || $batchProgress.status === 'paused')}
 					<div
-						class="flex items-center gap-1 sm:gap-1.5 rounded-full border border-[#b23a2e]/30 bg-[#b23a2e]/10 px-2 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs font-bold text-[#b23a2e] dark:text-[#e08a63] animate-pulse shadow-xs shrink-0"
-						title={`Translating chapter (${done}/${total} pages)`}
+						class="flex items-center gap-1 sm:gap-1.5 rounded-full border border-[#b23a2e]/30 bg-[#b23a2e]/10 px-2 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs font-bold text-[#b23a2e] dark:text-[#e08a63] shadow-xs shrink-0"
+						title={`Batch translating: ${$batchProgress.completedChapters}/${$batchProgress.totalChapters} chapters complete`}
 					>
-						<span class="h-1.5 w-1.5 rounded-full bg-[#b23a2e] dark:bg-[#e08a63]"></span>
-						<span class="hidden sm:inline">Translating</span>
-						<span class="font-mono text-[10px] sm:text-xs">({done}/{total})</span>
+						<span class={`h-1.5 w-1.5 rounded-full bg-[#b23a2e] dark:bg-[#e08a63] ${$batchProgress.status === 'running' ? 'animate-ping' : ''}`}></span>
+						<span class="hidden sm:inline">Batch</span>
+						<span class="font-mono text-[10px] sm:text-xs">({$batchProgress.completedChapters}/{$batchProgress.totalChapters} chs)</span>
 					</div>
-				{/each}
+				{:else}
+					{#each $activeTranslatingChapters as activeJob}
+						{@const snap = activeJob.snapshot}
+						{@const total = snap?.totalPages || snap?.pages.length || 0}
+						{@const done = snap?.completedPages || 0}
+						<div
+							class="flex items-center gap-1 sm:gap-1.5 rounded-full border border-[#b23a2e]/30 bg-[#b23a2e]/10 px-2 sm:px-2.5 py-0.5 sm:py-1 text-[11px] sm:text-xs font-bold text-[#b23a2e] dark:text-[#e08a63] animate-pulse shadow-xs shrink-0"
+							title={`Translating chapter (${done}/${total} pages)`}
+						>
+							<span class="h-1.5 w-1.5 rounded-full bg-[#b23a2e] dark:bg-[#e08a63]"></span>
+							<span class="hidden sm:inline">Translating</span>
+							<span class="font-mono text-[10px] sm:text-xs">({done}/{total})</span>
+						</div>
+					{/each}
+				{/if}
 			</div>
 
 			<!-- RIGHT: TACTILE THEME TOGGLE & SETTINGS BUTTONS -->
@@ -206,7 +219,11 @@
 	<main class="mx-auto w-full max-w-6xl px-4 pt-6 pb-16 sm:px-6">
 		<slot />
 	</main>
+
+	<!-- PERSISTENT FLOATING BATCH TRANSLATION WIDGET -->
+	<BatchProgressWidget />
 </div>
+
 
 <!-- GLOBAL SETTINGS & PREFERENCES MODAL -->
 <Modal open={settingsOpen} title="Preferences & Model Configuration" size="sm" on:close={() => (settingsOpen = false)}>

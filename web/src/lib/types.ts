@@ -190,3 +190,33 @@ export interface ChapterJobSnapshot {
 	pages: PageProgressState[];
 }
 
+export interface BatchChapterItem {
+	id: number;
+	seq: number;
+	title: string;
+	titleTarget?: string | null;
+	pageCount: number;
+	status: 'queued' | 'reslicing' | 'processing' | 'done' | 'error' | 'skipped';
+	error?: string | null;
+	translatedPages?: number;
+	totalPages?: number;
+	resliceMessage?: string | null;
+}
+
+export interface BatchTranslationState {
+	active: boolean;
+	status: 'idle' | 'running' | 'paused' | 'completed' | 'cancelled';
+	bookId: string | null;
+	bookTitle: string | null;
+	queue: BatchChapterItem[];
+	currentIndex: number;
+	currentPhase?: 'reslice' | 'translate';
+	force: boolean;
+	startedAt: number | null;
+	completedAt: number | null;
+	totalCostUsd: number;
+	totalPromptTokens: number;
+	totalCompletionTokens: number;
+}
+
+

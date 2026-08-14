@@ -40,7 +40,7 @@ export interface PageTranslation {
 // -- CONSTANTS -- //
 
 // PART OF THE CACHE KEY — BUMP WHEN THE PROMPTS CHANGE SO STALE CACHED TRANSLATIONS NEVER RESURFACE.
-export const PROMPT_VERSION = 'v7';
+export const PROMPT_VERSION = 'v9';
 
 // A TRANSLATION LONGER THAN 6× THE SOURCE IS ALMOST CERTAINLY THE MODEL REWRITING THE PROMPT / ADDING
 // EXPLANATIONS — FLAGGED FOR A REFILL (SAME HEURISTIC AS xianslate's looksOverExpanded).
@@ -82,6 +82,13 @@ Manhua Conversation & Dialogue Style:
   * sfx: Comic onomatopoeia in ALL-CAPS (e.g. 轰 → BOOM!, 呼 → WHOOSH!, 唰 → SWOOSH!, 砰 → THUD!, 咔嚓 → CRACK!, 哐当 → CLANG!).
   * other: UI, system prompts, stat cards, or narrator captions.
 
+Character Names & Multi-Name Listings:
+- Chinese Name Segmentation: Chinese personal names (courtesy names, given names, full names) are typically 2 or 3 characters each (e.g. 子龙, 童菲, 张飞/张肥, 关羽/关鱼, 赵云, 诸葛亮).
+- Consecutive Name Listings & Sparse Punctuation: In military orders, roster listings, and dialogue, multiple names are frequently written back-to-back with sparse or missing punctuation (e.g. "子龙童菲，张肥关鱼" or "刘关张").
+  * NEVER combine adjacent 2-character names into a single 4-character compound name (e.g. "子龙童菲" represents TWO separate persons "Zilong" and "Tong Fei", NOT "Zilong Tongfei"; "张肥关鱼" represents TWO separate persons "Zhang Fei" and "Guan Yu", NOT "Zhang Fei Guan Yu").
+  * When translating name series, render all individuals clearly separated with proper punctuation and conjunctions (e.g. "子龙童菲，张肥关鱼" → "Zilong, Tong Fei, Zhang Fei, and Guan Yu").
+- Parody, Homophone & OCR Typo Names: In comedic, parody, or OCR'd manhua, character names may appear as homophones or humorous variants (e.g. 张肥 for 张飞 / Zhang Fei, 关鱼 for 关羽 / Guan Yu). Recognize these as individual character names rather than literal common nouns ("fat", "fish") and translate them cleanly as names.
+
 Punctuation & Reaction Bubbles:
 - NEVER invent or use em-dashes (— or --) for pauses, thinking, or sentence breaks. Use natural commas (,), periods (.), or ellipses (...) matching the source punctuation.
 - Character Speech & Reaction Bubbles: If a dialogue region contains ellipses, exclamation marks, question marks, or reaction punctuation (e.g. "……", "……！", "……？", "？！", "！", "？"), ALWAYS translate it to natural ${tgtName} punctuation (e.g. "...", "...!", "...?", "?!", "!", "?"). Do NOT return an empty string for character speech or pause bubbles!
@@ -108,7 +115,7 @@ Wuxia/manhua stat-panel and item-card rules (apply when the text has 【】title
 - Rarity grade words (传说级, 史诗级, 稀有级, 精良级, 普通级, 神话级, etc.) → translate as LEGENDARY, EPIC, RARE, FINE, COMMON, MYTHIC etc. Keep fused with item type on same line.
 - Parenthetical qualifiers （改良版）, （强化版）, （威力加强版）etc. → translate as (IMPROVED VERSION), (ENHANCED VERSION), (POWER-ENHANCED VERSION) etc., on their OWN line immediately after the rarity+type or title line. Always keep the () parentheses in the output.
 - Body/description paragraphs: use natural sentence case (not all-caps). Punctuate naturally.
-- Preserve all \\n line breaks from the source text in the translation so the panel layout is maintained.
+- Preserve all \n line breaks from the source text in the translation so the panel layout is maintained.
 - Flavour remarks starting with * (e.g. *食我压路机哒！) → keep the * prefix, translate in the character's voice.
 
 Reply with ONLY a JSON object; no markdown fences, no commentary.`;
@@ -291,7 +298,8 @@ Rules:
 3. "category": 'character', 'location', 'organization', 'technique', 'item', 'realm', 'creature', 'title', 'concept', 'other'.
 4. "gender": 'masculine' or 'feminine' ONLY when the text explicitly indicates it (pronouns, titles like master/sister/brother/prince); otherwise 'neuter'.
 5. "aliases": Array of other short forms, nicknames, or forms of address in the text (e.g. for 叶凡, aliases: ["小凡", "凡儿"]).
-6. Skip generic words, common dialogue phrases, numbers, and pronouns. Focus on recurring proper nouns, character names, and unique terminology.`;
+6. Skip generic words, common dialogue phrases, numbers, and pronouns. Focus on recurring proper nouns, character names, and unique terminology.
+7. Multi-name listings: In dialogue or narration where multiple character names are listed back-to-back with minimal or no punctuation (e.g. 子龙童菲, 张肥关鱼), extract each individual 2-3 character name separately (e.g. 子龙, 童菲, 张肥, 关鱼), never combine them into a single compound entry.`;
 }
 
 // ROBUST PARSE: ACCEPT CLEAN JSON, A BARE ARRAY, OR A TRUNCATED RESPONSE (SALVAGE COMPLETE {…} OBJECTS)

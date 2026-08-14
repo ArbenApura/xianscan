@@ -18,6 +18,9 @@ This directory stores permanent, version-controlled image samples used by `pytes
 | [`page_1070.png`](page_1070.png) | 800 × 2264 | Chapter 17 / Page 1070 | **SFX / Monologue Bubble Separation**: Prevents adjacent floating SFX text (*"打量"*) on the same horizontal row from merging with speech bubble dialogue lines (*"我看，太无礼"*), keeping the monologue bubble unified. |
 | [`page_1088.jpg`](page_1088.jpg) | 800 × 1132 | Chapter 25 / Page 1088 | **Multi-line Bubble Paragraph Unification**: Ensures multi-line dialogue bubbles (*"我会成为像叶墨大..."* and *"虽然我天赋很差..."*) remain completely intact without splitting off trailing lines or sub-sentences. |
 | [`page_1097.jpg`](page_1097.jpg) | 800 × 1132 | Chapter 25 / Page 1097 | **Diagonal / Slanted Line Angle Detection**: Ensures slanted vertical/diagonal text columns (*"面对另外一处处在尴尬位置的淤青，聂离……"*) detect their diagonal orientation angle so translated text flows naturally along the angle. |
+| [`page_58442.png`](page_58442.png) | 900 × 1641 | Chapter 35 / Page 58442 | **Alphanumeric & Numeric Prefix Preservation**: Ensures numbers and stat counts preceding Chinese text (*"1000000恐惧值"*) are preserved without being stripped. |
+| [`page_58443.png`](page_58443.png) | 900 × 2203 | Chapter 35 / Page 58443 | **Giant Artwork & Watermark Bypass**: Ensures large background illustration impact numbers (*"1000000"* art drawing) and watermarks are bypassed with 0 false regions. |
+| [`page_58444.png`](page_58444.png) | 900 × 1029 | Chapter 35 / Page 58444 | **Trailing Ellipsis Unification**: Ensures trailing ellipsis dots (*"……"*) are unified with dialogue bubbles rather than split into rogue *'1'* false detections. |
 
 ---
 

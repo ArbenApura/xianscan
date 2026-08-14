@@ -103,8 +103,49 @@ def analyze(image: UploadFile = File(...)) -> dict:
         img = pipeline.decode_image(data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    result = pipeline.analyze_image(img)
-    return result.model_dump()
+
+    try:
+        result = pipeline.analyze_image(img)
+        return result.model_dump()
+    except Exception as e:
+        logger.exception("Error analyzing image: %s. Using robust fallback OCR.", e)
+        try:
+            from . import detect, ocr
+
+            page_h, page_w = img.shape[:2]
+            rapid_lines = ocr.recognize_full(img)
+            fallback_regions = []
+            for idx, (pts, t, score) in enumerate(rapid_lines):
+                x, y, w, h = detect.box_to_xywh(pts)
+                if w > 0 and h > 0 and t.strip():
+                    fallback_regions.append(
+                        pipeline.Region(
+                            id=f"r{idx}",
+                            box=pipeline.Box(x=x, y=y, w=w, h=h),
+                            polygon=[[int(p[0]), int(p[1])] for p in pts],
+                            category=detect.classify_region(pts, page_w, page_h),
+                            text=t.strip(),
+                            confidence=float(score),
+                            vertical=detect.is_vertical_box(pts),
+                            angle=detect.calculate_box_angle(pts),
+                        )
+                    )
+            return pipeline.AnalyzeResponse(
+                width=page_w,
+                height=page_h,
+                regions=fallback_regions,
+                backend="rapidocr-fallback",
+            ).model_dump()
+        except Exception as e2:
+            logger.exception("Direct fallback OCR also failed: %s", e2)
+            page_h, page_w = img.shape[:2] if img is not None else (1000, 800)
+            return pipeline.AnalyzeResponse(
+                width=page_w,
+                height=page_h,
+                regions=[],
+                backend="empty-fallback",
+            ).model_dump()
+
 
 
 @app.post("/pages/preprocess")

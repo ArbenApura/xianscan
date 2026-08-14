@@ -41,6 +41,8 @@ describe('systemPrompt', () => {
 		expect(p).toMatch(/manhua/);
 		expect(p).toMatch(/JSON object/);
 		expect(p).toContain('zh-Hans');
+		expect(p).toContain('Character Names & Multi-Name Listings');
+		expect(p).toContain('Chinese Name Segmentation');
 	});
 });
 
