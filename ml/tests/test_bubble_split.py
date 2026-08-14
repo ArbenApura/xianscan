@@ -234,6 +234,41 @@ def test_page_1070_sfx_not_merged_into_monologue_bubble():
     assert sfx.box.x < 400, f"SFX box should be on the left (x ~ 345): {sfx.box}"
 
 
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_1088.jpg").exists(),
+    reason="Page 1088 sample fixture not found",
+)
+def test_page_1088_bubble_paragraphs_unified():
+    """Page 1088 regression test:
+    1. Left bubble ('虽然我天赋很差，\\n那又怎样？\\n迟早\\n有一天，') must NOT be split into two.
+    2. Right bubble ('我会成为像叶墨大\\n人那样的传奇妖灵\\n师,而且我要娶光辉\\n之城最美的女人！')
+       must NOT split '之城最美的女人！' into a separate region.
+    """
+    img_path = FIXTURES_DIR / "page_1088.jpg"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    # 1. Left bubble test
+    left_bubble = next((r for r in resp.regions if "天赋很差" in r.text or "那又怎样" in r.text), None)
+    assert left_bubble is not None, "Left speech bubble must be detected"
+    assert "天赋很差" in left_bubble.text, f"Line 1 '天赋很差' missing: {repr(left_bubble.text)}"
+    assert "那又怎样" in left_bubble.text, f"Line 2 '那又怎样' missing: {repr(left_bubble.text)}"
+    assert "有一天" in left_bubble.text, f"Line 3 '有一天' missing: {repr(left_bubble.text)}"
+    assert left_bubble.box.h >= 80, f"Left bubble should span all 3 lines (h >= 80): {left_bubble.box}"
+
+    # 2. Right bubble test
+    right_bubble = next((r for r in resp.regions if "叶墨" in r.text or "最美的女人" in r.text), None)
+    assert right_bubble is not None, "Right speech bubble must be detected"
+    assert "我会成为像叶墨" in right_bubble.text or "叶墨" in right_bubble.text, f"Line 1 missing: {repr(right_bubble.text)}"
+    assert "传奇妖灵" in right_bubble.text, f"Line 2 missing: {repr(right_bubble.text)}"
+    assert "而且我要娶光辉" in right_bubble.text or "娶光辉" in right_bubble.text, f"Line 3 missing: {repr(right_bubble.text)}"
+    assert "最美的女人" in right_bubble.text, f"Line 4 '最美的女人' missing: {repr(right_bubble.text)}"
+    assert right_bubble.box.h >= 130, f"Right bubble should span all 4 lines (h >= 130): {right_bubble.box}"
+
+
+
 
 
 

@@ -297,6 +297,9 @@
 			if (!resp.ok) throw new Error('Upload failed');
 			const { added } = await resp.json();
 			toast.success(`${added} page${added === 1 ? '' : 's'} uploaded.`);
+			if (!currentJobState.running) {
+				jobTracker.clearJob(chapterId);
+			}
 			await reload();
 		} catch {
 			toast.error('Upload failed.');
@@ -313,6 +316,9 @@
 			if (!resp.ok) throw new Error('Delete failed');
 			toast.success(`Page ${pageToDelete.seq + 1} deleted.`);
 			pageToDelete = null;
+			if (!currentJobState.running) {
+				jobTracker.clearJob(chapterId);
+			}
 			await reload();
 		} catch {
 			toast.error('Could not delete page.');
@@ -325,16 +331,18 @@
 		const nextPg = pages[idx + 1];
 
 		try {
-			const resp = await fetch(`/api/chapters/${chapterId}/pages/stitch`, {
+			const resp = await fetch(`/api/pages/${pg.id}/stitch`, {
 				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ topPageId: pg.id, bottomPageId: nextPg.id }),
 			});
-			if (!resp.ok) throw new Error('Stitch failed');
+			if (!resp.ok) {
+				const err = await resp.json().catch(() => ({}));
+				throw new Error(err.message || 'Stitch failed');
+			}
 			toast.success(`Merged Page ${pg.seq + 1} and Page ${nextPg.seq + 1}.`);
+			reloadKey = Date.now();
 			await reload();
-		} catch {
-			toast.error('Could not merge pages.');
+		} catch (e) {
+			toast.error((e as Error).message || 'Could not merge pages.');
 		}
 	}
 

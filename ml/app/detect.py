@@ -346,13 +346,19 @@ def merge_text_lines(
 				continue
 			lh = ly1 - ly0
 			min_h = min(h, lh)
-			if max(h, lh) / max(1.0, float(min_h)) > height_sim_max:
-				continue
 			overlap = min(y1, ly1) - max(y, ly0)
 			if overlap < overlap_min * min_h:
 				continue
 			gap = x - lx1
 			if gap > gap_factor * max(h, lh):
+				continue
+
+			# CO-LOCATED DETECTION (TWO DETECTORS / UNION ON SAME LINE):
+			x_inter = min(x1, lx1) - max(x, lx0)
+			min_w = min(w, lx1 - lx0)
+			is_same_line_detection = (x_inter >= 0.40 * min_w) and (overlap >= 0.40 * min_h)
+
+			if not is_same_line_detection and max(h, lh) / max(1.0, float(min_h)) > height_sim_max:
 				continue
 			# SUSPICIOUS X-OVERLAP GUARD: WHEN TWO BOXES OVERLAP IN X BY MORE THAN
 			# 0.30 x max_line_height (gap << 0) AND THE RESULTING UNION IS SIGNIFICANTLY
@@ -545,7 +551,7 @@ def deduplicate_boxes(
 			max_area = max(box_area, karea)
 			overlap_ratio = inter / min_area if min_area > 0 else 0.0
 
-			if iou >= iou_thresh or (overlap_ratio >= 0.60 and max_area / min_area <= 2.5):
+			if iou >= iou_thresh or overlap_ratio >= 0.70 or (overlap_ratio >= 0.60 and max_area / min_area <= 2.5):
 				ux0 = min(x0, kx0)
 				uy0 = min(y0, ky0)
 				ux1 = max(x0 + w, kx0 + kw)

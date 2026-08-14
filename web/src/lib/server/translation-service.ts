@@ -313,6 +313,7 @@ export function startChapterJob(chapterId: number, work: ChapterJobWork, opts: {
 		cancelledPages: new Set(),
 	};
 
+	retainedSnapshots.delete(key);
 	jobs.set(key, job);
 	void run(key, chapterId, work, [{ type: 'start', chapterId }]);
 	return toHandle(job);

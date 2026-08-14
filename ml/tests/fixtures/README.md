@@ -14,6 +14,7 @@ This directory stores permanent, version-controlled image samples used by `pytes
 | [`page_1057.png`](page_1057.png) | 800 × 2284 | Chapter 16 / Page 1057 | **Panel-Bounded Punctuation**: Prevents distant bottom-right watermark stamps (*"漫客栈"*) from being swallowed as trailing punctuation into panel-2 bubbles across panels. |
 | [`page_1062.png`](page_1062.png) | 800 × 2264 | Chapter 16 / Page 1062 | **Vertical Multi-Line Bubble Rescue**: Ensures compact vertical bubbles (*"又干\n掉一\n只！"*) are recognized as 3 distinct lines rather than misread into garbled 1-line text (*"对期"*). |
 | [`page_1070.png`](page_1070.png) | 800 × 2264 | Chapter 17 / Page 1070 | **SFX / Monologue Bubble Separation**: Prevents adjacent floating SFX text (*"打量"*) on the same horizontal row from merging with speech bubble dialogue lines (*"我看，太无礼"*), keeping the monologue bubble unified. |
+| [`page_1088.jpg`](page_1088.jpg) | 800 × 1132 | Chapter 25 / Page 1088 | **Multi-line Bubble Paragraph Unification**: Ensures multi-line dialogue bubbles (*"我会成为像叶墨大..."* and *"虽然我天赋很差..."*) remain completely intact without splitting off trailing lines or sub-sentences. |
 
 ---
 

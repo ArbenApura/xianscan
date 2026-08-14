@@ -611,7 +611,7 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		if (!rawText) continue;
 
 		const bg = sampleBackground(img, r.box.x, r.box.y, r.box.w, r.box.h);
-		const color = pickTextColor(bg);
+		let color = pickTextColor(bg);
 
 		// STAT-PANEL PATH — structured multi-segment rendering
 		const statSegments = parseStatPanel(rawText);
@@ -623,6 +623,25 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		// STANDARD PATH — flat uppercase word-wrap
 		const text = rawText.toUpperCase();
 		const { x, y, w, h } = r.box;
+
+		// TINY ACTION/EMOTE BADGE (e.g. "转", "汗", "!", size <= 32px):
+		// When inpainting erases a circular emote sticker on dark artwork/grass,
+		// restore a clean pure white circular badge backing without border.
+		const isTinyBadge = Math.max(w, h) <= 32 && r.category !== 'mono';
+		if (isTinyBadge) {
+			const cx = x + w / 2;
+			const cy = y + h / 2;
+			const rx = Math.max(10, w / 2 + 2);
+			const ry = Math.max(10, h / 2 + 2);
+			ctx.save();
+			ctx.beginPath();
+			ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+			ctx.fillStyle = '#ffffff';
+			ctx.fill();
+			ctx.restore();
+			color = { fill: '#111111', stroke: '#ffffff' };
+		}
+
 		const font = fontFor(r.category, text);
 		const startSize = Math.max(MIN_FONT_SIZE, Math.min(w, h) * (r.category === 'sfx' ? 0.6 : 0.45) * scale);
 
@@ -634,7 +653,8 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		const maxSize = Math.min(rawMax, categoryCap);
 		const size = fitFontSize(ctx, text, font, w, h, startSize, maxSize);
 		ctx.font = fontSpec(size, font);
-		const maxW = Math.max(10, w * (1 - 2 * BOX_INSET));
+		const isSingleWord = !text.includes(' ') && !text.includes('\n');
+		const maxW = Math.max(10, isSingleWord && w <= 60 ? w - 4 : w * (1 - 2 * BOX_INSET));
 		const lines = reflowText(ctx, text, maxW);
 		const lineH = size * LINE_HEIGHT;
 		const totalH = lines.length * lineH;
@@ -645,7 +665,11 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		ctx.save();
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'alphabetic';
-		ctx.lineWidth = Math.max(OUTLINE_MIN, size * OUTLINE_FACTOR);
+		
+		// On light dialogue bubbles (black text), avoid thick white stroke that erodes thin glyph stems.
+		const isBlackOnLight = color.fill === 'black' || color.fill === '#111111';
+		const needsStroke = !isBlackOnLight || size > 14;
+		ctx.lineWidth = isBlackOnLight ? 1 : (size < 9 ? 1 : Math.max(OUTLINE_MIN, size * OUTLINE_FACTOR));
 		ctx.lineJoin = 'round';
 		ctx.strokeStyle = color.stroke;
 		ctx.fillStyle = color.fill;
@@ -657,7 +681,7 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 			ctx.rotate((angleDeg * Math.PI) / 180);
 			let ty = -totalH / 2 + size * 0.85;
 			for (const line of lines) {
-				ctx.strokeText(line, 0, ty);
+				if (needsStroke) ctx.strokeText(line, 0, ty);
 				ctx.fillText(line, 0, ty);
 				ty += lineH;
 			}
@@ -665,7 +689,7 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 			const tx = x + w / 2;
 			let ty = y + (h - totalH) / 2 + size * 0.85;
 			for (const line of lines) {
-				ctx.strokeText(line, tx, ty);
+				if (needsStroke) ctx.strokeText(line, tx, ty);
 				ctx.fillText(line, tx, ty);
 				ty += lineH;
 			}

@@ -278,6 +278,29 @@ describe('typesetPage', () => {
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 	});
 
+	it('renders tiny action/emote badge with clean white circle backing and legible text', async () => {
+		// Small 20x20 action badge (e.g. "TURN" / "转") on a dark grass background
+		const out = await typesetPage(blankPng(200, 200, 'black'), [
+			{ id: 'r0', box: { x: 90, y: 90, w: 20, h: 20 }, text: 'TURN', category: 'sfx' },
+		]);
+		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+		const img = await loadImage(out);
+		const probe = createCanvas(img.width, img.height);
+		const px = probe.getContext('2d');
+		px.drawImage(img, 0, 0);
+		// Inside the badge at center (100, 100), there should be white backing and dark text
+		const data = px.getImageData(88, 88, 24, 24).data;
+		let whitePixels = 0;
+		let darkPixels = 0;
+		for (let i = 0; i < data.length; i += 4) {
+			const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+			if (r > 200 && g > 200 && b > 200) whitePixels++;
+			if (r < 50 && g < 50 && b < 50) darkPixels++;
+		}
+		expect(whitePixels).toBeGreaterThan(50); // White circle backing was drawn
+		expect(darkPixels).toBeGreaterThan(5); // Dark text glyphs were drawn
+	});
+
 	it('renders an angled/rotated region with rotation transform', async () => {
 		const out = await typesetPage(blankPng(400, 400, 'black'), [
 			{ id: 'r0', box: { x: 50, y: 50, w: 300, h: 100 }, text: 'SLASH!', category: 'sfx', angle: 35.5 },

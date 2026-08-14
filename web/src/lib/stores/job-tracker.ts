@@ -54,6 +54,12 @@ function createJobTrackerStore() {
 		if (event.type === 'start') {
 			s.status = 'running';
 			s.startedAt = now;
+			s.completedPages = 0;
+			s.failedPages = 0;
+			s.totalCostUsd = 0;
+			s.totalPromptTokens = 0;
+			s.totalCompletionTokens = 0;
+			s.cacheHitCount = 0;
 			if (typeof event.totalPages === 'number') s.totalPages = event.totalPages;
 			if (Array.isArray(event.pages) && event.pages.length > 0) {
 				s.totalPages = event.pages.length;
@@ -64,6 +70,7 @@ function createJobTrackerStore() {
 					status: (p.status as any) || 'pending',
 					timings: {},
 				}));
+				s.completedPages = s.pages.filter((p) => p.status === 'done').length;
 			}
 		} else if (event.type === 'phase-change' && typeof event.phase === 'string') {
 			s.currentPhase = event.phase as any;
@@ -245,6 +252,7 @@ function createJobTrackerStore() {
 					[chapterId]: {
 						...existing,
 						running: true,
+						snapshot: opts.method === 'POST' ? null : existing.snapshot,
 						connectionState: existing.reconnectAttempts > 0 ? 'reconnecting' : 'connecting',
 					},
 				},
