@@ -5,7 +5,10 @@
 	import { toast } from 'svelte-sonner';
 	import { Button, TextField, Modal, ConfirmDialog, ActionMenu, LanguagePicker, Toggle, LazyImage, Badge } from '$lib/components/ui';
 	import { ripple } from '$lib/actions/ripple';
-	import { settings } from '$lib/stores/settings';
+	import { settings, THEME_POPOVER, THEME_PANEL_BORDER } from '$lib/stores/settings';
+	import { cn } from '$lib/utils/cn';
+	import { fly } from 'svelte/transition';
+	import { cubicOut } from 'svelte/easing';
 	// IMPORTED ICONS
 	import BookOpen from 'lucide-svelte/icons/book-open';
 	import Plus from 'lucide-svelte/icons/plus';
@@ -22,6 +25,12 @@
 	import LayoutGrid from 'lucide-svelte/icons/layout-grid';
 	import List from 'lucide-svelte/icons/list';
 	import AlignJustify from 'lucide-svelte/icons/align-justify';
+	import ArrowUpDown from 'lucide-svelte/icons/arrow-up-down';
+	import ChevronDown from 'lucide-svelte/icons/chevron-down';
+	import Check from 'lucide-svelte/icons/check';
+	import X from 'lucide-svelte/icons/x';
+	import Languages from 'lucide-svelte/icons/languages';
+	import { apiJson } from '$lib/api';
 
 	// -- TYPES -- //
 
@@ -41,7 +50,7 @@
 		targetLang: string;
 		pinned?: boolean;
 		archived?: boolean;
-		chapterCount: number;
+		chapterCount?: number;
 		translatedChapterCount?: number;
 		pageCount?: number;
 		translatedPageCount?: number;
@@ -51,6 +60,23 @@
 		updatedAt?: number;
 		createdAt?: number;
 	}
+
+	function handleGlobalKeydown(e: KeyboardEvent) {
+		if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+			e.preventDefault();
+			searchInputEl?.focus();
+		}
+	}
+
+	type SortOption = 'recent' | 'title_asc' | 'title_desc' | 'chapters_desc' | 'chapters_asc';
+
+	const sortOptions: { value: SortOption; label: string; shortLabel: string }[] = [
+		{ value: 'recent', label: 'Recently Updated', shortLabel: 'Recent' },
+		{ value: 'title_asc', label: 'Title (A → Z)', shortLabel: 'Title A–Z' },
+		{ value: 'title_desc', label: 'Title (Z → A)', shortLabel: 'Title Z–A' },
+		{ value: 'chapters_desc', label: 'Most Chapters', shortLabel: 'Most Ch.' },
+		{ value: 'chapters_asc', label: 'Fewest Chapters', shortLabel: 'Fewest Ch.' }
+	];
 
 	// -- STATES -- //
 
@@ -62,8 +88,11 @@
 	let targetLang = $settings.targetLang;
 	let creating = false;
 	let searchQuery = '';
+	let searchInputEl: HTMLInputElement;
 	let createModalOpen = false;
 	let activeTab: 'all' | 'active' | 'pinned' | 'archived' = 'active';
+	let sortBy: SortOption = 'recent';
+	let sortMenuOpen = false;
 
 	// VIEW LAYOUT MODES: 'grid' (Comfortable Cards) | 'list' (Media List Rows) | 'compact' (Dense Table Rows)
 	let viewLayout: 'grid' | 'list' | 'compact' = 'grid';
@@ -78,6 +107,8 @@
 	let editPinned = false;
 	let editArchived = false;
 	let updating = false;
+	let translatingTitle = false;
+	let translatingEditTitle = false;
 
 	// DELETION CONFIRMATION
 	let bookToDelete: Book | null = null;
@@ -93,7 +124,7 @@
 
 	onMount(() => {
 		try {
-			const saved = localStorage.getItem('manhua:libraryViewLayout');
+			const saved = localStorage.getItem('xianscan:libraryViewLayout') || localStorage.getItem('manhua:libraryViewLayout');
 			if (saved === 'grid' || saved === 'list' || saved === 'compact') {
 				viewLayout = saved;
 			}
@@ -106,7 +137,7 @@
 	function setViewLayout(mode: 'grid' | 'list' | 'compact') {
 		viewLayout = mode;
 		try {
-			localStorage.setItem('manhua:libraryViewLayout', mode);
+			localStorage.setItem('xianscan:libraryViewLayout', mode);
 		} catch {
 			// ignore
 		}
@@ -194,6 +225,65 @@
 			toast.error('Could not update the book.');
 		} finally {
 			updating = false;
+		}
+	}
+
+	async function translateNewTitle() {
+		const src = title.trim();
+		if (!src) {
+			toast.error('Enter a book title to translate.');
+			return;
+		}
+		translatingTitle = true;
+		try {
+			const res = await apiJson<{ text: string }>('/api/translate-text', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					text: src,
+					kind: 'title',
+					sourceLang,
+					targetLang,
+				}),
+			});
+			if (res.text) {
+				titleTarget = res.text;
+				toast.success('Title translated!');
+			}
+		} catch (err: any) {
+			toast.error(err?.message || 'Could not translate title.');
+		} finally {
+			translatingTitle = false;
+		}
+	}
+
+	async function translateEditTitle() {
+		const src = editTitle.trim();
+		if (!src) {
+			toast.error('Enter a book title to translate.');
+			return;
+		}
+		translatingEditTitle = true;
+		try {
+			const res = await apiJson<{ text: string }>('/api/translate-text', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					text: src,
+					kind: 'title',
+					sourceLang: editSourceLang,
+					targetLang: editTargetLang,
+					bookId: editingBook?.id,
+				}),
+			});
+			if (res.text) {
+				editTitleTarget = res.text;
+				toast.success('Title translated!');
+			}
+		} catch (err: any) {
+			toast.error(err?.message || 'Could not translate title.');
+		} finally {
+			translatingEditTitle = false;
 		}
 	}
 
@@ -324,6 +414,14 @@
 		};
 	}
 
+	function cycleSort() {
+		if (sortBy === 'recent') sortBy = 'title_asc';
+		else if (sortBy === 'title_asc') sortBy = 'title_desc';
+		else if (sortBy === 'title_desc') sortBy = 'chapters_desc';
+		else if (sortBy === 'chapters_desc') sortBy = 'chapters_asc';
+		else sortBy = 'recent';
+	}
+
 	// REACTIVE FILTERED & SORTED BOOKS (PINNED FLOATS TO TOP)
 	$: filteredBooks = books
 		.filter((b) => {
@@ -346,16 +444,37 @@
 			const pinA = a.pinned ? 1 : 0;
 			const pinB = b.pinned ? 1 : 0;
 			if (pinA !== pinB) return pinB - pinA;
+
+			if (sortBy === 'title_asc') {
+				const titleA = (a.titleTarget || a.title).toLowerCase();
+				const titleB = (b.titleTarget || b.title).toLowerCase();
+				return titleA.localeCompare(titleB);
+			}
+			if (sortBy === 'title_desc') {
+				const titleA = (a.titleTarget || a.title).toLowerCase();
+				const titleB = (b.titleTarget || b.title).toLowerCase();
+				return titleB.localeCompare(titleA);
+			}
+			if (sortBy === 'chapters_desc') {
+				return (b.chapterCount || 0) - (a.chapterCount || 0);
+			}
+			if (sortBy === 'chapters_asc') {
+				return (a.chapterCount || 0) - (b.chapterCount || 0);
+			}
+			// default 'recent'
 			return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 		});
 
-	$: totalChapters = books.reduce((sum, b) => sum + (b.chapterCount || 0), 0);
 	$: pinnedCount = books.filter((b) => b.pinned && !b.archived).length;
 	$: archivedCount = books.filter((b) => b.archived).length;
+	$: popover = THEME_POPOVER[$settings.theme];
+	$: popoverBorder = THEME_PANEL_BORDER[$settings.theme];
 </script>
 
+<svelte:window on:keydown={handleGlobalKeydown} />
+
 <svelte:head>
-	<title>Library — Manhua Translator</title>
+	<title>Library — Xianscan</title>
 </svelte:head>
 
 <!-- LIBRARY DASHBOARD -->
@@ -374,158 +493,209 @@
 		</div>
 	</div>
 
-	<!-- STATS SUMMARY BAR -->
-	<div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-		<div class="rounded-2xl border border-black/[0.06] bg-white/50 p-4 backdrop-blur dark:border-white/[0.06] dark:bg-white/[0.03]">
-			<div class="flex items-center gap-2 text-xs font-semibold opacity-60">
-				<BookOpen size={14} class="text-[#b23a2e] dark:text-[#e08a63]" /> Total Series
+	<!-- UNIFIED ADAPTIVE COMMAND BAR -->
+	<div class="flex flex-col gap-2.5">
+		<!-- COMMAND BAR CONTAINER -->
+		<div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2.5">
+			<!-- CONTROLS ROW (ON MOBILE: PLACED TOP FOR QUICK REACH; ON DESKTOP: SITS ON THE RIGHT) -->
+			<div class="order-1 md:order-2 flex items-center gap-2">
+				<!-- SEARCH INPUT -->
+				<div class="relative flex-1 sm:w-56 md:w-60 lg:w-72">
+					<Search size={14} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-black/40 dark:text-white/40" />
+					<input
+						bind:this={searchInputEl}
+						bind:value={searchQuery}
+						type="text"
+						placeholder="Search books..."
+						class="h-10 w-full rounded-xl border border-black/10 bg-white/50 py-2 pl-9 pr-8 text-xs sm:text-sm outline-none transition placeholder:text-black/40 dark:placeholder:text-white/40 focus:border-[#b23a2e] focus:bg-white focus:ring-2 focus:ring-[#b23a2e]/10 dark:border-white/10 dark:bg-white/[0.03] dark:focus:bg-[#1a1714] dark:focus:border-[#e08a63] dark:focus:ring-[#e08a63]/15"
+					/>
+					{#if searchQuery}
+						<button
+							type="button"
+							on:click={() => {
+								searchQuery = '';
+								searchInputEl?.focus();
+							}}
+							class="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-black/40 hover:text-black dark:text-white/40 dark:hover:text-white transition"
+							title="Clear search"
+							aria-label="Clear search"
+						>
+							<X size={14} />
+						</button>
+					{:else}
+						<kbd class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 hidden md:inline-flex h-4.5 select-none items-center rounded border border-black/10 bg-black/[0.04] px-1 font-mono text-[9px] font-medium opacity-40 dark:border-white/15 dark:bg-white/[0.06]">
+							/
+						</kbd>
+					{/if}
+				</div>
+
+				<!-- SORT DROPDOWN -->
+				<div class="relative shrink-0">
+					<button
+						type="button"
+						on:click={() => (sortMenuOpen = !sortMenuOpen)}
+						class="inline-flex h-10 items-center gap-1.5 rounded-xl border border-black/10 bg-white/50 px-3 sm:px-3.5 text-xs sm:text-sm font-medium backdrop-blur transition hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/5"
+						title="Sort books"
+						aria-label="Sort books"
+						aria-expanded={sortMenuOpen}
+						use:ripple
+					>
+						<ArrowUpDown size={14} class="opacity-60" />
+						<span class="hidden xs:inline sm:inline">{sortOptions.find((o) => o.value === sortBy)?.shortLabel || 'Sort'}</span>
+						<ChevronDown size={12} class={`opacity-40 transition-transform duration-200 ${sortMenuOpen ? 'rotate-180' : ''}`} />
+					</button>
+
+					{#if sortMenuOpen}
+						<!-- BACKDROP -->
+						<button type="button" class="fixed inset-0 z-40 bg-transparent cursor-default border-0 p-0" on:click={() => (sortMenuOpen = false)} aria-label="Close sort menu" tabindex="-1"></button>
+						<div
+							transition:fly={{ y: -6, duration: 150, easing: cubicOut }}
+							class={cn('absolute right-0 top-full z-50 mt-1.5 w-48 rounded-xl border p-1.5 shadow-xl', popover, popoverBorder)}
+						>
+							<div class="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider opacity-40">Sort Books By</div>
+							{#each sortOptions as opt}
+								<button
+									type="button"
+									class={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition ${
+										sortBy === opt.value
+											? 'bg-[#b23a2e]/10 text-[#b23a2e] dark:bg-[#e08a63]/15 dark:text-[#e08a63] font-semibold'
+											: 'opacity-70 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5'
+									}`}
+									on:click={() => {
+										sortBy = opt.value;
+										sortMenuOpen = false;
+									}}
+								>
+									<span>{opt.label}</span>
+									{#if sortBy === opt.value}
+										<Check size={13} />
+									{/if}
+								</button>
+							{/each}
+						</div>
+					{/if}
+				</div>
+
+				<!-- VIEW SWITCHER SEGMENTED TABS -->
+				<div class="flex items-center gap-0.5 rounded-xl border border-black/10 bg-black/[0.03] p-1 dark:border-white/10 dark:bg-white/[0.03] shrink-0 h-10">
+					<button
+						type="button"
+						on:click={() => setViewLayout('grid')}
+						class={`flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs transition-all ${
+							viewLayout === 'grid'
+								? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
+								: 'opacity-50 hover:opacity-100'
+						}`}
+						title="Comfortable Cards Grid"
+						aria-label="Grid View"
+						use:ripple
+					>
+						<LayoutGrid size={14} />
+						<span class="hidden lg:inline text-xs">Grid</span>
+					</button>
+
+					<button
+						type="button"
+						on:click={() => setViewLayout('list')}
+						class={`flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs transition-all ${
+							viewLayout === 'list'
+								? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
+								: 'opacity-50 hover:opacity-100'
+						}`}
+						title="Media List Rows"
+						aria-label="List View"
+						use:ripple
+					>
+						<List size={14} />
+						<span class="hidden lg:inline text-xs">List</span>
+					</button>
+
+					<button
+						type="button"
+						on:click={() => setViewLayout('compact')}
+						class={`flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs transition-all ${
+							viewLayout === 'compact'
+								? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
+								: 'opacity-50 hover:opacity-100'
+						}`}
+						title="Compact Table Rows"
+						aria-label="Compact View"
+						use:ripple
+					>
+						<AlignJustify size={14} />
+						<span class="hidden lg:inline text-xs">Compact</span>
+					</button>
+				</div>
 			</div>
-			<div class="mt-1 text-2xl font-bold">{books.length}</div>
-		</div>
 
-		<div class="rounded-2xl border border-black/[0.06] bg-white/50 p-4 backdrop-blur dark:border-white/[0.06] dark:bg-white/[0.03]">
-			<div class="flex items-center gap-2 text-xs font-semibold opacity-60">
-				<Layers size={14} class="text-amber-600 dark:text-amber-400" /> Total Chapters
-			</div>
-			<div class="mt-1 text-2xl font-bold">{totalChapters}</div>
-		</div>
-
-		<div class="col-span-2 rounded-2xl border border-black/[0.06] bg-white/50 p-4 backdrop-blur dark:border-white/[0.06] dark:bg-white/[0.03] sm:col-span-1">
-			<div class="flex items-center justify-between text-xs font-semibold opacity-60">
-				<span>Global Glossary</span>
-				<a href="/app/glossary/" class="text-[#b23a2e] hover:underline dark:text-[#e08a63]">Manage →</a>
-			</div>
-			<div class="mt-1 text-xs opacity-70">Enforces consistent character & term translations</div>
-		</div>
-	</div>
-
-	<!-- SHELF TABS & SEARCH TOOLBAR WITH VIEW MODES -->
-	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-		<!-- TABS -->
-		<div class="flex items-center gap-1 rounded-xl bg-black/[0.04] p-1 dark:bg-white/[0.04]">
-			<button
-				type="button"
-				on:click={() => (activeTab = 'active')}
-				class={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-					activeTab === 'active'
-						? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white'
-						: 'opacity-60 hover:opacity-100'
-				}`}
-				use:ripple
-			>
-				Active ({books.filter((b) => !b.archived).length})
-			</button>
-
-			<button
-				type="button"
-				on:click={() => (activeTab = 'pinned')}
-				class={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-					activeTab === 'pinned'
-						? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white'
-						: 'opacity-60 hover:opacity-100'
-				}`}
-				use:ripple
-			>
-				<Pin size={12} class="rotate-45" />
-				<span>Pinned ({pinnedCount})</span>
-			</button>
-
-			<button
-				type="button"
-				on:click={() => (activeTab = 'archived')}
-				class={`flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-					activeTab === 'archived'
-						? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white'
-						: 'opacity-60 hover:opacity-100'
-				}`}
-				use:ripple
-			>
-				<Archive size={12} />
-				<span>Archived ({archivedCount})</span>
-			</button>
-
-			<button
-				type="button"
-				on:click={() => (activeTab = 'all')}
-				class={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-					activeTab === 'all'
-						? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white'
-						: 'opacity-60 hover:opacity-100'
-				}`}
-				use:ripple
-			>
-				All ({books.length})
-			</button>
-		</div>
-
-		<!-- CONTROLS: VIEW SWITCHER & SEARCH -->
-		<div class="flex items-center gap-2">
-			<!-- VIEW SWITCHER SEGMENTED TABS -->
-			<div class="flex items-center gap-0.5 rounded-xl border border-black/10 bg-black/[0.03] p-1 dark:border-white/10 dark:bg-white/[0.03]">
+			<!-- FILTER TABS (DESKTOP: SITS ON LEFT; MOBILE: SMOOTH SCROLLABLE RAIL) -->
+			<div class="order-2 md:order-1 flex items-center gap-1 rounded-xl bg-black/[0.04] p-1 dark:bg-white/[0.04] overflow-x-auto no-scrollbar max-w-full">
 				<button
 					type="button"
-					on:click={() => setViewLayout('grid')}
-					class={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs transition-all ${
-						viewLayout === 'grid'
-							? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
+					on:click={() => (activeTab = 'active')}
+					class={`shrink-0 flex items-center gap-1.5 rounded-lg px-3 sm:px-3.5 py-2 text-xs font-medium transition-all ${
+						activeTab === 'active'
+							? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white font-semibold'
 							: 'opacity-60 hover:opacity-100'
 					}`}
-					title="Comfortable Cards Grid"
 					use:ripple
 				>
-					<LayoutGrid size={13} />
-					<span class="hidden sm:inline">Grid</span>
+					<span>Active</span>
+					<span class="rounded-full bg-black/5 px-1.5 py-0.2 text-[10px] font-mono dark:bg-white/10">{books.filter((b) => !b.archived).length}</span>
 				</button>
 
 				<button
 					type="button"
-					on:click={() => setViewLayout('list')}
-					class={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs transition-all ${
-						viewLayout === 'list'
-							? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
+					on:click={() => (activeTab = 'pinned')}
+					class={`shrink-0 flex items-center gap-1.5 rounded-lg px-3 sm:px-3.5 py-2 text-xs font-medium transition-all ${
+						activeTab === 'pinned'
+							? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white font-semibold'
 							: 'opacity-60 hover:opacity-100'
 					}`}
-					title="Media List Rows"
 					use:ripple
 				>
-					<List size={13} />
-					<span class="hidden sm:inline">List</span>
+					<Pin size={12} class="rotate-45" />
+					<span>Pinned</span>
+					<span class="rounded-full bg-black/5 px-1.5 py-0.2 text-[10px] font-mono dark:bg-white/10">{pinnedCount}</span>
 				</button>
 
 				<button
 					type="button"
-					on:click={() => setViewLayout('compact')}
-					class={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs transition-all ${
-						viewLayout === 'compact'
-							? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
+					on:click={() => (activeTab = 'archived')}
+					class={`shrink-0 flex items-center gap-1.5 rounded-lg px-3 sm:px-3.5 py-2 text-xs font-medium transition-all ${
+						activeTab === 'archived'
+							? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white font-semibold'
 							: 'opacity-60 hover:opacity-100'
 					}`}
-					title="Compact Table Rows"
 					use:ripple
 				>
-					<AlignJustify size={13} />
-					<span class="hidden sm:inline">Compact</span>
+					<Archive size={12} />
+					<span>Archived</span>
+					<span class="rounded-full bg-black/5 px-1.5 py-0.2 text-[10px] font-mono dark:bg-white/10">{archivedCount}</span>
 				</button>
-			</div>
 
-			<!-- SEARCH INPUT -->
-			<div class="relative min-w-0 flex-1 max-w-xs">
-				<Search size={14} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 opacity-40" />
-				<input
-					bind:value={searchQuery}
-					type="search"
-					placeholder="Search books..."
-					class="w-full rounded-xl border border-black/10 bg-transparent py-1.5 pl-8 pr-3 text-xs sm:text-sm outline-none transition placeholder:opacity-40 focus:border-[#b23a2e] dark:border-white/10"
-				/>
+				<button
+					type="button"
+					on:click={() => (activeTab = 'all')}
+					class={`shrink-0 flex items-center gap-1.5 rounded-lg px-3 sm:px-3.5 py-2 text-xs font-medium transition-all ${
+						activeTab === 'all'
+							? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white font-semibold'
+							: 'opacity-60 hover:opacity-100'
+					}`}
+					use:ripple
+				>
+					<span>All</span>
+					<span class="rounded-full bg-black/5 px-1.5 py-0.2 text-[10px] font-mono dark:bg-white/10">{books.length}</span>
+				</button>
 			</div>
 		</div>
 	</div>
 
 	<!-- BOOK LISTINGS -->
 	{#if loading}
-		<div class="grid w-full gap-5 sm:grid-cols-2">
+		<div class="grid w-full gap-4 sm:grid-cols-2">
 			{#each [1, 2, 3, 4] as _}
-				<div class="h-48 animate-pulse rounded-2xl border border-black/[0.06] bg-black/[0.03] dark:border-white/[0.06] dark:bg-white/[0.03]"></div>
+				<div class="h-44 animate-pulse rounded-2xl border border-black/[0.06] bg-black/[0.03] dark:border-white/[0.06] dark:bg-white/[0.03]"></div>
 			{/each}
 		</div>
 	{:else if books.length === 0}
@@ -542,76 +712,78 @@
 	{:else if filteredBooks.length === 0}
 		<p class="py-8 text-center text-sm opacity-60">No books found matching "{searchQuery}".</p>
 	{:else if viewLayout === 'grid'}
-		<!-- MODE 1: COMFORTABLE 2-COLUMN CARDS GRID -->
-		<ul class="grid w-full gap-5 sm:grid-cols-2">
+		<!-- MODE 1: COMFORTABLE RESPONSIVE CARDS GRID -->
+		<ul class="grid w-full gap-3.5 sm:gap-5 grid-cols-1 sm:grid-cols-2">
 			{#each filteredBooks as book (book.id)}
 				{@const progress = getProgress(book)}
-				<li class="group relative flex flex-col justify-between rounded-2xl border border-black/[0.08] bg-white/60 p-4 transition-all duration-300 hover:border-[#b23a2e]/40 hover:shadow-xl dark:border-white/[0.06] dark:bg-white/[0.02]">
+				<li class="group relative flex flex-col justify-between rounded-2xl border border-black/[0.08] bg-white/60 p-3.5 sm:p-4 transition-all duration-300 hover:border-[#b23a2e]/40 hover:shadow-xl dark:border-white/[0.06] dark:bg-white/[0.02]">
 					<!-- UPPER SECTION: COVER ARTWORK + METADATA -->
-					<div class="flex gap-4">
-						<!-- 2:3 VERTICAL COVER THUMBNAIL WITH LAZY LOADING & SKELETON SHIMMER -->
+					<div class="flex gap-3 sm:gap-4 items-start">
+						<!-- 2:3 VERTICAL COVER THUMBNAIL -->
 						<a
 							href={`/app/books/${book.id}/`}
-							class="group/cover w-24 sm:w-28 shrink-0 transition-transform duration-300 hover:scale-102"
-							title={`Open ${book.title}`}
+							class="group/cover w-20 sm:w-28 shrink-0 transition-transform duration-300 hover:scale-102"
+							title={`Open ${book.titleTarget || book.title}`}
 						>
 							<LazyImage
 								src={book.coverPageId ? `/api/pages/${book.coverPageId}/file?kind=thumb&w=320` : ''}
-								alt={`${book.title} Cover`}
-								fallbackText={book.title.slice(0, 1) || '书'}
+								alt={`${book.titleTarget || book.title} Cover`}
+								fallbackText={(book.titleTarget || book.title).slice(0, 1) || '书'}
 								aspectRatio="aspect-[2/3]"
 								showSpineShadow={true}
 							/>
 						</a>
 
 						<!-- METADATA DETAILS -->
-						<div class="min-w-0 flex-1 flex flex-col justify-between">
+						<div class="min-w-0 flex-1 flex flex-col justify-between self-stretch">
 							<div>
 								<div class="flex items-start justify-between gap-1.5">
 									<div class="min-w-0 flex-1">
-										<div class="flex items-center gap-1.5 flex-wrap">
+										<div class="flex items-center gap-1.5 min-w-0">
 											{#if book.pinned}
-												<span title="Pinned Series" class="flex items-center text-amber-600 dark:text-amber-400">
+												<span title="Pinned Series" class="flex items-center text-amber-600 dark:text-amber-400 shrink-0">
 													<Pin size={12} class="rotate-45 fill-current" />
 												</span>
 											{/if}
 											<a
 												href={`/app/books/${book.id}/`}
-												class="font-bold text-base tracking-tight hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate"
+												class="font-bold text-sm sm:text-base tracking-tight hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate"
 												title={book.titleTarget || book.title}
 											>
 												{book.titleTarget || book.title}
 											</a>
 										</div>
 										{#if book.titleTarget && book.titleTarget !== book.title}
-											<p class="text-xs opacity-60 font-medium truncate mt-0.5" title={book.title}>
+											<p class="text-[11px] sm:text-xs opacity-60 font-medium truncate mt-0.5" title={book.title}>
 												{book.title}
 											</p>
 										{/if}
 									</div>
 
-									<ActionMenu
-										items={[
-											{ value: 'open', label: 'Open Series', icon: ExternalLink },
-											{ value: 'edit', label: 'Edit Book Details', icon: Pencil },
-											{ value: 'pin', label: book.pinned ? 'Unpin from Top' : 'Pin to Top', icon: Pin },
-											{ value: 'archive', label: book.archived ? 'Unarchive Series' : 'Archive Series', icon: Archive },
-											{ value: 'clearChapters', label: 'Clear Chapters', icon: BookX, danger: true },
-											{ value: 'delete', label: 'Delete Book', icon: Trash2, danger: true },
-										]}
-										on:select={(e) => {
-											if (e.detail === 'open') goto(`/app/books/${book.id}/`);
-											else if (e.detail === 'edit') openEditBook(book);
-											else if (e.detail === 'pin') togglePin(book);
-											else if (e.detail === 'archive') toggleArchive(book);
-											else if (e.detail === 'clearChapters') promptClearChapters(book);
-											else if (e.detail === 'delete') promptDeleteBook(book);
-										}}
-									/>
+									<div class="shrink-0">
+										<ActionMenu
+											items={[
+												{ value: 'open', label: 'Open Series', icon: ExternalLink },
+												{ value: 'edit', label: 'Edit Book Details', icon: Pencil },
+												{ value: 'pin', label: book.pinned ? 'Unpin from Top' : 'Pin to Top', icon: Pin },
+												{ value: 'archive', label: book.archived ? 'Unarchive Series' : 'Archive Series', icon: Archive },
+												{ value: 'clearChapters', label: 'Clear Chapters', icon: BookX, danger: true },
+												{ value: 'delete', label: 'Delete Book', icon: Trash2, danger: true },
+											]}
+											on:select={(e) => {
+												if (e.detail === 'open') goto(`/app/books/${book.id}/`);
+												else if (e.detail === 'edit') openEditBook(book);
+												else if (e.detail === 'pin') togglePin(book);
+												else if (e.detail === 'archive') toggleArchive(book);
+												else if (e.detail === 'clearChapters') promptClearChapters(book);
+												else if (e.detail === 'delete') promptDeleteBook(book);
+											}}
+										/>
+									</div>
 								</div>
 
 								<!-- LANGUAGE & VOLUME PILLS -->
-								<div class="mt-2.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+								<div class="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] sm:text-[11px]">
 									<span class="rounded-md bg-[#b23a2e]/10 px-2 py-0.5 font-semibold text-[#b23a2e] dark:text-[#e08a63]">
 										{book.sourceLang} → {book.targetLang}
 									</span>
@@ -622,15 +794,15 @@
 							</div>
 
 							<!-- LIVE TRANSLATION PROGRESS BAR -->
-							<div class="mt-3">
-								<div class="flex items-center justify-between text-[11px] mb-1">
-									<span class="opacity-60 flex items-center gap-1 font-medium">
+							<div class="mt-2 sm:mt-3">
+								<div class="flex items-center justify-between text-[10px] sm:text-[11px] mb-1">
+									<span class="opacity-70 flex items-center gap-1 font-medium truncate">
 										{#if progress.isComplete}
-											<CheckCircle2 size={11} class="text-emerald-600 dark:text-emerald-400" />
+											<CheckCircle2 size={11} class="text-emerald-600 dark:text-emerald-400 shrink-0" />
 										{/if}
-										{progress.label}
+										<span class="truncate">{progress.label}</span>
 									</span>
-									<span class="opacity-40 text-[10px] font-mono">{timeAgo(book.updatedAt)}</span>
+									<span class="opacity-40 text-[9px] sm:text-[10px] font-mono shrink-0 ml-1">{timeAgo(book.updatedAt)}</span>
 								</div>
 								<div class="h-1.5 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
 									<div
@@ -647,15 +819,15 @@
 					</div>
 
 					<!-- LOWER SECTION: ACTION FOOTER BAR -->
-					<div class="mt-4 flex items-center justify-between border-t border-black/[0.05] pt-3 text-xs dark:border-white/[0.05]">
+					<div class="mt-3 sm:mt-4 flex items-center justify-between border-t border-black/[0.05] pt-2.5 sm:pt-3 text-xs dark:border-white/[0.05]">
 						{#if book.latestChapter}
 							<a
 								href={`/app/books/${book.id}/chapters/${book.latestChapter.id}/`}
-								class="inline-flex items-center gap-1.5 rounded-lg bg-[#b23a2e]/10 px-2.5 py-1 font-semibold text-[#b23a2e] transition hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63] dark:hover:bg-[#e08a63] dark:hover:text-black"
+								class="inline-flex items-center gap-1.5 rounded-lg bg-[#b23a2e]/10 px-2.5 py-1 text-xs font-semibold text-[#b23a2e] transition hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63] dark:hover:bg-[#e08a63] dark:hover:text-black truncate max-w-[65%]"
 								use:ripple
 							>
-								<Play size={11} class="fill-current" />
-								<span>{book.latestChapter.titleTarget || book.latestChapter.title || `Ch. ${book.latestChapter.seq + 1}`}</span>
+								<Play size={11} class="fill-current shrink-0" />
+								<span class="truncate">{book.latestChapter.titleTarget || book.latestChapter.title || `Ch. ${book.latestChapter.seq + 1}`}</span>
 							</a>
 						{:else}
 							<span class="text-[11px] opacity-40">No chapters yet</span>
@@ -663,25 +835,25 @@
 
 						<a
 							href={`/app/books/${book.id}/`}
-							class="font-medium opacity-70 transition hover:opacity-100 hover:text-[#b23a2e] dark:hover:text-[#e08a63]"
+							class="font-medium text-xs opacity-70 transition hover:opacity-100 hover:text-[#b23a2e] dark:hover:text-[#e08a63] shrink-0 ml-2"
 						>
-							Manage Series →
+							Manage →
 						</a>
 					</div>
 				</li>
 			{/each}
 		</ul>
 	{:else if viewLayout === 'list'}
-		<!-- MODE 2: MEDIA LIST STRIP (HORIZONTAL ROWS) -->
+		<!-- MODE 2: MEDIA LIST STRIP (RESPONSIVE ROW) -->
 		<ul class="flex flex-col gap-2.5 w-full">
 			{#each filteredBooks as book (book.id)}
 				{@const progress = getProgress(book)}
 				<li
 					id={`book-card-${book.id}`}
-					class="group flex items-center justify-between gap-4 rounded-xl border border-black/[0.07] bg-white/60 p-3 transition-all hover:border-[#b23a2e]/40 hover:bg-white hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02] dark:hover:bg-white/[0.04]"
+					class="group relative flex items-center justify-between gap-3 sm:gap-4 rounded-xl border border-black/[0.07] bg-white/60 p-2.5 sm:p-3 transition-all hover:border-[#b23a2e]/40 hover:bg-white hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02] dark:hover:bg-white/[0.04]"
 				>
-					<div class="flex items-center gap-3.5 min-w-0 flex-1">
-						<!-- 40px MINI THUMBNAIL -->
+					<div class="flex items-center gap-3 min-w-0 flex-1">
+						<!-- MINI THUMBNAIL -->
 						<a
 							href={`/app/books/${book.id}/`}
 							class="w-10 sm:w-12 shrink-0 transition-transform duration-200 group-hover:scale-105"
@@ -690,49 +862,51 @@
 							<LazyImage
 								src={book.coverPageId ? `/api/pages/${book.coverPageId}/file?kind=thumb&w=140` : ''}
 								alt={book.titleTarget || book.title}
-								fallbackText={book.titleTarget || book.title}
+								fallbackText={(book.titleTarget || book.title).slice(0, 1) || '书'}
 								aspectRatio="aspect-[2/3]"
 								showSpineShadow={false}
 								class="rounded-lg shadow-2xs"
 							/>
 						</a>
 
+						<!-- TITLE & METADATA -->
 						<div class="min-w-0 flex-1">
-							<div class="flex items-center gap-2 flex-wrap">
+							<div class="flex items-center gap-1.5 min-w-0">
 								{#if book.pinned}
-									<span title="Pinned Series" class="text-amber-600 dark:text-amber-400">
-										<Pin size={13} class="rotate-45 fill-current" />
+									<span title="Pinned Series" class="text-amber-600 dark:text-amber-400 shrink-0">
+										<Pin size={12} class="rotate-45 fill-current" />
 									</span>
 								{/if}
 								<a
 									href={`/app/books/${book.id}/`}
-									class="font-bold text-sm sm:text-base hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate"
+									class="font-bold text-xs sm:text-sm hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block"
 									title={book.titleTarget || book.title}
 								>
 									{book.titleTarget || book.title}
 								</a>
 								{#if book.titleTarget && book.titleTarget !== book.title}
-									<span class="text-xs opacity-60 font-medium truncate hidden sm:inline" title={book.title}>
+									<span class="text-xs opacity-50 font-medium truncate hidden md:inline" title={book.title}>
 										({book.title})
 									</span>
 								{/if}
-								<span class="rounded-md bg-[#b23a2e]/10 px-2 py-0.5 text-[10px] font-semibold text-[#b23a2e] dark:text-[#e08a63]">
+								<span class="rounded bg-[#b23a2e]/10 px-1.5 py-0.2 text-[9px] sm:text-[10px] font-semibold text-[#b23a2e] dark:text-[#e08a63] shrink-0 hidden sm:inline">
 									{book.sourceLang} → {book.targetLang}
 								</span>
 							</div>
 
-							<div class="mt-1 flex items-center gap-3 text-xs opacity-65">
-								<span>{book.chapterCount} chapters ({book.pageCount || 0} pgs)</span>
+							<div class="mt-1 flex items-center gap-2 text-[10px] sm:text-xs opacity-65 flex-wrap">
+								<span>{book.chapterCount} chs ({book.pageCount || 0} pgs)</span>
 								<span>•</span>
-								<span class={progress.isComplete ? 'text-emerald-600 dark:text-emerald-400 font-medium' : ''}>
-									{progress.label}
+								<span class={progress.isComplete ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : ''}>
+									{progress.percent}%
 								</span>
 								<span class="hidden sm:inline opacity-40">• {timeAgo(book.updatedAt)}</span>
 							</div>
 						</div>
 					</div>
 
-					<div class="flex items-center gap-2.5 shrink-0">
+					<!-- ACTION BUTTONS -->
+					<div class="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
 						{#if book.latestChapter}
 							<a
 								href={`/app/books/${book.id}/chapters/${book.latestChapter.id}/`}
@@ -740,7 +914,7 @@
 								use:ripple
 							>
 								<Play size={11} class="fill-current" />
-								<span>{book.latestChapter.titleTarget || book.latestChapter.title || `Ch. ${book.latestChapter.seq + 1}`}</span>
+								<span>Read</span>
 							</a>
 						{/if}
 
@@ -774,8 +948,68 @@
 			{/each}
 		</ul>
 	{:else}
-		<!-- MODE 3: DENSE TABLE / COMPACT ROWS (FOR POWER BROWSING) -->
-		<div class="overflow-hidden rounded-xl border border-black/[0.08] bg-white/60 shadow-xs dark:border-white/[0.06] dark:bg-white/[0.02]">
+		<!-- MODE 3: COMPACT ROWS (MOBILE NATIVE STREAM + DESKTOP TABLE) -->
+		<!-- MOBILE-NATIVE COMPACT STREAM (< 640px) -->
+		<div class="sm:hidden flex flex-col divide-y divide-black/[0.06] rounded-xl border border-black/[0.08] bg-white/60 dark:divide-white/[0.06] dark:border-white/[0.06] dark:bg-white/[0.02]">
+			{#each filteredBooks as book (book.id)}
+				{@const progress = getProgress(book)}
+				<div class="flex items-center justify-between gap-2.5 p-2.5 transition hover:bg-black/[0.02] dark:hover:bg-white/[0.02]">
+					<div class="flex items-center gap-2 min-w-0 flex-1">
+						{#if book.pinned}
+							<span title="Pinned Series" class="text-amber-600 dark:text-amber-400 shrink-0">
+								<Pin size={11} class="rotate-45 fill-current" />
+							</span>
+						{/if}
+						<div class="min-w-0 flex-1">
+							<a
+								href={`/app/books/${book.id}/`}
+								class="font-semibold text-xs hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block"
+								title={book.titleTarget || book.title}
+							>
+								{book.titleTarget || book.title}
+							</a>
+							<div class="flex items-center gap-2 text-[10px] opacity-60 mt-0.5">
+								<span>{book.chapterCount} chs</span>
+								<span>•</span>
+								<span class={progress.isComplete ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : ''}>
+									{progress.percent}% done
+								</span>
+							</div>
+						</div>
+					</div>
+
+					<div class="flex items-center gap-1 shrink-0">
+						<a
+							href={`/app/books/${book.id}/`}
+							class="rounded-lg bg-black/5 dark:bg-white/5 px-2 py-1 text-[11px] font-medium opacity-80 transition hover:opacity-100"
+						>
+							Open
+						</a>
+						<ActionMenu
+							items={[
+								{ value: 'open', label: 'Open Series', icon: ExternalLink },
+								{ value: 'edit', label: 'Edit Book Details', icon: Pencil },
+								{ value: 'pin', label: book.pinned ? 'Unpin from Top' : 'Pin to Top', icon: Pin },
+								{ value: 'archive', label: book.archived ? 'Unarchive Series' : 'Archive Series', icon: Archive },
+								{ value: 'clearChapters', label: 'Clear Chapters', icon: BookX, danger: true },
+								{ value: 'delete', label: 'Delete Book', icon: Trash2, danger: true },
+							]}
+							on:select={(e) => {
+								if (e.detail === 'open') goto(`/app/books/${book.id}/`);
+								else if (e.detail === 'edit') openEditBook(book);
+								else if (e.detail === 'pin') togglePin(book);
+								else if (e.detail === 'archive') toggleArchive(book);
+								else if (e.detail === 'clearChapters') promptClearChapters(book);
+								else if (e.detail === 'delete') promptDeleteBook(book);
+							}}
+						/>
+					</div>
+				</div>
+			{/each}
+		</div>
+
+		<!-- DESKTOP MULTI-COLUMN TABLE (>= 640px) -->
+		<div class="hidden sm:block overflow-x-auto no-scrollbar rounded-xl border border-black/[0.08] bg-white/60 shadow-xs dark:border-white/[0.06] dark:bg-white/[0.02]">
 			<table class="w-full text-left text-xs border-collapse">
 				<thead>
 					<tr class="border-b border-black/[0.06] bg-black/[0.02] text-[11px] font-semibold opacity-60 dark:border-white/[0.06] dark:bg-white/[0.02]">
@@ -783,7 +1017,7 @@
 						<th class="py-2.5 px-3">Title</th>
 						<th class="py-2.5 px-3 hidden md:table-cell">Original Title</th>
 						<th class="py-2.5 px-3 w-28">Languages</th>
-						<th class="py-2.5 px-3 w-32">Chapters</th>
+						<th class="py-2.5 px-3 w-28">Chapters</th>
 						<th class="py-2.5 px-3 w-36">Progress</th>
 						<th class="py-2.5 pr-4 pl-3 w-24 text-right">Actions</th>
 					</tr>
@@ -804,7 +1038,7 @@
 							<td class="py-2.5 px-3 font-semibold">
 								<a
 									href={`/app/books/${book.id}/`}
-									class="hover:text-[#b23a2e] dark:hover:text-[#e08a63]"
+									class="hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate max-w-xs"
 								>
 									{book.titleTarget || book.title}
 								</a>
@@ -879,16 +1113,45 @@
 			placeholder="e.g. 星尘"
 		/>
 
-		<TextField
-			bind:value={titleTarget}
-			label="Target Title (Optional translation)"
-			placeholder="e.g. Stardust"
-		/>
+		<div class="block">
+			<div class="flex items-center justify-between mb-1">
+				<span class="text-xs font-semibold opacity-60">Target Title (Optional translation)</span>
+				<button
+					type="button"
+					class="inline-flex items-center gap-1 text-[11px] font-semibold text-[#b23a2e] hover:underline disabled:opacity-40 dark:text-[#e08a63]"
+					disabled={translatingTitle || !title.trim()}
+					on:click={translateNewTitle}
+				>
+					<Languages size={12} />
+					<span>{translatingTitle ? 'Translating...' : 'Auto-Translate'}</span>
+				</button>
+			</div>
+			<div class="flex items-center gap-2">
+				<input
+					type="text"
+					bind:value={titleTarget}
+					placeholder="e.g. Stardust"
+					class="h-[38px] w-full rounded-lg border border-black/10 bg-transparent px-3 text-sm outline-none transition-colors placeholder:opacity-40 focus:border-[#b23a2e] focus:ring-2 focus:ring-[#b23a2e]/30 dark:border-white/[0.06]"
+				/>
+				<Button
+					variant="secondary"
+					class="h-[38px] w-[38px] min-h-[38px] min-w-[38px] max-h-[38px] max-w-[38px] shrink-0 p-0 inline-flex items-center justify-center"
+					loading={translatingTitle}
+					disabled={translatingTitle || !title.trim()}
+					on:click={translateNewTitle}
+					title="Auto-translate book title"
+				>
+					{#if !translatingTitle}
+						<Languages size={15} />
+					{/if}
+				</Button>
+			</div>
+		</div>
 
 		<div class="grid grid-cols-2 gap-3">
 			<div>
 				<span class="mb-1 block text-xs font-semibold opacity-60">Source Language</span>
-				<LanguagePicker bind:value={sourceLang} />
+				<LanguagePicker mode="source" bind:value={sourceLang} />
 			</div>
 
 			<div>
@@ -916,16 +1179,45 @@
 				placeholder="e.g. 星尘"
 			/>
 
-			<TextField
-				bind:value={editTitleTarget}
-				label="Target Title (Translated title)"
-				placeholder="e.g. Stardust"
-			/>
+			<div class="block">
+				<div class="flex items-center justify-between mb-1">
+					<span class="text-xs font-semibold opacity-60">Target Title (Translated title)</span>
+					<button
+						type="button"
+						class="inline-flex items-center gap-1 text-[11px] font-semibold text-[#b23a2e] hover:underline disabled:opacity-40 dark:text-[#e08a63]"
+						disabled={translatingEditTitle || !editTitle.trim()}
+						on:click={translateEditTitle}
+					>
+						<Languages size={12} />
+						<span>{translatingEditTitle ? 'Translating...' : 'Auto-Translate'}</span>
+					</button>
+				</div>
+				<div class="flex items-center gap-2">
+					<input
+						type="text"
+						bind:value={editTitleTarget}
+						placeholder="e.g. Stardust"
+						class="h-[38px] w-full rounded-lg border border-black/10 bg-transparent px-3 text-sm outline-none transition-colors placeholder:opacity-40 focus:border-[#b23a2e] focus:ring-2 focus:ring-[#b23a2e]/30 dark:border-white/[0.06]"
+					/>
+					<Button
+						variant="secondary"
+						class="h-[38px] w-[38px] min-h-[38px] min-w-[38px] max-h-[38px] max-w-[38px] shrink-0 p-0 inline-flex items-center justify-center"
+						loading={translatingEditTitle}
+						disabled={translatingEditTitle || !editTitle.trim()}
+						on:click={translateEditTitle}
+						title="Auto-translate book title"
+					>
+						{#if !translatingEditTitle}
+							<Languages size={15} />
+						{/if}
+					</Button>
+				</div>
+			</div>
 
 			<div class="grid grid-cols-2 gap-3">
 				<div>
 					<span class="mb-1 block text-xs font-semibold opacity-60">Source Language</span>
-					<LanguagePicker bind:value={editSourceLang} />
+					<LanguagePicker mode="source" bind:value={editSourceLang} />
 				</div>
 
 				<div>
@@ -963,9 +1255,10 @@
 <!-- CLEAR CHAPTERS CONFIRMATION DIALOG -->
 <ConfirmDialog
 	open={clearChaptersConfirmOpen}
-	title="Clear Chapters?"
-	message={`Are you sure you want to clear all chapters from "${bookToClearChapters?.title}"? All chapters, pages, OCR data, and translations will be permanently removed, but the book series itself will be kept.`}
+	title={`Clear Chapters from "${bookToClearChapters?.titleTarget || bookToClearChapters?.title || 'Book'}"?`}
+	message={`Are you sure you want to clear all chapters from "${bookToClearChapters?.titleTarget || bookToClearChapters?.title || 'this series'}"? All chapters, pages, OCR data, and translations will be permanently removed.`}
 	confirmLabel="Clear Chapters"
+	requireVerificationCode={true}
 	variant="danger"
 	on:confirm={confirmClearChapters}
 	on:cancel={() => (clearChaptersConfirmOpen = false)}

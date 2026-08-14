@@ -1,6 +1,6 @@
-# Manua Translator — web app
+# Xianscan — web app
 
-Self-hosted Chinese manhua → English translation. Upload chapter images, and the pipeline
+Self-hosted Chinese manhua & comic translation. Upload chapter images, and the pipeline
 **detects text (comic-text-detector ONNX) → OCRs it (RapidOCR) → translates it (DeepSeek, with your
 glossary) → erases the original text (LaMa) → typesets the translation (Skia)**. A per-page
 before/after viewer and a zip download are included; the glossary editor is on `/app/glossary`.

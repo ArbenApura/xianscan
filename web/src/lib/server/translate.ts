@@ -454,3 +454,97 @@ export async function extractTerms(
 	return { terms: [...bySource.values()], usage };
 }
 
+// TRANSLATE A SINGLE STRING (BOOK TITLE, CHAPTER TITLE, TERM, ETC.)
+export async function translateSingleText(
+	text: string,
+	pair: LangPair,
+	opts: {
+		kind?: 'title' | 'chapter' | 'term' | 'general';
+		client?: OpenAI;
+		model?: string;
+		signal?: AbortSignal;
+	} = {},
+): Promise<{ text: string; usage: TranslationUsage }> {
+	const trimmed = text.trim();
+	const model = resolveModel(opts.model);
+	const usage = { model, promptTokens: 0, cachedTokens: 0, completionTokens: 0, costUsd: 0 } as TranslationUsage;
+
+	if (!trimmed) {
+		return { text: '', usage };
+	}
+
+	const client = opts.client ?? deepseek;
+	const srcName = languageName(pair.sourceLang);
+	const tgtName = languageName(pair.targetLang);
+
+	let systemContent = '';
+	if (opts.kind === 'chapter') {
+		systemContent = `You are a professional comic and novel localizer. Translate the provided chapter title from ${srcName} to ${tgtName}.
+Rules:
+- Translate concisely and naturally (e.g. "第1话 重生" -> "Chapter 1: Rebirth", "第12话" -> "Chapter 12", "第30章 突破" -> "Chapter 30: Breakthrough").
+- Maintain chapter numbering in English/Target language (Chapter X or Ch. X: Subtitle).
+- Do NOT output commentary, quotes, explanations, or markdown fences. Output ONLY the translated chapter title string.`;
+	} else if (opts.kind === 'title') {
+		systemContent = `You are a professional comic and novel localizer. Translate the provided book/series title from ${srcName} to ${tgtName}.
+Rules:
+- Translate concisely into natural title case (e.g. "妖神记" -> "Tales of Demons and Gods", "斗破苍穹" -> "Battle Through the Heavens").
+- Do NOT output commentary, explanations, notes, quotes, or markdown fences. Output ONLY the translated title string.`;
+	} else if (opts.kind === 'term') {
+		systemContent = `You are a professional localization translator. Translate the provided term, character name, technique, or proper noun from ${srcName} to natural ${tgtName}.
+Rules:
+- For personal names, use capitalized romanization / Pinyin with proper spacing (e.g. 叶凡 -> Ye Fan).
+- For terms / items / techniques, translate the meaning into natural ${tgtName}.
+- Output ONLY the translated term without quotes or explanation.`;
+	} else {
+		systemContent = `You are a professional translator translating text from ${srcName} to natural ${tgtName}.
+Output ONLY the translated text without commentary, quotes, or markdown fences.`;
+	}
+
+	try {
+		const res = await queued(async () =>
+			withRetry(
+				() =>
+					client.chat.completions.create(
+						{
+							model,
+							messages: [
+								{ role: 'system', content: systemContent },
+								{ role: 'user', content: trimmed },
+							],
+							temperature: 0.2,
+							...thinkingParam(),
+						},
+						{ signal: opts.signal },
+					),
+				3,
+			),
+		);
+
+		const u = computeUsage(res.usage, model);
+		mergeUsage(usage, u);
+
+		let out = res.choices[0]?.message?.content?.trim() || '';
+		// Strip outer quotes if returned
+		if (
+			(out.startsWith('"') && out.endsWith('"')) ||
+			(out.startsWith('“') && out.endsWith('”')) ||
+			(out.startsWith('\'') && out.endsWith('\'')) ||
+			(out.startsWith('「') && out.endsWith('」'))
+		) {
+			out = out.slice(1, -1).trim();
+		}
+		return { text: out || trimmed, usage };
+	} catch (err) {
+		// Fallback regex for chapter patterns if LLM fails or is unconfigured
+		if (opts.kind === 'chapter') {
+			const match = trimmed.match(/^第?\s*(\d+)\s*(?:话|章|回|集)?(?:\s*[:：\-—]\s*(.*))?$/);
+			if (match) {
+				const num = match[1];
+				const rest = match[2]?.trim();
+				return { text: rest ? `Chapter ${num}: ${rest}` : `Chapter ${num}`, usage };
+			}
+		}
+		throw err;
+	}
+}
+

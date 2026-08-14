@@ -12,8 +12,16 @@
 	import ViewModeGrid from '$lib/components/chapter/ViewModeGrid.svelte';
 	import ViewModeCompare from '$lib/components/chapter/ViewModeCompare.svelte';
 	import PageInspectModal from '$lib/components/chapter/PageInspectModal.svelte';
+	import EndOfChapterCard from '$lib/components/chapter/EndOfChapterCard.svelte';
 	import ResliceModal from '$lib/components/ResliceModal.svelte';
 	import Upload from 'lucide-svelte/icons/upload';
+	import Languages from 'lucide-svelte/icons/languages';
+	import FileImage from 'lucide-svelte/icons/file-image';
+	import CheckCircle2 from 'lucide-svelte/icons/check-circle-2';
+	import AlertCircle from 'lucide-svelte/icons/alert-circle';
+	import Loader2 from 'lucide-svelte/icons/loader-2';
+	import Sparkles from 'lucide-svelte/icons/sparkles';
+	import { apiJson } from '$lib/api';
 
 	interface Region {
 		id: number;
@@ -47,6 +55,8 @@
 	}
 
 	let chapter: ChapterData | null = null;
+	let prevChapter: { id: number; seq: number; title: string | null; titleTarget?: string | null } | null = null;
+	let nextChapter: { id: number; seq: number; title: string | null; titleTarget?: string | null } | null = null;
 	let pages: PageData[] = [];
 	let loading = true;
 	let uploading = false;
@@ -62,12 +72,35 @@
 	let clearChapterPagesConfirmOpen = false;
 	let resliceModalOpen = false;
 
+	// DETAILED UPLOAD MODAL STATES
+	interface UploadFileInfo {
+		name: string;
+		size: number;
+	}
+	let uploadModalOpen = false;
+	let uploadStage: 'uploading' | 'processing' | 'done' | 'error' = 'uploading';
+	let uploadProgressPercent = 0;
+	let uploadLoadedBytes = 0;
+	let uploadTotalBytes = 0;
+	let uploadFilesList: UploadFileInfo[] = [];
+	let uploadErrorMessage = '';
+	let uploadAddedCount = 0;
+
+	function formatBytes(bytes: number): string {
+		if (bytes === 0) return '0 B';
+		const k = 1024;
+		const sizes = ['B', 'KB', 'MB', 'GB'];
+		const i = Math.floor(Math.log(bytes) / Math.log(k));
+		return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+	}
+
 	// EDIT CHAPTER STATES
 	let editChapterModalOpen = false;
 	let editChapterTitle = '';
 	let editChapterTitleTarget = '';
 	let editChapterSeq = 1;
 	let updatingChapter = false;
+	let translatingChapterTitle = false;
 
 	function openEditChapterModal() {
 		if (!chapter) return;
@@ -75,6 +108,35 @@
 		editChapterTitleTarget = chapter.titleTarget || '';
 		editChapterSeq = (chapter.seq ?? 0) + 1;
 		editChapterModalOpen = true;
+	}
+
+	async function translateChapterTitle() {
+		const src = editChapterTitle.trim();
+		if (!src) {
+			toast.error('Enter a chapter title to translate.');
+			return;
+		}
+		translatingChapterTitle = true;
+		try {
+			const res = await apiJson<{ text: string }>('/api/translate-text', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					text: src,
+					kind: 'chapter',
+					chapterId,
+					bookId,
+				}),
+			});
+			if (res.text) {
+				editChapterTitleTarget = res.text;
+				toast.success('Chapter title translated!');
+			}
+		} catch (err: any) {
+			toast.error(err?.message || 'Could not translate chapter title.');
+		} finally {
+			translatingChapterTitle = false;
+		}
 	}
 
 	async function updateChapter() {
@@ -153,10 +215,19 @@
 	$: webtoonKind = $settings.webtoonKind;
 	$: webtoonWidth = $settings.webtoonWidth;
 
+	// ROUTE SWITCHING REACTIVITY FOR NEXT / PREV CHAPTER NAVIGATION
+	let lastLoadedChapterId: number | null = null;
+	$: if (browser && chapterId && chapterId !== lastLoadedChapterId) {
+		lastLoadedChapterId = chapterId;
+		loading = true;
+		void reload().then(() => {
+			if (chapterId) jobTracker.syncChapter(chapterId);
+		});
+	}
+
 	onMount(async () => {
-		await reload();
-		// SELF-HEALING: CHECK IF SERVER ALREADY HAS AN ACTIVE TRANSLATION JOB RUNNING
-		if (chapterId) {
+		if (chapterId && chapterId !== lastLoadedChapterId) {
+			await reload();
 			await jobTracker.syncChapter(chapterId);
 		}
 	});
@@ -182,6 +253,8 @@
 			if (!resp.ok) throw new Error('Load failed');
 			const data = await resp.json();
 			chapter = data.chapter;
+			prevChapter = data.prevChapter;
+			nextChapter = data.nextChapter;
 			pages = data.pages;
 			reloadKey = Date.now();
 		} catch {
@@ -306,21 +379,78 @@
 	}
 
 	async function uploadFiles(files: FileList | File[]) {
-		if (!files || files.length === 0) return;
+		const fileArr = Array.from(files || []);
+		if (fileArr.length === 0) return;
+
+		uploadFilesList = fileArr.map((f) => ({ name: f.name, size: f.size }));
+		uploadTotalBytes = fileArr.reduce((sum, f) => sum + f.size, 0);
+		uploadLoadedBytes = 0;
+		uploadProgressPercent = 0;
+		uploadStage = 'uploading';
+		uploadErrorMessage = '';
+		uploadAddedCount = 0;
+		uploadModalOpen = true;
 		uploading = true;
+
 		try {
 			const form = new FormData();
-			for (const file of Array.from(files)) form.append('files', file);
-			const resp = await fetch(`/api/chapters/${chapterId}/pages`, { method: 'POST', body: form });
-			if (!resp.ok) throw new Error('Upload failed');
-			const { added } = await resp.json();
-			toast.success(`${added} page${added === 1 ? '' : 's'} uploaded.`);
+			for (const file of fileArr) form.append('files', file);
+
+			const result: { added?: number } = await new Promise((resolve, reject) => {
+				const xhr = new XMLHttpRequest();
+				xhr.open('POST', `/api/chapters/${chapterId}/pages`);
+				xhr.upload.onprogress = (e) => {
+					if (e.lengthComputable) {
+						uploadLoadedBytes = e.loaded;
+						uploadTotalBytes = e.total;
+						uploadProgressPercent = Math.min(99, Math.round((e.loaded / e.total) * 100));
+						if (e.loaded >= e.total) {
+							uploadStage = 'processing';
+						}
+					}
+				};
+				xhr.onload = () => {
+					if (xhr.status >= 200 && xhr.status < 300) {
+						try {
+							resolve(JSON.parse(xhr.responseText));
+						} catch {
+							resolve({ added: fileArr.length });
+						}
+					} else {
+						try {
+							const data = JSON.parse(xhr.responseText);
+							reject(new Error(data.message || `Upload failed with status ${xhr.status}`));
+						} catch {
+							reject(new Error(`Upload failed with status ${xhr.status}`));
+						}
+					}
+				};
+				xhr.onerror = () => reject(new Error('Network error during upload'));
+				xhr.onabort = () => reject(new Error('Upload cancelled'));
+				xhr.send(form);
+			});
+
+			uploadProgressPercent = 100;
+			uploadLoadedBytes = uploadTotalBytes;
+			uploadStage = 'done';
+			uploadAddedCount = result.added ?? fileArr.length;
+			toast.success(`${uploadAddedCount} page${uploadAddedCount === 1 ? '' : 's'} uploaded.`);
+
 			if (!currentJobState.running) {
 				jobTracker.clearJob(chapterId);
 			}
 			await reload();
-		} catch {
-			toast.error('Upload failed.');
+
+			// Auto close modal after brief confirmation if user hasn't closed it
+			setTimeout(() => {
+				if (uploadModalOpen && uploadStage === 'done') {
+					uploadModalOpen = false;
+				}
+			}, 2000);
+		} catch (err: any) {
+			uploadStage = 'error';
+			uploadErrorMessage = err.message || 'Upload failed.';
+			toast.error(uploadErrorMessage);
 		} finally {
 			uploading = false;
 		}
@@ -414,12 +544,11 @@
 
 		try {
 			const pageIds = pages.map((p) => p.id);
-			const resp = await fetch(`/api/chapters/${chapterId}/pages/reorder`, {
-				method: 'POST',
+			await apiJson(`/api/chapters/${chapterId}/pages`, {
+				method: 'PUT',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ pageIds }),
 			});
-			if (!resp.ok) throw new Error('Reorder failed');
 			toast.success('Page order saved.');
 		} catch {
 			toast.error('Could not save page order.');
@@ -476,6 +605,8 @@
 		chapterTitle={chapter?.title ?? null}
 		chapterTitleTarget={chapter?.titleTarget ?? null}
 		totalPages={pages.length}
+		{prevChapter}
+		{nextChapter}
 		running={currentJobState.running}
 		{uploading}
 		{activeViewMode}
@@ -540,6 +671,7 @@
 			pages={displayPages}
 			running={currentJobState.running}
 			{reloadKey}
+			{webtoonKind}
 			{draggedPageIndex}
 			{dragOverPageIndex}
 			on:inspect={(e) => openInspector(e.detail)}
@@ -561,7 +693,17 @@
 			on:dragStart={(e) => handleDragStart(e.detail.event, e.detail.index)}
 			on:dragOver={(e) => handleDragOver(e.detail.event, e.detail.index)}
 			on:drop={(e) => handleDrop(e.detail.event, e.detail.index)}
-			on:dragEnd={handleDragEnd}
+		/>
+	{/if}
+
+	<!-- END OF CHAPTER CARD (RENDERED FOR ALL VIEW MODES AT BOTTOM WITH GAP) -->
+	{#if pages.length > 0}
+		<EndOfChapterCard
+			bookId={bookId ?? ''}
+			chapterSeq={chapter?.seq ?? 0}
+			totalPages={pages.length}
+			{prevChapter}
+			{nextChapter}
 		/>
 	{/if}
 </div>
@@ -590,6 +732,7 @@
 	title="Clear Chapter Progress?"
 	message="This will reset all pages in this chapter back to 'pending', allowing a clean re-run."
 	confirmLabel="Clear Progress"
+	requireVerificationCode={true}
 	variant="danger"
 	on:confirm={confirmClearChapterProgress}
 	on:cancel={() => (clearChapterConfirmOpen = false)}
@@ -598,9 +741,10 @@
 <!-- CLEAR PAGES CONFIRMATION -->
 <ConfirmDialog
 	open={clearChapterPagesConfirmOpen}
-	title="Clear Pages?"
+	title={`Clear Pages from "${chapter?.titleTarget || chapter?.title || `Chapter ${(chapter?.seq ?? 0) + 1}`}"?`}
 	message={`Are you sure you want to clear all ${pages.length} page${pages.length === 1 ? '' : 's'} in this chapter? All uploaded page images, OCR data, and translations will be permanently removed.`}
 	confirmLabel="Clear Pages"
+	requireVerificationCode={true}
 	variant="danger"
 	on:confirm={confirmClearChapterPages}
 	on:cancel={() => (clearChapterPagesConfirmOpen = false)}
@@ -627,11 +771,40 @@
 				placeholder="e.g. 第1话"
 			/>
 
-			<TextField
-				bind:value={editChapterTitleTarget}
-				label="Target Title (Translated title)"
-				placeholder="e.g. Chapter 1: The Awakening"
-			/>
+			<div class="block">
+				<div class="flex items-center justify-between mb-1">
+					<span class="text-xs font-semibold opacity-60">Target Title (Translated title)</span>
+					<button
+						type="button"
+						class="inline-flex items-center gap-1 text-[11px] font-semibold text-[#b23a2e] hover:underline disabled:opacity-40 dark:text-[#e08a63]"
+						disabled={translatingChapterTitle || !editChapterTitle.trim()}
+						on:click={translateChapterTitle}
+					>
+						<Languages size={12} />
+						<span>{translatingChapterTitle ? 'Translating...' : 'Auto-Translate'}</span>
+					</button>
+				</div>
+				<div class="flex items-center gap-2">
+					<input
+						type="text"
+						bind:value={editChapterTitleTarget}
+						placeholder="e.g. Chapter 1: The Awakening"
+						class="h-[38px] w-full rounded-lg border border-black/10 bg-transparent px-3 text-sm outline-none transition-colors placeholder:opacity-40 focus:border-[#b23a2e] focus:ring-2 focus:ring-[#b23a2e]/30 dark:border-white/[0.06]"
+					/>
+					<Button
+						variant="secondary"
+						class="h-[38px] w-[38px] min-h-[38px] min-w-[38px] max-h-[38px] max-w-[38px] shrink-0 p-0 inline-flex items-center justify-center"
+						loading={translatingChapterTitle}
+						disabled={translatingChapterTitle || !editChapterTitle.trim()}
+						on:click={translateChapterTitle}
+						title="Auto-translate chapter title"
+					>
+						{#if !translatingChapterTitle}
+							<Languages size={15} />
+						{/if}
+					</Button>
+				</div>
+			</div>
 
 			<div>
 				<span class="mb-1 block text-xs font-semibold opacity-60">Chapter Sequence # (1-indexed)</span>
@@ -650,5 +823,107 @@
 		<Button variant="primary" disabled={updatingChapter} loading={updatingChapter} on:click={updateChapter}>
 			Save Changes
 		</Button>
+	</svelte:fragment>
+</Modal>
+
+<!-- DETAILED IMAGE UPLOAD PROGRESS MODAL -->
+<Modal
+	open={uploadModalOpen}
+	title={uploadStage === 'done' ? 'Upload Complete' : uploadStage === 'error' ? 'Upload Error' : 'Uploading Chapter Pages'}
+	size="md"
+	closable={uploadStage === 'done' || uploadStage === 'error'}
+	on:close={() => (uploadModalOpen = false)}
+>
+	<div class="flex flex-col gap-4">
+		<!-- HERO STATUS CARD -->
+		<div class="flex items-center gap-3.5 rounded-2xl border border-black/[0.08] bg-black/[0.02] p-4 dark:border-white/[0.08] dark:bg-white/[0.02]">
+			<div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white shadow-xs dark:bg-white/10">
+				{#if uploadStage === 'uploading'}
+					<Loader2 size={24} class="animate-spin text-[#b23a2e] dark:text-[#e08a63]" />
+				{:else if uploadStage === 'processing'}
+					<Sparkles size={24} class="animate-pulse text-amber-500" />
+				{:else if uploadStage === 'done'}
+					<CheckCircle2 size={24} class="text-emerald-500" />
+				{:else}
+					<AlertCircle size={24} class="text-red-500" />
+				{/if}
+			</div>
+
+			<div class="min-w-0 flex-1">
+				<h3 class="font-bold text-sm sm:text-base tracking-tight truncate">
+					{#if uploadStage === 'uploading'}
+						Uploading {uploadFilesList.length} image{uploadFilesList.length === 1 ? '' : 's'}...
+					{:else if uploadStage === 'processing'}
+						Processing & ingesting into chapter...
+					{:else if uploadStage === 'done'}
+						{uploadAddedCount} page{uploadAddedCount === 1 ? '' : 's'} successfully uploaded!
+					{:else}
+						Upload Failed
+					{/if}
+				</h3>
+
+				<p class="text-xs opacity-65 mt-0.5 truncate">
+					{#if uploadStage === 'uploading'}
+						Transferring {formatBytes(uploadTotalBytes)} to chapter storage...
+					{:else if uploadStage === 'processing'}
+						Generating thumbnails and updating chapter sequence...
+					{:else if uploadStage === 'done'}
+						All pages are now ready for translation or reading.
+					{:else}
+						{uploadErrorMessage || 'An error occurred during file upload.'}
+					{/if}
+				</p>
+			</div>
+		</div>
+
+		<!-- STATS BADGES -->
+		<div class="flex items-center gap-2 text-xs flex-wrap">
+			<span class="rounded-lg bg-black/5 dark:bg-white/5 px-2.5 py-1 font-medium">
+				📁 <strong>{uploadFilesList.length}</strong> {uploadFilesList.length === 1 ? 'file' : 'files'}
+			</span>
+			<span class="rounded-lg bg-black/5 dark:bg-white/5 px-2.5 py-1 font-medium">
+				💾 <strong>{formatBytes(uploadTotalBytes)}</strong> total
+			</span>
+			{#if chapter}
+				<span class="rounded-lg bg-black/5 dark:bg-white/5 px-2.5 py-1 font-medium truncate max-w-xs">
+					📖 <strong>Chapter {chapter.seq + 1}</strong>
+				</span>
+			{/if}
+		</div>
+
+		<!-- SCROLLABLE FILE LIST PREVIEW -->
+		{#if uploadFilesList.length > 0}
+			<div class="mt-1">
+				<div class="text-[11px] font-semibold uppercase tracking-wider opacity-50 mb-1.5">Queued Files ({uploadFilesList.length})</div>
+				<div class="max-h-40 overflow-y-auto rounded-xl border border-black/[0.06] bg-black/[0.01] p-1.5 divide-y divide-black/[0.04] dark:border-white/[0.06] dark:bg-white/[0.01] dark:divide-white/[0.04]">
+					{#each uploadFilesList as item}
+						<div class="flex items-center justify-between gap-2 px-2 py-1.5 text-xs">
+							<div class="flex items-center gap-2 min-w-0 flex-1">
+								<FileImage size={14} class="opacity-50 shrink-0" />
+								<span class="truncate font-medium">{item.name}</span>
+							</div>
+							<span class="font-mono text-[11px] opacity-60 shrink-0">{formatBytes(item.size)}</span>
+						</div>
+					{/each}
+				</div>
+			</div>
+		{/if}
+	</div>
+
+	<svelte:fragment slot="footer">
+		{#if uploadStage === 'done'}
+			<Button variant="primary" on:click={() => (uploadModalOpen = false)}>
+				Done
+			</Button>
+		{:else if uploadStage === 'error'}
+			<Button variant="secondary" on:click={() => (uploadModalOpen = false)}>
+				Close
+			</Button>
+		{:else}
+			<div class="flex items-center gap-2 text-xs opacity-60">
+				<Loader2 size={13} class="animate-spin" />
+				<span>Please keep this window open while files upload...</span>
+			</div>
+		{/if}
 	</svelte:fragment>
 </Modal>

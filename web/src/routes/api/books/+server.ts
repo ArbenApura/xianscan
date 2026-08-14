@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { desc } from 'drizzle-orm';
 import { z } from 'zod';
 // IMPORTED MODULES
-import { DEFAULT_SOURCE_LANG, DEFAULT_TARGET_LANG } from '$lib/languages';
+import { DEFAULT_SOURCE_LANG, DEFAULT_TARGET_LANG, detectSourceLanguage } from '$lib/languages';
 import { db } from '$lib/server/db';
 import { books, chapters, pages } from '$lib/server/db/schema';
 import type { RequestHandler } from './$types';
@@ -65,7 +65,7 @@ export const GET: RequestHandler = async () => {
 				pageCount += chTotal;
 				translatedPageCount += chDone;
 
-				const isChapterDone = c.status === 'done' || (chTotal > 0 && chDone === chTotal);
+				const isChapterDone = chTotal > 0 && (c.status === 'done' || chDone === chTotal);
 				if (isChapterDone) {
 					translatedChapterCount++;
 				}
@@ -117,7 +117,8 @@ export const GET: RequestHandler = async () => {
 export const POST: RequestHandler = async ({ request }) => {
 	const parsed = PostBody.safeParse(await request.json().catch(() => null));
 	if (!parsed.success) throw error(400, 'Invalid book.');
-	const sourceLang = parsed.data.sourceLang || DEFAULT_SOURCE_LANG;
+	const rawSource = parsed.data.sourceLang || DEFAULT_SOURCE_LANG;
+	const sourceLang = rawSource === 'auto' ? detectSourceLanguage(parsed.data.title) : rawSource;
 	const targetLang = parsed.data.targetLang || DEFAULT_TARGET_LANG;
 
 	if (sourceLang === targetLang) {

@@ -1,9 +1,8 @@
 <script lang="ts">
-	import { createEventDispatcher, onMount, onDestroy } from 'svelte';
+	import { createEventDispatcher } from 'svelte';
 	import { Badge, ActionMenu, type MenuAction } from '$lib/components/ui';
 	import GripVertical from 'lucide-svelte/icons/grip-vertical';
 	import Eye from 'lucide-svelte/icons/eye';
-	import ArrowUp from 'lucide-svelte/icons/arrow-up';
 	import Sparkles from 'lucide-svelte/icons/sparkles';
 	import Layers from 'lucide-svelte/icons/layers';
 	import RotateCcw from 'lucide-svelte/icons/rotate-ccw';
@@ -61,30 +60,6 @@
 		save_output: 'Saving...',
 	};
 
-	let currentScrollPage = 1;
-
-	function handleScroll() {
-		const elements = document.querySelectorAll('[data-page-seq]');
-		const scrollPos = window.scrollY + window.innerHeight / 3;
-		for (let i = 0; i < elements.length; i++) {
-			const el = elements[i] as HTMLElement;
-			const top = el.offsetTop;
-			const height = el.offsetHeight;
-			if (scrollPos >= top && scrollPos < top + height) {
-				currentScrollPage = i + 1;
-				break;
-			}
-		}
-	}
-
-	onMount(() => {
-		window.addEventListener('scroll', handleScroll, { passive: true });
-	});
-
-	onDestroy(() => {
-		window.removeEventListener('scroll', handleScroll);
-	});
-
 	function getMenuItems(pg: any, idx: number, isJobRunning: boolean): MenuAction[] {
 		const items: MenuAction[] = [];
 		const isPageProcessing = pg.status === 'processing';
@@ -139,7 +114,7 @@
 	}
 </script>
 
-<div class="flex flex-col items-center gap-6 w-full">
+<div class="flex flex-col items-center w-[calc(100%+2rem)] -mx-4 sm:w-full sm:mx-0">
 	<div class={`w-full ${widthClasses[webtoonWidth]} flex flex-col items-center bg-black transition-all duration-300 shadow-2xl`}>
 		{#each pages as page, idx (page.id)}
 			<div
@@ -202,41 +177,4 @@
 			</div>
 		{/each}
 	</div>
-</div>
-
-<!-- FLOATING UNINTRUSIVE WEBTOON DOCK -->
-<div class="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full border border-white/15 bg-black/85 px-4 py-2 text-xs font-semibold text-white shadow-2xl backdrop-blur transition-all duration-300 hover:bg-black">
-	<span class="text-[11px] font-mono opacity-80">Page {currentScrollPage} / {pages.length}</span>
-	{#if pages[currentScrollPage - 1]}
-		{@const curPg = pages[currentScrollPage - 1]}
-		<Badge
-			variant={statusVariant[curPg.status]}
-			class={curPg.status === 'done'
-				? 'text-emerald-300 bg-emerald-950/80 border border-emerald-500/40'
-				: curPg.status === 'processing'
-					? 'text-amber-300 bg-amber-950/80 border border-amber-500/40'
-					: curPg.status === 'error'
-						? 'text-red-300 bg-red-950/80 border border-red-500/40'
-						: 'text-neutral-200 bg-neutral-900/80 border border-white/20'}
-		>
-			{statusLabel[curPg.status]}
-		</Badge>
-	{/if}
-	<span class="h-3 w-px bg-white/20"></span>
-	<button
-		type="button"
-		on:click={() => dispatch('toggleKind')}
-		class="rounded-full bg-white/15 px-2.5 py-0.5 text-[10px] font-bold text-white transition hover:bg-white/30"
-	>
-		{webtoonKind === 'output' ? 'Translation' : 'Original'}
-	</button>
-	<span class="h-3 w-px bg-white/20"></span>
-	<button
-		type="button"
-		on:click={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-		class="flex items-center justify-center rounded-full p-1 transition hover:bg-white/20"
-		title="Scroll to top"
-	>
-		<ArrowUp size={14} />
-	</button>
 </div>

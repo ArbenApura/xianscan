@@ -1,30 +1,48 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
 	import { get } from 'svelte/store';
-	import { toast } from 'svelte-sonner';
 	import { settings } from '$lib/stores/settings';
 	import { ripple } from '$lib/actions/ripple';
 	import GlossaryPanel from '$lib/components/GlossaryPanel.svelte';
 	import LanguagePicker from '$lib/components/ui/LanguagePicker.svelte';
 	import Select from '$lib/components/ui/Select.svelte';
-	import Button from '$lib/components/ui/Button.svelte';
 	import ArrowLeft from 'lucide-svelte/icons/arrow-left';
-	import Sparkles from 'lucide-svelte/icons/sparkles';
+	import ChevronRight from 'lucide-svelte/icons/chevron-right';
 	import BookOpen from 'lucide-svelte/icons/book-open';
 	import Globe from 'lucide-svelte/icons/globe';
 
 	type Book = { id: string; title: string; sourceLang: string; targetLang: string };
 
-	let sourceLang = get(settings).sourceLang;
-	let targetLang = get(settings).targetLang;
+	const urlParams = $page.url.searchParams;
+	const initialScope = urlParams.get('scope') === 'book' || (urlParams.get('bookId') && urlParams.get('scope') !== 'global') ? 'book' : 'global';
+	const initialBookId = urlParams.get('bookId') || '';
+	const initialSrc = urlParams.get('src') || get(settings).sourceLang;
+	const initialTgt = urlParams.get('tgt') || get(settings).targetLang;
 
-	let scope: 'global' | 'book' = 'global';
+	let sourceLang = initialSrc;
+	let targetLang = initialTgt;
+	let scope: 'global' | 'book' = initialScope;
 	let books: Book[] = [];
-	let selectedBookId = '';
-	let isExtracting = false;
+	let selectedBookId = initialBookId;
+	let mounted = false;
 
-	$: initialBookId = $page.url.searchParams.get('bookId');
+	function syncUrl(newScope: 'global' | 'book', bId: string, src: string, tgt: string) {
+		if (!mounted) return;
+		const params = new URLSearchParams();
+		params.set('scope', newScope);
+		if (newScope === 'book') {
+			if (bId) params.set('bookId', bId);
+		} else {
+			if (src) params.set('src', src);
+			if (tgt) params.set('tgt', tgt);
+		}
+		const newSearch = `?${params.toString()}`;
+		if ($page.url.search !== newSearch) {
+			goto(`/app/glossary/${newSearch}`, { replaceState: true, keepFocus: true, noScroll: true });
+		}
+	}
 
 	onMount(async () => {
 		try {
@@ -32,62 +50,102 @@
 			if (res.ok) {
 				const data = await res.json();
 				books = data.books || [];
-				if (initialBookId && books.some((b) => b.id === initialBookId)) {
-					scope = 'book';
-					selectedBookId = initialBookId;
-				} else if (books.length > 0) {
+				if (scope === 'book') {
+					if (initialBookId && books.some((b) => b.id === initialBookId)) {
+						selectedBookId = initialBookId;
+					} else if (books.length > 0) {
+						selectedBookId = books[0].id;
+					}
+				} else if (books.length > 0 && !selectedBookId) {
 					selectedBookId = books[0].id;
 				}
 			}
 		} catch {
 			// ignore
+		} finally {
+			mounted = true;
+			syncUrl(scope, selectedBookId, sourceLang, targetLang);
 		}
 	});
 
-	$: selectedBook = books.find((b) => b.id === selectedBookId);
-	$: bookSelectItems = books.map((b) => ({ value: b.id, label: b.title }));
+	function setScope(newScope: 'global' | 'book') {
+		scope = newScope;
+		if (newScope === 'book' && !selectedBookId && books.length > 0) {
+			selectedBookId = books[0].id;
+		}
+		syncUrl(scope, selectedBookId, sourceLang, targetLang);
+	}
 
-	async function triggerExtract() {
-		if (!selectedBookId) return;
-		isExtracting = true;
-		try {
-			const res = await fetch('/api/glossary/extract', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ bookId: selectedBookId }),
-			});
-			if (!res.ok) {
-				const err = await res.json().catch(() => ({ message: 'Extraction failed' }));
-				throw new Error(err.message || 'Extraction failed');
-			}
-			const data = await res.json();
-			toast.success(`Extracted ${data.added} new term(s) (${data.skipped} existing skipped).`);
-			// force panel re-render
-			selectedBookId = selectedBookId;
-		} catch (e) {
-			toast.error((e as Error).message || 'Extraction failed.');
-		} finally {
-			isExtracting = false;
+	function onSelectBook(bId: string) {
+		selectedBookId = bId;
+		syncUrl(scope, selectedBookId, sourceLang, targetLang);
+	}
+
+	function onSourceLangChange(lang: string) {
+		sourceLang = lang;
+		syncUrl(scope, selectedBookId, sourceLang, targetLang);
+	}
+
+	function onTargetLangChange(lang: string) {
+		targetLang = lang;
+		syncUrl(scope, selectedBookId, sourceLang, targetLang);
+	}
+
+	$: {
+		const s = $page.url.searchParams.get('scope');
+		const b = $page.url.searchParams.get('bookId');
+		const src = $page.url.searchParams.get('src');
+		const tgt = $page.url.searchParams.get('tgt');
+
+		if (s === 'book' || s === 'global') {
+			if (scope !== s) scope = s;
+		}
+		if (b && b !== selectedBookId && books.some((x) => x.id === b)) {
+			selectedBookId = b;
+		}
+		if (src && src !== sourceLang) {
+			sourceLang = src;
+		}
+		if (tgt && tgt !== targetLang) {
+			targetLang = tgt;
 		}
 	}
+
+	$: selectedBook = books.find((b) => b.id === selectedBookId);
+	$: bookSelectItems = books.map((b) => ({ value: b.id, label: b.title }));
 </script>
 
 <svelte:head>
-	<title>{scope === 'global' ? 'Global' : 'Book'} Glossary — Manhua Translator</title>
+	<title>{scope === 'global' ? 'Global' : 'Book'} Glossary — Xianscan</title>
 </svelte:head>
 
 <!-- GLOSSARY MANAGEMENT DASHBOARD -->
 <div class="flex flex-col gap-6">
-	<!-- BACK BUTTON -->
-	<div>
+	<!-- BREADCRUMB NAVIGATION -->
+	<nav aria-label="Breadcrumb" class="flex items-center gap-1.5 text-xs sm:text-sm">
 		<a
 			href="/app/"
-			class="inline-flex items-center gap-1.5 text-xs font-semibold opacity-60 transition hover:opacity-100 hover:text-[#b23a2e]"
+			class="inline-flex items-center gap-1.5 rounded-lg py-1 px-2 font-medium opacity-65 transition hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5"
 			use:ripple
+			title="Back to Library"
 		>
-			<ArrowLeft size={14} /> Back to Library
+			<ArrowLeft size={14} />
+			<span>Library</span>
 		</a>
-	</div>
+		
+		<ChevronRight size={14} class="opacity-30 shrink-0" />
+
+		<span class="font-semibold truncate opacity-90">
+			Glossary Terms
+		</span>
+
+		{#if scope === 'book' && selectedBook}
+			<ChevronRight size={14} class="opacity-30 shrink-0" />
+			<span class="opacity-70 truncate max-w-[160px] sm:max-w-xs font-medium">
+				{selectedBook.title}
+			</span>
+		{/if}
+	</nav>
 
 	<!-- HERO HEADER CARD -->
 	<div class="relative overflow-hidden rounded-2xl border border-black/[0.08] bg-white/50 p-6 backdrop-blur dark:border-white/[0.06] dark:bg-white/[0.02]">
@@ -110,7 +168,7 @@
 							? 'bg-white font-semibold text-black shadow-xs dark:bg-[#201c18] dark:text-white'
 							: 'opacity-60 hover:opacity-100'
 					}`}
-					on:click={() => (scope = 'global')}
+					on:click={() => setScope('global')}
 					use:ripple
 				>
 					<Globe size={14} />
@@ -123,7 +181,7 @@
 							? 'bg-white font-semibold text-black shadow-xs dark:bg-[#201c18] dark:text-white'
 							: 'opacity-60 hover:opacity-100'
 					}`}
-					on:click={() => (scope = 'book')}
+					on:click={() => setScope('book')}
 					use:ripple
 				>
 					<BookOpen size={14} />
@@ -139,12 +197,12 @@
 			<div class="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-end">
 				<div class="min-w-0">
 					<span class="mb-1 block text-xs font-semibold opacity-60">Source (original)</span>
-					<LanguagePicker value={sourceLang} on:change={(e) => (sourceLang = e.detail)} />
+					<LanguagePicker mode="source" value={sourceLang} on:change={(e) => onSourceLangChange(e.detail)} />
 				</div>
 				<span class="hidden pb-2 text-center text-sm font-bold opacity-40 sm:block">→</span>
 				<div class="min-w-0">
 					<span class="mb-1 block text-xs font-semibold opacity-60">Target (translation)</span>
-					<LanguagePicker value={targetLang} on:change={(e) => (targetLang = e.detail)} />
+					<LanguagePicker value={targetLang} on:change={(e) => onTargetLangChange(e.detail)} />
 				</div>
 			</div>
 		</div>
@@ -153,33 +211,18 @@
 			<GlossaryPanel scope="global" {sourceLang} {targetLang} />
 		{/key}
 	{:else}
-		<!-- BOOK SCOPE SELECTOR & AUTO-EXTRACT TRIGGER -->
+		<!-- BOOK SCOPE SELECTOR -->
 		<div class="rounded-2xl border border-black/[0.08] bg-white/40 p-4 dark:border-white/[0.06] dark:bg-white/[0.02]">
-			<div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-				<div class="w-full sm:max-w-xs">
-					<span class="mb-1 block text-xs font-semibold opacity-60">Select Series</span>
-					{#if books.length > 0}
-						<Select
-							items={bookSelectItems}
-							value={selectedBookId}
-							on:change={(e) => (selectedBookId = String(e.detail))}
-						/>
-					{:else}
-						<p class="text-xs opacity-50">No books created yet.</p>
-					{/if}
-				</div>
-
-				{#if selectedBookId}
-					<Button
-						variant="secondary"
-						size="sm"
-						disabled={isExtracting}
-						on:click={triggerExtract}
-						class="flex items-center gap-1.5"
-					>
-						<Sparkles size={14} class="text-amber-500" />
-						<span>{isExtracting ? 'Extracting Terms...' : 'Auto-Extract AI Terms'}</span>
-					</Button>
+			<div class="w-full sm:max-w-xs">
+				<span class="mb-1 block text-xs font-semibold opacity-60">Select Series</span>
+				{#if books.length > 0}
+					<Select
+						items={bookSelectItems}
+						value={selectedBookId}
+						on:change={(e) => onSelectBook(String(e.detail))}
+					/>
+				{:else}
+					<p class="text-xs opacity-50">No books created yet.</p>
 				{/if}
 			</div>
 		</div>

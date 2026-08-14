@@ -13,6 +13,7 @@
 	export let pages: any[] = [];
 	export let running = false;
 	export let reloadKey = Date.now();
+	export let webtoonKind: 'output' | 'original' = 'output';
 	export let draggedPageIndex: number | null = null;
 	export let dragOverPageIndex: number | null = null;
 
@@ -51,15 +52,6 @@
 		typeset: 'Typesetting...',
 		save_output: 'Saving...',
 	};
-
-	// PER-PAGE ORIGINAL / OUTPUT TOGGLE IN GRID MODE
-	let viewMode = new Map<number, 'original' | 'output'>();
-
-	function toggleView(id: number) {
-		const cur = viewMode.get(id) ?? 'output';
-		viewMode.set(id, cur === 'output' ? 'original' : 'output');
-		viewMode = new Map(viewMode);
-	}
 
 	function getMenuItems(pg: any, idx: number, isJobRunning: boolean): MenuAction[] {
 		const items: MenuAction[] = [];
@@ -163,24 +155,16 @@
 
 				<!-- IMAGE CONTAINER -->
 				<div class="relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10">
-					{#if page.status === 'done' && page.outputPath}
+					{#if page.status === 'done' && page.outputPath && webtoonKind === 'output'}
 						<!-- svelte-ignore a11y-click-events-have-key-events -->
 						<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
 						<img
-							src={`/api/pages/${page.id}/file?kind=${viewMode.get(page.id) === 'output' ? 'output' : 'original'}&v=${page.outputPath || 'orig'}_${reloadKey}`}
+							src={`/api/pages/${page.id}/file?kind=output&v=${page.outputPath || 'orig'}_${reloadKey}`}
 							alt={`Page ${page.seq + 1}`}
 							draggable="false"
 							class="w-full object-cover transition-opacity duration-200 select-none cursor-pointer"
 							on:click={() => dispatch('inspect', page)}
 						/>
-						<button
-							type="button"
-							class="absolute right-2 top-2 rounded-md border border-black/10 bg-white/85 px-2 py-1 text-[11px] font-semibold backdrop-blur transition hover:bg-white dark:border-white/10 dark:bg-black/70 dark:hover:bg-black/90"
-							on:click={() => toggleView(page.id)}
-							use:ripple
-						>
-							{viewMode.get(page.id) === 'output' ? 'Show original' : 'Show translation'}
-						</button>
 					{:else}
 						<!-- svelte-ignore a11y-click-events-have-key-events -->
 						<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->

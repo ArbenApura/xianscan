@@ -665,15 +665,17 @@
 				<input
 					bind:value={fTarget}
 					placeholder="target rendering"
-					class="min-w-0 flex-1 rounded-md border border-black/10 bg-transparent px-2.5 py-2 text-sm outline-none focus:border-[#c0392b] dark:border-white/[0.06]"
+					class="h-[38px] min-w-0 flex-1 rounded-md border border-black/10 bg-transparent px-2.5 text-sm outline-none focus:border-[#c0392b] dark:border-white/[0.06]"
 				/>
 				<Button
-					class="shrink-0"
+					class="h-[38px] w-[38px] min-h-[38px] min-w-[38px] max-h-[38px] max-w-[38px] shrink-0 p-0 inline-flex items-center justify-center"
 					loading={translating}
 					disabled={translating || !fSource.trim()}
 					on:click={translateTarget}
 				>
-					<Languages size={14} /><span class="sr-only">Translate source with AI</span>
+					{#if !translating}
+						<Languages size={15} /><span class="sr-only">Translate source with AI</span>
+					{/if}
 				</Button>
 			</div>
 		</div>

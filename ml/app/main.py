@@ -71,7 +71,7 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="manua-translator ML sidecar", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="xianscan ML sidecar", version="0.1.0", lifespan=lifespan)
 
 # SIZE CAP: A MANHUA PAGE IS ~2-8MB AS PNG/JPEG; REJECT ANYTHING ABSURD EARLY.
 MAX_UPLOAD_BYTES = 32 * 1024 * 1024

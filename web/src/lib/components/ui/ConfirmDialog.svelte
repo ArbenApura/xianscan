@@ -20,6 +20,9 @@
 	export let confirmLabel = 'Confirm';
 	export let cancelLabel = 'Cancel';
 	export let variant: 'danger' | 'default' = 'danger';
+	export let requireText: string | null = null;
+	export let requireVerificationCode = false;
+	export let inputPlaceholder: string = '';
 
 	// -- CONSTANTS -- //
 
@@ -33,21 +36,56 @@
 		},
 	} as const;
 
+	// -- STATES -- //
+
+	let inputValue = '';
+	let randomCode = '';
+	let inputEl: HTMLInputElement | undefined;
+	let lastOpen = false;
+
 	// -- REACTIVE STATES -- //
 
-	// THEME-AWARE OPAQUE PANEL + BORDER (WAS A HARDCODED white / slate-900 PLANE)
+	// GENERATE A RANDOM 6-DIGIT CODE WHEN OPENED
+	$: if (open !== lastOpen) {
+		lastOpen = open;
+		if (open) {
+			inputValue = '';
+			if (requireVerificationCode) {
+				randomCode = String(Math.floor(100000 + Math.random() * 900000));
+			}
+			if (requireVerificationCode || requireText) {
+				setTimeout(() => inputEl?.focus(), 50);
+			}
+		} else {
+			inputValue = '';
+			randomCode = '';
+		}
+	}
+
+	$: targetMatch = requireVerificationCode ? randomCode : requireText;
+
+	// THEME-AWARE OPAQUE PANEL + BORDER
 	$: panel = THEME_PANEL[$settings.theme];
 	$: panelBorder = THEME_PANEL_BORDER[$settings.theme];
+	$: isMatch = !targetMatch || inputValue.trim() === targetMatch.trim();
 
 	// -- FUNCTIONS -- //
 
 	function confirm() {
+		if (!isMatch) return;
 		open = false;
 		dispatch('confirm');
 	}
 	function cancel() {
 		open = false;
 		dispatch('cancel');
+	}
+
+	function handleKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter' && isMatch) {
+			e.preventDefault();
+			confirm();
+		}
 	}
 </script>
 
@@ -62,7 +100,7 @@
 		role="dialog"
 		aria-modal="true"
 	>
-		<!-- BACKDROP DISMISS BUTTON — NO RIPPLE (A FULL-SCREEN DISMISS SHOULDN'T FLASH A RIPPLE ON CLICK) -->
+		<!-- BACKDROP DISMISS BUTTON — NO RIPPLE -->
 		<button
 			class="absolute inset-0 bg-black/40 backdrop-blur-sm"
 			on:click={cancel}
@@ -93,9 +131,27 @@
 				</div>
 				<div class="min-w-0 flex-1">
 					<h3 class="text-sm font-semibold">{title}</h3>
-					<p class="mt-1 text-xs opacity-60">{message}</p>
+					<p class="mt-1 text-xs opacity-60 leading-relaxed">{message}</p>
 				</div>
 			</div>
+
+			<!-- VERIFICATION INPUT IF REQUIRED -->
+			{#if targetMatch}
+				<div class="mt-4 rounded-lg border border-black/10 bg-black/[0.02] p-3 dark:border-white/10 dark:bg-white/[0.02]">
+					<label class="block text-[11px] font-semibold opacity-70 mb-1.5">
+						Type <code class="rounded bg-black/10 px-1.5 py-0.5 font-mono text-xs font-bold text-[#b23a2e] dark:bg-white/10 dark:text-[#e08a63] tracking-widest select-all">{targetMatch}</code> to confirm:
+					</label>
+					<input
+						bind:this={inputEl}
+						type="text"
+						bind:value={inputValue}
+						placeholder={inputPlaceholder || `Type ${targetMatch}`}
+						on:keydown={handleKeydown}
+						class="w-full rounded-lg border border-black/15 bg-transparent px-3 py-1.5 font-mono text-xs outline-none transition placeholder:opacity-40 focus:border-[#b23a2e] focus:ring-2 focus:ring-[#b23a2e]/30 dark:border-white/15"
+					/>
+				</div>
+			{/if}
+
 			<!-- ACTION BUTTONS -->
 			<div class="mt-5 flex justify-end gap-2">
 				<button
@@ -107,7 +163,12 @@
 				</button>
 				<button
 					use:ripple
-					class={cn('rounded-lg px-4 py-2 text-xs font-medium transition-colors', STYLES[variant].confirm)}
+					disabled={!isMatch}
+					class={cn(
+						'rounded-lg px-4 py-2 text-xs font-medium transition-all duration-150',
+						STYLES[variant].confirm,
+						!isMatch && 'opacity-40 cursor-not-allowed pointer-events-none'
+					)}
 					on:click={confirm}
 				>
 					{confirmLabel}

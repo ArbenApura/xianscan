@@ -7,7 +7,7 @@ import { DEFAULT_SOURCE_LANG, DEFAULT_TARGET_LANG } from '$lib/languages';
 
 // -- TYPES -- //
 
-export type Theme = 'light' | 'sepia' | 'dark' | 'oled' | 'contrast';
+export type Theme = 'light' | 'sepia' | 'dark';
 
 export interface AppSettings {
 	version: number;
@@ -35,7 +35,7 @@ export const TRANSLATION_MODELS: { id: string; label: string; blurb: string }[] 
 
 // BUMP version WHEN DEFAULTS CHANGE — TRIGGERS A ONE-TIME MIGRATION OF SAVED SETTINGS
 export const DEFAULTS: AppSettings = {
-	version: 4,
+	version: 5,
 	theme: 'sepia',
 	model: 'deepseek-v4-flash',
 	sourceLang: DEFAULT_SOURCE_LANG,
@@ -45,21 +45,19 @@ export const DEFAULTS: AppSettings = {
 	webtoonWidth: 'md',
 };
 
-const KEY = 'manua:settings';
+const KEY = 'xianscan:settings';
 
 // COOKIE LETS THE SERVER RENDER THE CORRECT THEME ON FIRST PAINT (NO FLICKER)
 export const THEME_COOKIE = 'mt_theme';
 
-const DARK_THEMES: Theme[] = ['dark', 'oled', 'contrast'];
+const DARK_THEMES: Theme[] = ['dark'];
 
 // SINGLE SOURCE OF TRUTH FOR THEME SURFACE COLOURS — APPLIED APP-WIDE AT THE LAYOUT ROOT
-// WARM INK ON PAPER (light/sepia) AND WARM OFF-WHITE ON WARM LACQUER / TRUE BLACK (dark/oled/contrast).
+// WARM INK ON PAPER (light/sepia) AND WARM OFF-WHITE ON WARM LACQUER (dark).
 export const THEME_CLASS: Record<Theme, string> = {
 	light: 'bg-[#fbfaf7] text-[#2b2320]',
 	sepia: 'bg-[#f4ecd8] text-[#5b4636]',
 	dark: 'bg-[#13100c] text-[#d8cfc2]',
-	oled: 'bg-black text-[#d8cfc2]',
-	contrast: 'bg-black text-white',
 };
 
 // ROOT BACKGROUND PER THEME — KEEPS BROWSER CHROME, SCROLLBARS, AND OVERSCROLL IN SYNC
@@ -67,8 +65,6 @@ export const THEME_BG: Record<Theme, string> = {
 	light: '#fbfaf7',
 	sepia: '#f4ecd8',
 	dark: '#13100c',
-	oled: '#000000',
-	contrast: '#000000',
 };
 
 // OPAQUE ELEVATED SURFACE FOR OVERLAYS (MODALS, BOTTOM SHEETS, DRAWERS). UNLIKE PAGE CARDS — WHICH USE
@@ -78,8 +74,6 @@ export const THEME_PANEL: Record<Theme, string> = {
 	light: 'bg-white text-[#2b2320]',
 	sepia: 'bg-[#fbf6ea] text-[#5b4636]',
 	dark: 'bg-[#211c15] text-[#e6ded2]',
-	oled: 'bg-[#0c0b0a] text-[#e6ded2]',
-	contrast: 'bg-black text-white',
 };
 
 // POPOVERS / DROPDOWN MENUS — ONE ELEVATION HIGHER THAN A PANEL (THEY OFTEN OPEN ON TOP OF ONE)
@@ -87,18 +81,13 @@ export const THEME_POPOVER: Record<Theme, string> = {
 	light: 'bg-white text-[#2b2320]',
 	sepia: 'bg-[#fdf9f0] text-[#5b4636]',
 	dark: 'bg-[#2a231a] text-[#e6ded2]',
-	oled: 'bg-[#161310] text-[#e6ded2]',
-	contrast: 'bg-[#050505] text-white',
 };
 
-// BORDER FOR ELEVATED OVERLAYS — A SOFT TINT ON MOST THEMES, A WARM HAIRLINE ON SEPIA, AND A BRIGHT,
-// CRISP EDGE ON contrast (WHERE THE WHOLE POINT IS MAXIMUM SEPARATION).
+// BORDER FOR ELEVATED OVERLAYS — A SOFT TINT ON LIGHT/DARK, A WARM HAIRLINE ON SEPIA.
 export const THEME_PANEL_BORDER: Record<Theme, string> = {
 	light: 'border-black/10',
 	sepia: 'border-[#e2d4b5]',
 	dark: 'border-white/10',
-	oled: 'border-white/[0.12]',
-	contrast: 'border-white/40',
 };
 
 // TRANSLUCENT CHROME BARS (STICKY HEADERS) — SIT OVER backdrop-blur AND THE THEME BG.
@@ -106,8 +95,6 @@ export const THEME_BAR: Record<Theme, string> = {
 	light: 'bg-white/70',
 	sepia: 'bg-[#f4ecd8]/72',
 	dark: 'bg-[#13100c]/70',
-	oled: 'bg-black/55',
-	contrast: 'bg-black/80',
 };
 
 // BRAND PALETTE — COMPLETE LITERAL CLASS STRINGS SO TAILWIND'S CONTENT SCANNER PICKS THEM UP FROM THIS
@@ -163,9 +150,13 @@ function mergeKnown(parsed: unknown): AppSettings {
 			if (v !== undefined && typeof v === typeof DEFAULTS[k]) (out as Record<string, unknown>)[k] = v;
 		}
 	}
+	if (!['light', 'sepia', 'dark'].includes(out.theme)) out.theme = 'sepia';
 	if (!['reader', 'grid', 'compare'].includes(out.readerViewMode)) out.readerViewMode = 'reader';
 	if (!['output', 'original'].includes(out.webtoonKind)) out.webtoonKind = 'output';
 	if (!['sm', 'md', 'lg'].includes(out.webtoonWidth)) out.webtoonWidth = 'md';
+	if ((parsed as any)?.version < 5 || out.sourceLang === 'zh-CN' || out.sourceLang === 'zh-Hans') {
+		out.sourceLang = DEFAULT_SOURCE_LANG;
+	}
 	out.version = DEFAULTS.version;
 	return out;
 }
@@ -173,7 +164,7 @@ function mergeKnown(parsed: unknown): AppSettings {
 function load(): AppSettings {
 	if (!browser) return { ...DEFAULTS };
 	try {
-		const raw = localStorage.getItem(KEY);
+		const raw = localStorage.getItem(KEY) || localStorage.getItem('manua:settings');
 		if (raw) {
 			const parsed = JSON.parse(raw);
 			// MERGE THE USER'S SAVED VALUES *FORWARD* ONTO THE CURRENT DEFAULTS RATHER THAN DISCARDING THEM

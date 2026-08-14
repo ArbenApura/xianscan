@@ -58,7 +58,7 @@ def _verify(entry: dict, dest: Path) -> bool:
 
 def _download(url: str, dest: Path) -> None:
 	print(f"  downloading {url}")
-	req = urllib.request.Request(url, headers={"User-Agent": "manua-translator/0.1"})
+	req = urllib.request.Request(url, headers={"User-Agent": "xianscan/0.1"})
 	with urllib.request.urlopen(req) as resp, dest.open("wb") as out:
 		total = int(resp.headers.get("Content-Length") or 0)
 		done = 0
@@ -75,7 +75,7 @@ def _download(url: str, dest: Path) -> None:
 
 
 def main() -> int:
-	parser = argparse.ArgumentParser(description="Download manua-translator ML models.")
+	parser = argparse.ArgumentParser(description="Download xianscan ML models.")
 	parser.add_argument("--models-dir", type=Path, default=MODELS_DIR)
 	parser.add_argument("--skip-lama", "--skip-big-lama", dest="skip_lama", action="store_true", help="skip the inpainting weights")
 	args = parser.parse_args()

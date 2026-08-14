@@ -6,7 +6,7 @@
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	// IMPORTED MODULES
-	import { languageName, NO_TRANSLATION, targetLanguageOptions } from '$lib/languages';
+	import { languageName, NO_TRANSLATION, SOURCE_LANGUAGE_OPTIONS, targetLanguageOptions } from '$lib/languages';
 	import { settings, THEME_POPOVER, THEME_PANEL_BORDER } from '$lib/stores/settings';
 	import { cn } from '$lib/utils/cn';
 	import { ripple } from '$lib/actions/ripple';
@@ -33,6 +33,7 @@
 
 	// -- OPTIONAL PROPS -- //
 
+	export let mode: 'target' | 'source' = 'target';
 	export let allowNone = false;
 	export let excludeCode: string | null = null;
 	let klass = '';
@@ -45,7 +46,15 @@
 	// -- CONSTANTS -- //
 
 	const dispatch = createEventDispatcher<{ change: string }>();
-	const ALL = targetLanguageOptions();
+	const TARGET_ALL = targetLanguageOptions();
+	const SOURCE_ALL: TargetOption[] = SOURCE_LANGUAGE_OPTIONS.map((o) => ({
+		value: o.value,
+		name: o.name,
+		endonym: o.endonym,
+		tier: 1 as const,
+		script: 'latin' as const,
+		rtl: false,
+	}));
 	const TIER_LABEL: Record<1 | 2 | 3, string> = {
 		1: 'Best — production quality',
 		2: 'Strong',
@@ -64,11 +73,17 @@
 
 	// -- REACTIVE STATES -- //
 
+	$: isSource = mode === 'source';
 	$: isNone = value === NO_TRANSLATION;
-	$: selectedName = languageName(value);
-	$: selectedEndonym = isNone ? '' : (ALL.find((l) => l.value === value)?.endonym ?? '');
+	$: selectedName = isSource && value === 'auto' ? 'Auto Detect Language' : languageName(value);
+	$: selectedEndonym = isNone
+		? ''
+		: isSource
+			? (SOURCE_ALL.find((l) => l.value === value)?.endonym ?? '')
+			: (TARGET_ALL.find((l) => l.value === value)?.endonym ?? '');
 	$: q = query.trim().toLowerCase();
-	$: availableList = excludeCode ? ALL.filter((l) => l.value !== excludeCode) : ALL;
+	$: baseList = isSource ? SOURCE_ALL : TARGET_ALL;
+	$: availableList = excludeCode ? baseList.filter((l) => l.value !== excludeCode) : baseList;
 	$: filtered = q
 		? availableList.filter(
 				(l) =>
@@ -77,9 +92,11 @@
 					l.value.toLowerCase().includes(q),
 			)
 		: availableList;
-	$: groups = ([1, 2, 3] as const)
-		.map((tier) => ({ tier, label: TIER_LABEL[tier], items: filtered.filter((l) => l.tier === tier) }))
-		.filter((g) => g.items.length > 0) satisfies Group[];
+	$: groups = isSource
+		? ([{ tier: 1 as const, label: 'Source Options', items: filtered }])
+		: ([1, 2, 3] as const)
+				.map((tier) => ({ tier, label: TIER_LABEL[tier], items: filtered.filter((l) => l.tier === tier) }))
+				.filter((g) => g.items.length > 0) satisfies Group[];
 	$: showNoneRow = allowNone && (!q || 'original'.includes(q) || 'none'.includes(q));
 	$: popover = THEME_POPOVER[$settings.theme];
 	$: popoverBorder = THEME_PANEL_BORDER[$settings.theme];
@@ -189,7 +206,7 @@
 			<Languages size={15} class="shrink-0 opacity-60 text-[#b23a2e] dark:text-[#e08a63]" />
 		{/if}
 		<span class="min-w-0 flex-1 truncate">
-			{selectedName}{#if selectedEndonym && selectedEndonym !== selectedName}<span class="opacity-50">
+			{selectedName}{#if selectedEndonym && selectedEndonym !== selectedName && value !== 'auto'}<span class="opacity-50">
 					· {selectedEndonym}</span
 				>{/if}
 		</span>
@@ -268,7 +285,7 @@
 						)}
 					>
 						<span class="min-w-0 flex-1 truncate">
-							{lang.name}{#if lang.endonym !== lang.name}<span class="opacity-50">
+							{lang.name}{#if lang.endonym && lang.endonym !== lang.name && lang.value !== 'auto'}<span class="opacity-50">
 									· {lang.endonym}</span
 								>{/if}
 						</span>

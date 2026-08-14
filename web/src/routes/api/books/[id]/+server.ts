@@ -67,10 +67,13 @@ export const GET: RequestHandler = async ({ params }) => {
 			const pageCount = pgs.length;
 			const translatedPageCount = pgs.filter((p) => p.status === 'done' || Boolean(p.outputPath)).length;
 			const firstPage = pgs[0] ?? null;
-			const isDone = c.status === 'done' || (pageCount > 0 && translatedPageCount === pageCount);
+			const isDone = pageCount > 0 && (c.status === 'done' || translatedPageCount === pageCount);
+			const effectiveStatus = pageCount === 0
+				? 'pending'
+				: (isDone ? 'done' : (c.status === 'done' ? 'pending' : c.status));
 			return {
 				...c,
-				status: isDone ? 'done' : c.status,
+				status: effectiveStatus,
 				pageCount,
 				translatedPageCount,
 				coverPageId: firstPage?.id ?? null,

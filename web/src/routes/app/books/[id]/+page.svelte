@@ -6,6 +6,11 @@
 	import { toast } from 'svelte-sonner';
 	import { Button, TextField, Badge, Modal, ConfirmDialog, ActionMenu, LanguagePicker, Toggle, LazyImage } from '$lib/components/ui';
 	import { ripple } from '$lib/actions/ripple';
+	import { apiJson } from '$lib/api';
+	import { settings, THEME_POPOVER, THEME_PANEL_BORDER } from '$lib/stores/settings';
+	import { cn } from '$lib/utils/cn';
+	import { fly } from 'svelte/transition';
+	import { cubicOut } from 'svelte/easing';
 	// IMPORTED ICONS
 	import ArrowLeft from 'lucide-svelte/icons/arrow-left';
 	import Plus from 'lucide-svelte/icons/plus';
@@ -17,13 +22,17 @@
 	import Layers from 'lucide-svelte/icons/layers';
 	import Pencil from 'lucide-svelte/icons/pencil';
 	import ArrowUpDown from 'lucide-svelte/icons/arrow-up-down';
+	import ChevronDown from 'lucide-svelte/icons/chevron-down';
+	import Check from 'lucide-svelte/icons/check';
+	import X from 'lucide-svelte/icons/x';
 	import Pin from 'lucide-svelte/icons/pin';
 	import Play from 'lucide-svelte/icons/play';
 	import Download from 'lucide-svelte/icons/download';
-	import Hash from 'lucide-svelte/icons/hash';
 	import LayoutGrid from 'lucide-svelte/icons/layout-grid';
 	import List from 'lucide-svelte/icons/list';
 	import AlignJustify from 'lucide-svelte/icons/align-justify';
+	import ChevronRight from 'lucide-svelte/icons/chevron-right';
+	import Languages from 'lucide-svelte/icons/languages';
 
 	// -- TYPES -- //
 
@@ -44,7 +53,7 @@
 		seq: number;
 		status: 'pending' | 'processing' | 'done' | 'error';
 		pageCount: number;
-		translatedPageCount?: number;
+		translatedPageCount: number;
 		coverPageId?: number | null;
 		coverHasOutput?: boolean;
 		translatedAt?: number;
@@ -59,16 +68,24 @@
 	let chapterTitleTarget = '';
 	let creating = false;
 	let searchQuery = '';
+	let searchInputEl: HTMLInputElement;
 	let createModalOpen = false;
 	let sortAscending = true;
+	let sortMenuOpen = false;
 	let statusFilter: 'all' | 'done' | 'pending' | 'error' = 'all';
 
 	// VIEW LAYOUT MODES: 'grid' (Comfortable Cards) | 'list' (Media List Rows) | 'compact' (Dense Table Rows)
 	let viewLayout: 'grid' | 'list' | 'compact' = 'grid';
 
+	function handleGlobalKeydown(e: KeyboardEvent) {
+		if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+			e.preventDefault();
+			searchInputEl?.focus();
+		}
+	}
+
 	// PERFORMANCE / WINDOWING STATES FOR THOUSANDS OF CHAPTERS
 	let visibleLimit = 36;
-	let jumpInput = '';
 
 	// EDIT BOOK STATES
 	let editBookModalOpen = false;
@@ -79,6 +96,7 @@
 	let editBookPinned = false;
 	let editBookArchived = false;
 	let updatingBook = false;
+	let translatingBookTitle = false;
 
 	// EDIT CHAPTER STATES
 	let editChapterModalOpen = false;
@@ -87,6 +105,8 @@
 	let editChapterTitleTarget = '';
 	let editChapterSeq = 1;
 	let updatingChapter = false;
+	let translatingChapterTitle = false;
+	let translatingNewChapterTitle = false;
 
 	// DELETION STATES
 	let chapterToDelete: Chapter | null = null;
@@ -101,7 +121,7 @@
 
 	onMount(async () => {
 		try {
-			const saved = localStorage.getItem('manhua:chapterViewLayout');
+			const saved = localStorage.getItem('xianscan:chapterViewLayout') || localStorage.getItem('manhua:chapterViewLayout');
 			if (saved === 'grid' || saved === 'list' || saved === 'compact') {
 				viewLayout = saved;
 			}
@@ -114,7 +134,7 @@
 	function setViewLayout(mode: 'grid' | 'list' | 'compact') {
 		viewLayout = mode;
 		try {
-			localStorage.setItem('manhua:chapterViewLayout', mode);
+			localStorage.setItem('xianscan:chapterViewLayout', mode);
 		} catch {
 			// ignore
 		}
@@ -239,6 +259,97 @@
 		}
 	}
 
+	async function translateBookTitle() {
+		const src = editBookTitle.trim();
+		if (!src) {
+			toast.error('Enter a book title to translate.');
+			return;
+		}
+		translatingBookTitle = true;
+		try {
+			const res = await apiJson<{ text: string }>('/api/translate-text', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					text: src,
+					kind: 'title',
+					sourceLang: editBookSourceLang,
+					targetLang: editBookTargetLang,
+					bookId: book?.id,
+				}),
+			});
+			if (res.text) {
+				editBookTitleTarget = res.text;
+				toast.success('Title translated!');
+			}
+		} catch (err: any) {
+			toast.error(err?.message || 'Could not translate title.');
+		} finally {
+			translatingBookTitle = false;
+		}
+	}
+
+	async function translateEditChapterTitle() {
+		const src = editChapterTitle.trim();
+		if (!src) {
+			toast.error('Enter a chapter title to translate.');
+			return;
+		}
+		translatingChapterTitle = true;
+		try {
+			const res = await apiJson<{ text: string }>('/api/translate-text', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					text: src,
+					kind: 'chapter',
+					sourceLang: book?.sourceLang,
+					targetLang: book?.targetLang,
+					bookId: book?.id,
+					chapterId: editingChapter?.id,
+				}),
+			});
+			if (res.text) {
+				editChapterTitleTarget = res.text;
+				toast.success('Chapter title translated!');
+			}
+		} catch (err: any) {
+			toast.error(err?.message || 'Could not translate chapter title.');
+		} finally {
+			translatingChapterTitle = false;
+		}
+	}
+
+	async function translateNewChapterTitle() {
+		const src = chapterTitle.trim();
+		if (!src) {
+			toast.error('Enter a chapter title to translate.');
+			return;
+		}
+		translatingNewChapterTitle = true;
+		try {
+			const res = await apiJson<{ text: string }>('/api/translate-text', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					text: src,
+					kind: 'chapter',
+					sourceLang: book?.sourceLang,
+					targetLang: book?.targetLang,
+					bookId: book?.id,
+				}),
+			});
+			if (res.text) {
+				chapterTitleTarget = res.text;
+				toast.success('Chapter title translated!');
+			}
+		} catch (err: any) {
+			toast.error(err?.message || 'Could not translate chapter title.');
+		} finally {
+			translatingNewChapterTitle = false;
+		}
+	}
+
 	function promptDeleteChapter(chap: Chapter) {
 		chapterToDelete = chap;
 		deleteConfirmOpen = true;
@@ -290,34 +401,13 @@
 	function getChapterProgress(ch: Chapter): { percent: number; isComplete: boolean } {
 		const total = ch.pageCount || 0;
 		const done = ch.translatedPageCount || 0;
-		if (total === 0) return { percent: ch.status === 'done' ? 100 : 0, isComplete: ch.status === 'done' };
+		if (total === 0) return { percent: 0, isComplete: false };
 		const percent = Math.min(100, Math.round((done / total) * 100));
-		return { percent, isComplete: ch.status === 'done' || (total > 0 && done === total) };
+		return { percent, isComplete: total > 0 && (ch.status === 'done' || done === total) };
 	}
 
 	function loadMore() {
 		visibleLimit += 36;
-	}
-
-	function jumpToChapter() {
-		const targetSeq = parseInt(jumpInput, 10);
-		if (!targetSeq || isNaN(targetSeq)) return;
-		const idx = filteredChapters.findIndex((c) => c.seq + 1 === targetSeq);
-		if (idx !== -1) {
-			if (idx >= visibleLimit) {
-				visibleLimit = Math.min(filteredChapters.length, idx + 24);
-			}
-			setTimeout(() => {
-				const el = document.getElementById(`chapter-card-${filteredChapters[idx].id}`);
-				if (el) {
-					el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-					el.classList.add('ring-2', 'ring-[#b23a2e]');
-					setTimeout(() => el.classList.remove('ring-2', 'ring-[#b23a2e]'), 2000);
-				}
-			}, 60);
-		} else {
-			toast.error(`Chapter #${targetSeq} not found in current filter.`);
-		}
 	}
 
 	const statusVariant: Record<Chapter['status'], 'neutral' | 'amber' | 'jade' | 'cinnabar'> = {
@@ -329,8 +419,8 @@
 
 	$: filteredChapters = chapters
 		.filter((c) => {
-			if (statusFilter === 'done' && c.status !== 'done') return false;
-			if (statusFilter === 'pending' && c.status !== 'pending' && c.status !== 'processing') return false;
+			if (statusFilter === 'done' && (c.status !== 'done' || (c.pageCount || 0) === 0)) return false;
+			if (statusFilter === 'pending' && (c.status === 'done' && (c.pageCount || 0) > 0)) return false;
 			if (statusFilter === 'error' && c.status !== 'error') return false;
 
 			if (!searchQuery.trim()) return true;
@@ -348,237 +438,355 @@
 
 	$: totalPages = chapters.reduce((sum, c) => sum + (c.pageCount || 0), 0);
 	$: translatedPages = chapters.reduce((sum, c) => sum + (c.translatedPageCount || 0), 0);
-	$: translatedChapters = chapters.filter((c) => c.status === 'done' || (c.pageCount > 0 && c.translatedPageCount === c.pageCount)).length;
+	$: translatedChapters = chapters.filter((c) => (c.pageCount || 0) > 0 && (c.status === 'done' || (c.translatedPageCount ?? 0) === c.pageCount)).length;
 	$: overallProgress = totalPages > 0 ? Math.round((translatedPages / totalPages) * 100) : (chapters.length > 0 ? Math.round((translatedChapters / chapters.length) * 100) : 0);
 	$: bookCoverPageId = chapters.find((c) => c.coverPageId)?.coverPageId ?? null;
+	$: errorChapters = chapters.filter((c) => c.status === 'error').length;
+	$: pendingChapters = chapters.filter((c) => c.status === 'pending' || c.status === 'processing').length;
+	$: popover = THEME_POPOVER[$settings.theme];
+	$: popoverBorder = THEME_PANEL_BORDER[$settings.theme];
 </script>
 
+<svelte:window on:keydown={handleGlobalKeydown} />
+
 <svelte:head>
-	<title>{book ? `${book.title} — Manhua Translator` : 'Book Details'}</title>
+	<title>{book ? `${book.titleTarget || book.title} — Xianscan` : 'Book Details'}</title>
 </svelte:head>
 
 <!-- BOOK DETAIL & CHAPTER MANAGEMENT -->
 <div class="flex flex-col gap-6">
-	<!-- BACK BUTTON -->
-	<div>
+	<!-- BREADCRUMB NAVIGATION -->
+	<nav aria-label="Breadcrumb" class="flex items-center gap-1.5 text-xs sm:text-sm">
 		<a
 			href="/app/"
-			class="inline-flex items-center gap-1.5 text-xs font-semibold opacity-60 transition hover:opacity-100 hover:text-[#b23a2e]"
-			use:ripple
+			class="inline-flex items-center gap-1.5 rounded-lg py-1 px-2 font-medium opacity-65 transition hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5"
 		>
-			<ArrowLeft size={14} /> Back to Library
+			<ArrowLeft size={14} /> Library
 		</a>
-	</div>
+		<ChevronRight size={12} class="opacity-40" />
+		<span class="font-medium truncate max-w-[200px] sm:max-w-xs">{book?.titleTarget || book?.title || 'Book Details'}</span>
+	</nav>
 
+	<!-- MAIN CONTENT CONTAINER -->
 	{#if loading}
-		<div class="h-48 animate-pulse rounded-2xl border border-black/[0.06] bg-black/[0.03] dark:border-white/[0.06] dark:bg-white/[0.03]"></div>
-	{:else if book}
-		<!-- HERO HEADER CARD -->
-		<div class="relative overflow-hidden rounded-2xl border border-black/[0.08] bg-white/60 p-6 backdrop-blur dark:border-white/[0.06] dark:bg-white/[0.02]">
-			<div class="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
-				<div class="flex gap-5 min-w-0 flex-1">
-					<!-- BOOK COVER PREVIEW IN HEADER (SM+) -->
-					{#if bookCoverPageId}
-						<div class="hidden sm:block w-24 shrink-0">
-							<LazyImage
-								src={`/api/pages/${bookCoverPageId}/file?kind=thumb&w=280`}
-								alt={`${book.title} Cover`}
-								fallbackText={book.title.slice(0, 1) || '书'}
-								aspectRatio="aspect-[2/3]"
-								showSpineShadow={true}
-							/>
-						</div>
-					{/if}
+		<div class="space-y-4">
+			<div class="h-44 animate-pulse rounded-2xl border border-black/[0.06] bg-black/[0.03] dark:border-white/[0.06] dark:bg-white/[0.03]"></div>
+			<div class="h-10 animate-pulse rounded-xl border border-black/[0.06] bg-black/[0.03] dark:border-white/[0.06] dark:bg-white/[0.03]"></div>
+		</div>
+	{:else if !book}
+		<div class="flex flex-col items-center justify-center rounded-2xl border border-dashed border-black/15 py-16 text-center dark:border-white/15">
+			<FileX size={32} class="opacity-40" />
+			<h2 class="mt-4 text-base font-semibold">Book not found</h2>
+			<p class="mt-1 text-xs opacity-60">This book might have been deleted or does not exist.</p>
+			<Button variant="secondary" size="sm" class="mt-4" on:click={() => goto('/app/')}>
+				<ArrowLeft size={14} /> Back to Library
+			</Button>
+		</div>
+	{:else}
+		<!-- HERO CARD: METADATA, COVER ART, & ACTIONS -->
+		<div class="relative overflow-hidden rounded-2xl border border-black/[0.08] bg-white/70 p-3.5 sm:p-6 backdrop-blur-md dark:border-white/[0.08] dark:bg-white/[0.02]">
+			<div class="grid grid-cols-[auto_1fr] gap-x-3.5 sm:gap-x-6 gap-y-3 sm:gap-y-4 items-start">
+				<!-- COVER THUMBNAIL (ROW 1 ON MOBILE; FULL-HEIGHT SIDEBAR ON WIDE) -->
+				<div class="w-20 xs:w-24 sm:w-32 md:w-36 shrink-0 sm:row-span-3">
+					<LazyImage
+						src={bookCoverPageId ? `/api/pages/${bookCoverPageId}/file?kind=thumb&w=320` : ''}
+						alt={book.titleTarget || book.title}
+						aspectRatio="aspect-[2/3]"
+						class="shadow-md rounded-xl"
+					/>
+				</div>
 
-					<div class="min-w-0 flex-1">
-						<div class="flex items-center gap-2 flex-wrap">
-							{#if book.pinned}
-								<span title="Pinned Series" class="flex items-center text-amber-600 dark:text-amber-400">
-									<Pin size={16} class="rotate-45 fill-current" />
-								</span>
-							{/if}
-							<h1 class="text-2xl font-bold tracking-tight sm:text-3xl">{book.title}</h1>
-							{#if book.titleTarget}
-								<span class="text-lg font-medium opacity-70">({book.titleTarget})</span>
-							{/if}
-							<span class="rounded-md bg-[#b23a2e]/10 px-2.5 py-0.5 text-xs font-semibold text-[#b23a2e] dark:text-[#e08a63]">
+				<!-- METADATA & STATS (ROW 1, COL 2) -->
+				<div class="min-w-0 flex flex-col justify-start">
+					<div class="space-y-1.5 sm:space-y-2">
+						<div class="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+							<Badge variant="neutral" class="font-mono text-[10px] sm:text-xs">
 								{book.sourceLang} → {book.targetLang}
-							</span>
+							</Badge>
+							{#if book.pinned}
+								<Badge variant="cinnabar" class="gap-1 text-[10px] sm:text-xs">
+									<Pin size={10} class="rotate-45" /> Pinned
+								</Badge>
+							{/if}
 							{#if book.archived}
-								<span class="rounded-md bg-black/10 dark:bg-white/10 px-2 py-0.5 text-xs font-semibold opacity-60">
-									Archived
-								</span>
+								<Badge variant="neutral" class="text-[10px] sm:text-xs">Archived</Badge>
 							{/if}
 						</div>
 
-						<p class="mt-1.5 text-sm opacity-60">
-							{chapters.length} chapter{chapters.length === 1 ? '' : 's'} · {translatedChapters} translated ({translatedPages}/{totalPages} pages)
-						</p>
-
-						<!-- OVERALL PROGRESS BAR -->
-						{#if chapters.length > 0}
-							<div class="mt-4 max-w-md">
-								<div class="flex items-center justify-between text-xs mb-1 font-medium">
-									<span class="opacity-60">Series Completion</span>
-									<span class="font-mono text-xs">{overallProgress}%</span>
-								</div>
-								<div class="h-2 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
-									<div
-										class={`h-full rounded-full transition-all duration-500 ${
-											overallProgress === 100
-												? 'bg-emerald-600 dark:bg-emerald-400'
-												: 'bg-[#b23a2e] dark:bg-[#e08a63]'
-										}`}
-										style={`width: ${overallProgress}%`}
-									></div>
-								</div>
-							</div>
+						<h1 class="text-base sm:text-2xl font-bold tracking-tight leading-snug sm:leading-normal line-clamp-2">
+							{book.titleTarget || book.title}
+						</h1>
+						{#if book.titleTarget && book.titleTarget !== book.title}
+							<p class="text-[11px] sm:text-sm opacity-60 font-mono truncate">
+								Original: {book.title}
+							</p>
 						{/if}
+
+						<div class="flex items-center gap-2 sm:gap-4 text-[11px] sm:text-xs opacity-70 flex-wrap pt-0.5">
+							<span><strong>{chapters.length}</strong> chs</span>
+							<span>•</span>
+							<span><strong>{totalPages}</strong> pgs</span>
+							<span>•</span>
+							<span><strong>{translatedChapters}</strong> done</span>
+						</div>
 					</div>
 				</div>
 
-				<div class="flex flex-wrap items-center gap-2.5 shrink-0">
-					<Button variant="secondary" on:click={openEditBookModal}>
-						<Pencil size={15} /> Edit Book
+				<!-- PROGRESS BAR (FULL-WIDTH ON MOBILE; ROW 2 COL 2 ON WIDE) -->
+				{#if totalPages > 0 || chapters.length > 0}
+					<div class="col-span-2 sm:col-span-1 sm:col-start-2 space-y-1 sm:space-y-1.5 max-w-md">
+						<div class="flex items-center justify-between text-[11px] sm:text-xs font-medium">
+							<span class="opacity-70">Translation Progress</span>
+							<span class="font-mono font-bold text-[#b23a2e] dark:text-[#e08a63]">{overallProgress}%</span>
+						</div>
+						<div class="h-1.5 sm:h-2 w-full overflow-hidden rounded-full bg-black/5 dark:bg-white/10">
+							<div
+								class="h-full rounded-full bg-[#b23a2e] dark:bg-[#e08a63] transition-all duration-500"
+								style={`width: ${overallProgress}%`}
+							></div>
+						</div>
+					</div>
+				{/if}
+
+				<!-- ACTION BUTTONS ROW (FULL-WIDTH ON MOBILE; ROW 3 COL 2 ON WIDE) -->
+				<div class="col-span-2 sm:col-span-1 sm:col-start-2 flex items-center gap-2 pt-1 border-t border-black/[0.04] dark:border-white/[0.04] sm:border-t-0 sm:pt-0">
+					<Button
+						variant="primary"
+						size="md"
+						class="flex-1 sm:flex-initial h-9 sm:h-10 px-3.5 sm:px-4 text-xs sm:text-sm font-semibold shadow-sm"
+						on:click={() => (createModalOpen = true)}
+					>
+						<Plus size={15} /> <span>New Chapter</span>
 					</Button>
-					<Button variant="secondary" on:click={() => goto(`/app/glossary/?bookId=${book?.id}`)}>
-						<BookOpen size={15} /> Glossary
+					<Button
+						variant="secondary"
+						size="md"
+						class="h-9 sm:h-10 px-3 sm:px-3.5 text-xs sm:text-sm font-medium"
+						on:click={openEditBookModal}
+					>
+						<Pencil size={14} /> <span>Edit</span>
 					</Button>
-					<Button variant="primary" on:click={() => (createModalOpen = true)}>
-						<Plus size={15} /> New Chapter
+					<Button
+						variant="secondary"
+						size="md"
+						class="h-9 sm:h-10 px-3 sm:px-3.5 text-xs sm:text-sm font-medium"
+						on:click={() => goto(`/app/glossary/?scope=book&bookId=${book?.id}`)}
+					>
+						<BookOpen size={14} /> <span>Glossary</span>
 					</Button>
 				</div>
 			</div>
 		</div>
 
-		<!-- SEARCH & TOOLBAR WITH VIEW MODES, SORTING, FILTERS, AND CHAPTER JUMP -->
-		<div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-			<!-- STATUS FILTER PILLS -->
-			<div class="flex items-center gap-1 rounded-xl bg-black/[0.04] p-1 dark:bg-white/[0.04]">
-				<button
-					type="button"
-					on:click={() => (statusFilter = 'all')}
-					class={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-						statusFilter === 'all'
-							? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white'
-							: 'opacity-60 hover:opacity-100'
-					}`}
-					use:ripple
-				>
-					All ({chapters.length})
-				</button>
-				<button
-					type="button"
-					on:click={() => (statusFilter = 'done')}
-					class={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-						statusFilter === 'done'
-							? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white'
-							: 'opacity-60 hover:opacity-100'
-					}`}
-					use:ripple
-				>
-					Translated ({translatedChapters})
-				</button>
-				<button
-					type="button"
-					on:click={() => (statusFilter = 'pending')}
-					class={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-						statusFilter === 'pending'
-							? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white'
-							: 'opacity-60 hover:opacity-100'
-					}`}
-					use:ripple
-				>
-					Pending ({chapters.filter((c) => c.status === 'pending' || c.status === 'processing').length})
-				</button>
-			</div>
+		<!-- UNIFIED ADAPTIVE COMMAND BAR -->
+		<div class="flex flex-col gap-2.5">
+			<!-- COMMAND BAR CONTAINER -->
+			<div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2.5">
+				<!-- CONTROLS ROW (ON MOBILE: PLACED TOP FOR QUICK REACH; ON DESKTOP: SITS ON THE RIGHT) -->
+				<div class="order-1 md:order-2 flex items-center gap-2">
+					<!-- SEARCH INPUT -->
+					<div class="relative flex-1 sm:w-56 md:w-60 lg:w-72">
+						<Search size={14} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-black/40 dark:text-white/40" />
+						<input
+							bind:this={searchInputEl}
+							bind:value={searchQuery}
+							type="text"
+							placeholder="Search chapters..."
+							class="h-10 w-full rounded-xl border border-black/10 bg-white/50 py-2 pl-9 pr-8 text-xs sm:text-sm outline-none transition placeholder:text-black/40 dark:placeholder:text-white/40 focus:border-[#b23a2e] focus:bg-white focus:ring-2 focus:ring-[#b23a2e]/10 dark:border-white/10 dark:bg-white/[0.03] dark:focus:bg-[#1a1714] dark:focus:border-[#e08a63] dark:focus:ring-[#e08a63]/15"
+						/>
+						{#if searchQuery}
+							<button
+								type="button"
+								on:click={() => {
+									searchQuery = '';
+									searchInputEl?.focus();
+								}}
+								class="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-black/40 hover:text-black dark:text-white/40 dark:hover:text-white transition"
+								title="Clear search"
+								aria-label="Clear search"
+							>
+								<X size={14} />
+							</button>
+						{:else}
+							<kbd class="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 hidden md:inline-flex h-4.5 select-none items-center rounded border border-black/10 bg-black/[0.04] px-1 font-mono text-[9px] font-medium opacity-40 dark:border-white/15 dark:bg-white/[0.06]">
+								/
+							</kbd>
+						{/if}
+					</div>
 
-			<!-- CONTROLS: VIEW SWITCHER, SORT, JUMP & SEARCH -->
-			<div class="flex flex-wrap items-center gap-2">
-				<!-- VIEW MODE SWITCHER SEGMENTED TABS -->
-				<div class="flex items-center gap-0.5 rounded-xl border border-black/10 bg-black/[0.03] p-1 dark:border-white/10 dark:bg-white/[0.03]">
-					<button
-						type="button"
-						on:click={() => setViewLayout('grid')}
-						class={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs transition-all ${
-							viewLayout === 'grid'
-								? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
-								: 'opacity-60 hover:opacity-100'
-						}`}
-						title="Comfortable Cards Grid"
-						use:ripple
-					>
-						<LayoutGrid size={13} />
-						<span class="hidden sm:inline">Grid</span>
-					</button>
+					<!-- SORT DROPDOWN -->
+					<div class="relative shrink-0">
+						<button
+							type="button"
+							on:click={() => (sortMenuOpen = !sortMenuOpen)}
+							class="inline-flex h-10 items-center gap-1.5 rounded-xl border border-black/10 bg-white/50 px-3 sm:px-3.5 text-xs sm:text-sm font-medium backdrop-blur transition hover:bg-black/5 dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/5"
+							title="Sort chapters"
+							aria-label="Sort chapters"
+							aria-expanded={sortMenuOpen}
+							use:ripple
+						>
+							<ArrowUpDown size={14} class="opacity-60" />
+							<span class="hidden xs:inline sm:inline">{sortAscending ? 'Oldest (1 → N)' : 'Newest First'}</span>
+							<ChevronDown size={12} class={`opacity-40 transition-transform duration-200 ${sortMenuOpen ? 'rotate-180' : ''}`} />
+						</button>
 
-					<button
-						type="button"
-						on:click={() => setViewLayout('list')}
-						class={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs transition-all ${
-							viewLayout === 'list'
-								? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
-								: 'opacity-60 hover:opacity-100'
-						}`}
-						title="Media List Rows"
-						use:ripple
-					>
-						<List size={13} />
-						<span class="hidden sm:inline">List</span>
-					</button>
+						{#if sortMenuOpen}
+							<!-- BACKDROP -->
+							<button type="button" class="fixed inset-0 z-40 bg-transparent cursor-default border-0 p-0" on:click={() => (sortMenuOpen = false)} aria-label="Close sort menu" tabindex="-1"></button>
+							<div
+								transition:fly={{ y: -6, duration: 150, easing: cubicOut }}
+								class={cn('absolute right-0 top-full z-50 mt-1.5 w-48 rounded-xl border p-1.5 shadow-xl', popover, popoverBorder)}
+							>
+								<div class="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider opacity-40">Sort Chapters By</div>
+								<button
+									type="button"
+									class={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition ${
+										sortAscending
+											? 'bg-[#b23a2e]/10 text-[#b23a2e] dark:bg-[#e08a63]/15 dark:text-[#e08a63] font-semibold'
+											: 'opacity-70 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5'
+									}`}
+									on:click={() => {
+										sortAscending = true;
+										sortMenuOpen = false;
+									}}
+								>
+									<span>Oldest First (1 → N)</span>
+									{#if sortAscending}
+										<Check size={13} />
+									{/if}
+								</button>
+								<button
+									type="button"
+									class={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-xs font-medium transition ${
+										!sortAscending
+											? 'bg-[#b23a2e]/10 text-[#b23a2e] dark:bg-[#e08a63]/15 dark:text-[#e08a63] font-semibold'
+											: 'opacity-70 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5'
+									}`}
+									on:click={() => {
+										sortAscending = false;
+										sortMenuOpen = false;
+									}}
+								>
+									<span>Newest First (N → 1)</span>
+									{#if !sortAscending}
+										<Check size={13} />
+									{/if}
+								</button>
+							</div>
+						{/if}
+					</div>
 
-					<button
-						type="button"
-						on:click={() => setViewLayout('compact')}
-						class={`flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs transition-all ${
-							viewLayout === 'compact'
-								? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
-								: 'opacity-60 hover:opacity-100'
-						}`}
-						title="Compact Table Rows"
-						use:ripple
-					>
-						<AlignJustify size={13} />
-						<span class="hidden sm:inline">Compact</span>
-					</button>
+					<!-- VIEW SWITCHER SEGMENTED TABS -->
+					<div class="flex items-center gap-0.5 rounded-xl border border-black/10 bg-black/[0.03] p-1 dark:border-white/10 dark:bg-white/[0.03] shrink-0 h-10">
+						<button
+							type="button"
+							on:click={() => setViewLayout('grid')}
+							class={`flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs transition-all ${
+								viewLayout === 'grid'
+									? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
+									: 'opacity-50 hover:opacity-100'
+							}`}
+							title="Comfortable Cards Grid"
+							aria-label="Grid View"
+							use:ripple
+						>
+							<LayoutGrid size={14} />
+							<span class="hidden lg:inline text-xs">Grid</span>
+						</button>
+
+						<button
+							type="button"
+							on:click={() => setViewLayout('list')}
+							class={`flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs transition-all ${
+								viewLayout === 'list'
+									? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
+									: 'opacity-50 hover:opacity-100'
+							}`}
+							title="Media List Rows"
+							aria-label="List View"
+							use:ripple
+						>
+							<List size={14} />
+							<span class="hidden lg:inline text-xs">List</span>
+						</button>
+
+						<button
+							type="button"
+							on:click={() => setViewLayout('compact')}
+							class={`flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-xs transition-all ${
+								viewLayout === 'compact'
+									? 'bg-white text-black font-bold shadow-xs dark:bg-[#221e1a] dark:text-white'
+									: 'opacity-50 hover:opacity-100'
+							}`}
+							title="Compact Rows"
+							aria-label="Compact View"
+							use:ripple
+						>
+							<AlignJustify size={14} />
+							<span class="hidden lg:inline text-xs">Compact</span>
+						</button>
+					</div>
 				</div>
 
-				<!-- SORT ORDER BUTTON -->
-				<button
-					type="button"
-					on:click={() => (sortAscending = !sortAscending)}
-					class="flex items-center gap-1.5 rounded-xl border border-black/10 px-3 py-1.5 text-xs font-medium transition hover:bg-black/5 dark:border-white/10 dark:hover:bg-white/5"
-					title="Toggle chapter sorting"
-					use:ripple
-				>
-					<ArrowUpDown size={13} />
-					<span>{sortAscending ? 'Oldest' : 'Newest'}</span>
-				</button>
+				<!-- FILTER TABS (DESKTOP: SITS ON LEFT; MOBILE: SMOOTH SCROLLABLE RAIL) -->
+				<div class="order-2 md:order-1 flex items-center gap-1 rounded-xl bg-black/[0.04] p-1 dark:bg-white/[0.04] overflow-x-auto no-scrollbar max-w-full">
+					<button
+						type="button"
+						on:click={() => (statusFilter = 'all')}
+						class={`shrink-0 flex items-center gap-1.5 rounded-lg px-3 sm:px-3.5 py-2 text-xs font-medium transition-all ${
+							statusFilter === 'all'
+								? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white font-semibold'
+								: 'opacity-60 hover:opacity-100'
+						}`}
+						use:ripple
+					>
+						<span>All</span>
+						<span class="rounded-full bg-black/5 px-1.5 py-0.2 text-[10px] font-mono dark:bg-white/10">{chapters.length}</span>
+					</button>
 
-				<!-- FAST JUMP TO CHAPTER # -->
-				{#if chapters.length > 20}
-					<form on:submit|preventDefault={jumpToChapter} class="relative flex items-center">
-						<Hash size={13} class="pointer-events-none absolute left-2.5 opacity-40" />
-						<input
-							type="number"
-							min="1"
-							max={chapters.length}
-							bind:value={jumpInput}
-							placeholder="Jump #"
-							class="w-24 rounded-xl border border-black/10 bg-transparent py-1.5 pl-7 pr-2 text-xs outline-none transition placeholder:opacity-40 focus:border-[#b23a2e] dark:border-white/10"
-						/>
-					</form>
-				{/if}
+					<button
+						type="button"
+						on:click={() => (statusFilter = 'done')}
+						class={`shrink-0 flex items-center gap-1.5 rounded-lg px-3 sm:px-3.5 py-2 text-xs font-medium transition-all ${
+							statusFilter === 'done'
+								? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white font-semibold'
+								: 'opacity-60 hover:opacity-100'
+						}`}
+						use:ripple
+					>
+						<span>Translated</span>
+						<span class="rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.2 text-[10px] font-mono">{translatedChapters}</span>
+					</button>
 
-				<!-- SEARCH BAR -->
-				<div class="relative min-w-0 flex-1 max-w-xs">
-					<Search size={14} class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 opacity-40" />
-					<input
-						bind:value={searchQuery}
-						type="search"
-						placeholder="Search chapters..."
-						class="w-full rounded-xl border border-black/10 bg-transparent py-1.5 pl-8 pr-3 text-xs sm:text-sm outline-none transition placeholder:opacity-40 focus:border-[#b23a2e] dark:border-white/10"
-					/>
+					<button
+						type="button"
+						on:click={() => (statusFilter = 'pending')}
+						class={`shrink-0 flex items-center gap-1.5 rounded-lg px-3 sm:px-3.5 py-2 text-xs font-medium transition-all ${
+							statusFilter === 'pending'
+								? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white font-semibold'
+								: 'opacity-60 hover:opacity-100'
+						}`}
+						use:ripple
+					>
+						<span>Pending</span>
+						<span class="rounded-full bg-black/5 px-1.5 py-0.2 text-[10px] font-mono dark:bg-white/10">{pendingChapters}</span>
+					</button>
+
+					{#if errorChapters > 0}
+						<button
+							type="button"
+							on:click={() => (statusFilter = 'error')}
+							class={`shrink-0 flex items-center gap-1.5 rounded-lg px-3 sm:px-3.5 py-2 text-xs font-medium transition-all ${
+								statusFilter === 'error'
+									? 'bg-white text-black shadow-xs dark:bg-[#201c18] dark:text-white font-semibold'
+									: 'opacity-60 hover:opacity-100'
+							}`}
+							use:ripple
+						>
+							<span>Error</span>
+							<span class="rounded-full bg-red-500/10 text-red-700 dark:text-red-300 px-1.5 py-0.2 text-[10px] font-mono">{errorChapters}</span>
+						</button>
+					{/if}
 				</div>
 			</div>
 		</div>
@@ -599,16 +807,16 @@
 			<p class="py-8 text-center text-sm opacity-60">No chapters found matching "{searchQuery}".</p>
 		{:else if viewLayout === 'grid'}
 			<!-- MODE 1: COMFORTABLE 2-COLUMN CARDS GRID -->
-			<ul class="grid w-full gap-5 sm:grid-cols-2">
+			<ul class="grid w-full gap-3.5 sm:gap-5 grid-cols-1 sm:grid-cols-2">
 				{#each displayedChapters as chapter (chapter.id)}
 					{@const chProgress = getChapterProgress(chapter)}
 					<li
 						id={`chapter-card-${chapter.id}`}
 						data-chapter-seq={chapter.seq + 1}
-						class="group relative flex flex-col justify-between rounded-2xl border border-black/[0.08] bg-white/60 p-4 transition-all duration-300 hover:border-[#b23a2e]/40 hover:shadow-xl dark:border-white/[0.06] dark:bg-white/[0.02]"
+						class="group relative flex flex-col justify-between rounded-2xl border border-black/[0.08] bg-white/60 p-3.5 sm:p-4 transition-all duration-300 hover:border-[#b23a2e]/40 hover:shadow-xl dark:border-white/[0.06] dark:bg-white/[0.02]"
 					>
 						<!-- UPPER SECTION: MINI PAGE THUMBNAIL + CHAPTER INFO -->
-						<div class="flex gap-3.5">
+						<div class="flex gap-3 sm:gap-3.5 items-start">
 							<!-- 2:3 VERTICAL CHAPTER COVER THUMBNAIL -->
 							<a
 								href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
@@ -625,42 +833,44 @@
 							</a>
 
 							<!-- CHAPTER DETAILS -->
-							<div class="min-w-0 flex-1 flex flex-col justify-between">
+							<div class="min-w-0 flex-1 flex flex-col justify-between self-stretch">
 								<div>
 									<div class="flex items-start justify-between gap-1.5">
 										<div class="min-w-0 flex-1">
 											<a
 												href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
-												class="font-bold text-base tracking-tight hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate"
+												class="font-bold text-sm sm:text-base tracking-tight hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate"
 												title={chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 											>
 												{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 											</a>
 											{#if chapter.titleTarget && chapter.title && chapter.titleTarget !== chapter.title}
-												<p class="text-xs opacity-60 font-medium truncate mt-0.5" title={chapter.title}>
+												<p class="text-[11px] sm:text-xs opacity-60 font-medium truncate mt-0.5" title={chapter.title}>
 													{chapter.title}
 												</p>
 											{/if}
 										</div>
 
-										<ActionMenu
-											items={[
-												{ value: 'open', label: 'Open Reader', icon: ExternalLink },
-												{ value: 'edit', label: 'Edit Chapter Details', icon: Pencil },
-												...(chapter.pageCount > 0 ? [{ value: 'clearPages', label: 'Clear Pages', icon: FileX, danger: true }] : []),
-												{ value: 'delete', label: 'Delete Chapter', icon: Trash2, danger: true },
-											]}
-											on:select={(e) => {
-												if (e.detail === 'open') goto(`/app/books/${$page.params.id}/chapters/${chapter.id}/`);
-												else if (e.detail === 'edit') openEditChapterModal(chapter);
-												else if (e.detail === 'clearPages') promptClearPages(chapter);
-												else if (e.detail === 'delete') promptDeleteChapter(chapter);
-											}}
-										/>
+										<div class="shrink-0">
+											<ActionMenu
+												items={[
+													{ value: 'open', label: 'Open Reader', icon: ExternalLink },
+													{ value: 'edit', label: 'Edit Chapter Details', icon: Pencil },
+													...(chapter.pageCount > 0 ? [{ value: 'clearPages', label: 'Clear Pages', icon: FileX, danger: true }] : []),
+													{ value: 'delete', label: 'Delete Chapter', icon: Trash2, danger: true },
+												]}
+												on:select={(e) => {
+													if (e.detail === 'open') goto(`/app/books/${$page.params.id}/chapters/${chapter.id}/`);
+													else if (e.detail === 'edit') openEditChapterModal(chapter);
+													else if (e.detail === 'clearPages') promptClearPages(chapter);
+													else if (e.detail === 'delete') promptDeleteChapter(chapter);
+												}}
+											/>
+										</div>
 									</div>
 
 									<!-- STATUS & PAGE BADGES -->
-									<div class="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+									<div class="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] sm:text-[11px]">
 										<Badge variant={statusVariant[chapter.status]}>
 											{chapter.status.toUpperCase()}
 										</Badge>
@@ -671,18 +881,18 @@
 								</div>
 
 								<!-- CHAPTER PAGE PROGRESS BAR -->
-								<div class="mt-2.5">
-									<div class="flex items-center justify-between text-[11px] mb-1">
-										<span class="opacity-60 text-[10px] font-medium">
+								<div class="mt-2 sm:mt-2.5">
+									<div class="flex items-center justify-between text-[10px] sm:text-[11px] mb-1">
+										<span class="opacity-70 text-[10px] font-medium truncate">
 											{#if chProgress.isComplete}
 												<span class="text-emerald-600 dark:text-emerald-400 font-semibold">✓ Translated</span>
 											{:else if chapter.status === 'processing'}
 												<span class="text-amber-600 dark:text-amber-400 font-semibold">Translating...</span>
 											{:else}
-												{chapter.translatedPageCount || 0}/{chapter.pageCount} pages ({chProgress.percent}%)
+												{chapter.translatedPageCount || 0}/{chapter.pageCount} pgs ({chProgress.percent}%)
 											{/if}
 										</span>
-										<span class="opacity-40 text-[10px] font-mono">Seq #{chapter.seq + 1}</span>
+										<span class="opacity-40 text-[9px] sm:text-[10px] font-mono shrink-0 ml-1">#{chapter.seq + 1}</span>
 									</div>
 									<div class="h-1.5 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
 										<div
@@ -699,13 +909,13 @@
 						</div>
 
 						<!-- LOWER SECTION: ACTION FOOTER BAR -->
-						<div class="mt-3.5 flex items-center justify-between border-t border-black/[0.05] pt-2.5 text-xs dark:border-white/[0.05]">
+						<div class="mt-3 sm:mt-3.5 flex items-center justify-between border-t border-black/[0.05] pt-2.5 sm:pt-3 text-xs dark:border-white/[0.05]">
 							<a
 								href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
-								class="inline-flex items-center gap-1.5 rounded-lg bg-[#b23a2e]/10 px-2.5 py-1 font-semibold text-[#b23a2e] transition hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63] dark:hover:bg-[#e08a63] dark:hover:text-black"
+								class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#b23a2e]/10 px-3.5 py-1.5 text-xs font-semibold text-[#b23a2e] transition hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63] dark:hover:bg-[#e08a63] dark:hover:text-black"
 								use:ripple
 							>
-								<Play size={11} class="fill-current" />
+								<Play size={12} class="fill-current" />
 								<span>Open Reader</span>
 							</a>
 
@@ -725,17 +935,17 @@
 				{/each}
 			</ul>
 		{:else if viewLayout === 'list'}
-			<!-- MODE 2: MEDIA LIST STRIP (HORIZONTAL ROWS) -->
+			<!-- MODE 2: MEDIA LIST STRIP (RESPONSIVE ROWS) -->
 			<ul class="flex flex-col gap-2.5 w-full">
 				{#each displayedChapters as chapter (chapter.id)}
 					{@const chProgress = getChapterProgress(chapter)}
 					<li
 						id={`chapter-card-${chapter.id}`}
 						data-chapter-seq={chapter.seq + 1}
-						class="group flex items-center justify-between gap-4 rounded-xl border border-black/[0.07] bg-white/60 p-3 transition-all hover:border-[#b23a2e]/40 hover:bg-white hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02] dark:hover:bg-white/[0.04]"
+						class="group relative flex items-center justify-between gap-3 sm:gap-4 rounded-xl border border-black/[0.07] bg-white/60 p-2.5 sm:p-3 transition-all hover:border-[#b23a2e]/40 hover:bg-white hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02] dark:hover:bg-white/[0.04]"
 					>
-						<div class="flex items-center gap-3.5 min-w-0 flex-1">
-							<!-- 40px MINI THUMBNAIL -->
+						<div class="flex items-center gap-3 min-w-0 flex-1">
+							<!-- MINI THUMBNAIL -->
 							<a
 								href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
 								class="w-10 sm:w-12 shrink-0 transition-transform duration-200 group-hover:scale-105"
@@ -751,43 +961,44 @@
 								/>
 							</a>
 
+							<!-- TITLE & METADATA -->
 							<div class="min-w-0 flex-1">
-								<div class="flex items-center gap-2 flex-wrap">
-									<span class="rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.5 font-mono text-[10px] font-bold opacity-60">
+								<div class="flex items-center gap-1.5 min-w-0">
+									<span class="rounded bg-black/5 dark:bg-white/5 px-1.5 py-0.2 font-mono text-[9px] sm:text-[10px] font-bold opacity-60 shrink-0">
 										#{chapter.seq + 1}
 									</span>
 									<a
 										href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
-										class="font-bold text-sm hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate"
+										class="font-bold text-xs sm:text-sm hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block"
 										title={chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									>
 										{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									</a>
 									{#if chapter.titleTarget && chapter.title && chapter.titleTarget !== chapter.title}
-										<span class="text-xs opacity-60 font-medium truncate hidden sm:inline" title={chapter.title}>
+										<span class="text-xs opacity-50 font-medium truncate hidden md:inline" title={chapter.title}>
 											({chapter.title})
 										</span>
 									{/if}
 								</div>
 
-								<div class="mt-1 flex items-center gap-2.5 text-[11px] opacity-65">
-									<span>{chapter.pageCount} pages</span>
+								<div class="mt-1 flex items-center gap-2 text-[10px] sm:text-xs opacity-65 flex-wrap">
+									<span>{chapter.pageCount} pgs</span>
 									<span>•</span>
-									<span class={chProgress.isComplete ? 'text-emerald-600 dark:text-emerald-400 font-medium' : ''}>
+									<span class={chProgress.isComplete ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : ''}>
 										{chProgress.isComplete ? '100% Translated' : `${chapter.translatedPageCount || 0}/${chapter.pageCount} translated`}
 									</span>
 								</div>
 							</div>
 						</div>
 
-						<div class="flex items-center gap-2.5 shrink-0">
+						<div class="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
 							<Badge variant={statusVariant[chapter.status]} class="hidden sm:inline-flex">
 								{chapter.status.toUpperCase()}
 							</Badge>
 
 							<a
 								href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
-								class="inline-flex items-center gap-1 rounded-lg bg-[#b23a2e]/10 px-2.5 py-1 text-xs font-semibold text-[#b23a2e] transition hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63] dark:hover:bg-[#e08a63] dark:hover:text-black"
+								class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[#b23a2e]/10 px-3 py-1.5 text-xs font-semibold text-[#b23a2e] transition hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63] dark:hover:bg-[#e08a63] dark:hover:text-black"
 								use:ripple
 							>
 								<Play size={11} class="fill-current" />
@@ -824,8 +1035,63 @@
 				{/each}
 			</ul>
 		{:else}
-			<!-- MODE 3: DENSE TABLE / COMPACT ROWS (FOR POWER SCROLLING) -->
-			<div class="overflow-hidden rounded-xl border border-black/[0.08] bg-white/60 shadow-xs dark:border-white/[0.06] dark:bg-white/[0.02]">
+			<!-- MODE 3: COMPACT ROWS (MOBILE NATIVE STREAM + DESKTOP TABLE) -->
+			<!-- MOBILE-NATIVE COMPACT STREAM (< 640px) -->
+			<div class="sm:hidden flex flex-col divide-y divide-black/[0.06] rounded-xl border border-black/[0.08] bg-white/60 dark:divide-white/[0.06] dark:border-white/[0.06] dark:bg-white/[0.02]">
+				{#each displayedChapters as chapter (chapter.id)}
+					{@const chProgress = getChapterProgress(chapter)}
+					<div class="flex items-center justify-between gap-2.5 p-2.5 transition hover:bg-black/[0.02] dark:hover:bg-white/[0.02]">
+						<div class="flex items-center gap-2 min-w-0 flex-1">
+							<span class="font-mono text-[11px] font-bold opacity-60 shrink-0">
+								#{chapter.seq + 1}
+							</span>
+							<div class="min-w-0 flex-1">
+								<a
+									href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
+									class="font-semibold text-xs hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block"
+									title={chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
+								>
+									{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
+								</a>
+								<div class="flex items-center gap-1.5 text-[10px] opacity-60 mt-0.5">
+									<span>{chapter.translatedPageCount || 0}/{chapter.pageCount} pgs</span>
+									<span>•</span>
+									<span class={chapter.status === 'done' ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : ''}>
+										{chapter.status.toUpperCase()}
+									</span>
+								</div>
+							</div>
+						</div>
+
+						<div class="flex items-center gap-1 shrink-0">
+							<a
+								href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
+								class="inline-flex h-7.5 items-center gap-1 rounded-lg bg-[#b23a2e]/10 px-2.5 py-1 text-xs font-semibold text-[#b23a2e] transition hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63]"
+							>
+								<Play size={10} class="fill-current" />
+								<span>Read</span>
+							</a>
+							<ActionMenu
+								items={[
+									{ value: 'open', label: 'Open Reader', icon: ExternalLink },
+									{ value: 'edit', label: 'Edit Chapter Details', icon: Pencil },
+									...(chapter.pageCount > 0 ? [{ value: 'clearPages', label: 'Clear Pages', icon: FileX, danger: true }] : []),
+									{ value: 'delete', label: 'Delete Chapter', icon: Trash2, danger: true },
+								]}
+								on:select={(e) => {
+									if (e.detail === 'open') goto(`/app/books/${$page.params.id}/chapters/${chapter.id}/`);
+									else if (e.detail === 'edit') openEditChapterModal(chapter);
+									else if (e.detail === 'clearPages') promptClearPages(chapter);
+									else if (e.detail === 'delete') promptDeleteChapter(chapter);
+								}}
+							/>
+						</div>
+					</div>
+				{/each}
+			</div>
+
+			<!-- DESKTOP MULTI-COLUMN TABLE (>= 640px) -->
+			<div class="hidden sm:block overflow-x-auto no-scrollbar rounded-xl border border-black/[0.08] bg-white/60 shadow-xs dark:border-white/[0.06] dark:bg-white/[0.02]">
 				<table class="w-full text-left text-xs border-collapse">
 					<thead>
 						<tr class="border-b border-black/[0.06] bg-black/[0.02] text-[11px] font-semibold opacity-60 dark:border-white/[0.06] dark:bg-white/[0.02]">
@@ -851,7 +1117,7 @@
 								<td class="py-2 px-3 font-semibold">
 									<a
 										href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
-										class="hover:text-[#b23a2e] dark:hover:text-[#e08a63]"
+										class="hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate max-w-xs"
 									>
 										{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									</a>
@@ -922,11 +1188,40 @@
 			placeholder="e.g. 第1话"
 		/>
 
-		<TextField
-			bind:value={chapterTitleTarget}
-			label="Target Title (Optional translation)"
-			placeholder="e.g. Chapter 1: The Awakening"
-		/>
+		<div class="block">
+			<div class="flex items-center justify-between mb-1">
+				<span class="text-xs font-semibold opacity-60">Target Title (Optional translation)</span>
+				<button
+					type="button"
+					class="inline-flex items-center gap-1 text-[11px] font-semibold text-[#b23a2e] hover:underline disabled:opacity-40 dark:text-[#e08a63]"
+					disabled={translatingNewChapterTitle || !chapterTitle.trim()}
+					on:click={translateNewChapterTitle}
+				>
+					<Languages size={12} />
+					<span>{translatingNewChapterTitle ? 'Translating...' : 'Auto-Translate'}</span>
+				</button>
+			</div>
+			<div class="flex items-center gap-2">
+				<input
+					type="text"
+					bind:value={chapterTitleTarget}
+					placeholder="e.g. Chapter 1: The Awakening"
+					class="h-[38px] w-full rounded-lg border border-black/10 bg-transparent px-3 text-sm outline-none transition-colors placeholder:opacity-40 focus:border-[#b23a2e] focus:ring-2 focus:ring-[#b23a2e]/30 dark:border-white/[0.06]"
+				/>
+				<Button
+					variant="secondary"
+					class="h-[38px] w-[38px] min-h-[38px] min-w-[38px] max-h-[38px] max-w-[38px] shrink-0 p-0 inline-flex items-center justify-center"
+					loading={translatingNewChapterTitle}
+					disabled={translatingNewChapterTitle || !chapterTitle.trim()}
+					on:click={translateNewChapterTitle}
+					title="Auto-translate chapter title"
+				>
+					{#if !translatingNewChapterTitle}
+						<Languages size={15} />
+					{/if}
+				</Button>
+			</div>
+		</div>
 	</form>
 
 	<svelte:fragment slot="footer">
@@ -948,16 +1243,45 @@
 				required
 			/>
 
-			<TextField
-				bind:value={editBookTitleTarget}
-				label="Target Title (Translated title)"
-				placeholder="e.g. Tales of Demons and Gods"
-			/>
+			<div class="block">
+				<div class="flex items-center justify-between mb-1">
+					<span class="text-xs font-semibold opacity-60">Target Title (Translated title)</span>
+					<button
+						type="button"
+						class="inline-flex items-center gap-1 text-[11px] font-semibold text-[#b23a2e] hover:underline disabled:opacity-40 dark:text-[#e08a63]"
+						disabled={translatingBookTitle || !editBookTitle.trim()}
+						on:click={translateBookTitle}
+					>
+						<Languages size={12} />
+						<span>{translatingBookTitle ? 'Translating...' : 'Auto-Translate'}</span>
+					</button>
+				</div>
+				<div class="flex items-center gap-2">
+					<input
+						type="text"
+						bind:value={editBookTitleTarget}
+						placeholder="e.g. Tales of Demons and Gods"
+						class="h-[38px] w-full rounded-lg border border-black/10 bg-transparent px-3 text-sm outline-none transition-colors placeholder:opacity-40 focus:border-[#b23a2e] focus:ring-2 focus:ring-[#b23a2e]/30 dark:border-white/[0.06]"
+					/>
+					<Button
+						variant="secondary"
+						class="h-[38px] w-[38px] min-h-[38px] min-w-[38px] max-h-[38px] max-w-[38px] shrink-0 p-0 inline-flex items-center justify-center"
+						loading={translatingBookTitle}
+						disabled={translatingBookTitle || !editBookTitle.trim()}
+						on:click={translateBookTitle}
+						title="Auto-translate book title"
+					>
+						{#if !translatingBookTitle}
+							<Languages size={15} />
+						{/if}
+					</Button>
+				</div>
+			</div>
 
 			<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 				<div>
 					<span class="mb-1 block text-xs font-semibold opacity-60">Source Language</span>
-					<LanguagePicker bind:value={editBookSourceLang} />
+					<LanguagePicker mode="source" bind:value={editBookSourceLang} />
 				</div>
 
 				<div>
@@ -991,11 +1315,40 @@
 				placeholder="e.g. 第1话"
 			/>
 
-			<TextField
-				bind:value={editChapterTitleTarget}
-				label="Target Title (Translated title)"
-				placeholder="e.g. Chapter 1: The Awakening"
-			/>
+			<div class="block">
+				<div class="flex items-center justify-between mb-1">
+					<span class="text-xs font-semibold opacity-60">Target Title (Translated title)</span>
+					<button
+						type="button"
+						class="inline-flex items-center gap-1 text-[11px] font-semibold text-[#b23a2e] hover:underline disabled:opacity-40 dark:text-[#e08a63]"
+						disabled={translatingChapterTitle || !editChapterTitle.trim()}
+						on:click={translateEditChapterTitle}
+					>
+						<Languages size={12} />
+						<span>{translatingChapterTitle ? 'Translating...' : 'Auto-Translate'}</span>
+					</button>
+				</div>
+				<div class="flex items-center gap-2">
+					<input
+						type="text"
+						bind:value={editChapterTitleTarget}
+						placeholder="e.g. Chapter 1: The Awakening"
+						class="h-[38px] w-full rounded-lg border border-black/10 bg-transparent px-3 text-sm outline-none transition-colors placeholder:opacity-40 focus:border-[#b23a2e] focus:ring-2 focus:ring-[#b23a2e]/30 dark:border-white/[0.06]"
+					/>
+					<Button
+						variant="secondary"
+						class="h-[38px] w-[38px] min-h-[38px] min-w-[38px] max-h-[38px] max-w-[38px] shrink-0 p-0 inline-flex items-center justify-center"
+						loading={translatingChapterTitle}
+						disabled={translatingChapterTitle || !editChapterTitle.trim()}
+						on:click={translateEditChapterTitle}
+						title="Auto-translate chapter title"
+					>
+						{#if !translatingChapterTitle}
+							<Languages size={15} />
+						{/if}
+					</Button>
+				</div>
+			</div>
 
 			<div>
 				<span class="mb-1 block text-xs font-semibold opacity-60">Chapter Sequence # (1-indexed)</span>
@@ -1031,9 +1384,10 @@
 <!-- CLEAR PAGES CONFIRMATION DIALOG -->
 <ConfirmDialog
 	open={clearPagesConfirmOpen}
-	title="Clear Pages?"
+	title={`Clear Pages from "${chapterToClearPages?.titleTarget || chapterToClearPages?.title || `Chapter ${(chapterToClearPages?.seq ?? 0) + 1}`}"?`}
 	message={`Are you sure you want to clear all ${chapterToClearPages?.pageCount ?? 0} pages in "${chapterToClearPages?.titleTarget || chapterToClearPages?.title || `Chapter ${(chapterToClearPages?.seq ?? 0) + 1}`}"? All uploaded page images, OCR data, and translations will be permanently removed.`}
 	confirmLabel="Clear Pages"
+	requireVerificationCode={true}
 	variant="danger"
 	on:confirm={confirmClearPages}
 	on:cancel={() => (clearPagesConfirmOpen = false)}

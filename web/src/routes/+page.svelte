@@ -19,7 +19,7 @@
 </script>
 
 <svelte:head>
-	<title>Manhua Translator — Self-hosted Manhua Translation</title>
+	<title>Xianscan — AI Comic & Manhua Translation</title>
 </svelte:head>
 
 <div class="relative flex min-h-screen flex-col items-center justify-center px-4 py-12 text-center">
@@ -32,12 +32,12 @@
 	<!-- HERO BADGE -->
 	<div class="relative z-10 mb-6 inline-flex items-center gap-2 rounded-full border border-[#b23a2e]/20 bg-[#b23a2e]/10 px-3.5 py-1.5 text-xs font-semibold text-[#b23a2e] dark:text-[#e08a63]">
 		<Sparkles size={14} />
-		<span>Self-hosted Manhua Translation Pipeline</span>
+		<span>Self-hosted Comic & Manhua Translation Pipeline</span>
 	</div>
 
 	<!-- MAIN TITLE -->
 	<h1 class="relative z-10 max-w-3xl text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl">
-		Manhua <span class="bg-gradient-to-r from-[#b23a2e] to-amber-600 bg-clip-text text-transparent dark:from-[#e08a63] dark:to-amber-400">Translator</span>
+		Xian<span class="bg-gradient-to-r from-[#b23a2e] to-amber-600 bg-clip-text text-transparent dark:from-[#e08a63] dark:to-amber-400">scan</span>
 	</h1>
 
 	<!-- SUBTITLE -->

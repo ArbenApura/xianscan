@@ -13,7 +13,7 @@ declare global {
 
 // -- CONSTANTS -- //
 
-const DARK = ['dark', 'oled', 'contrast'];
+const DARK = ['dark'];
 
 // -- LIFECYCLES -- //
 

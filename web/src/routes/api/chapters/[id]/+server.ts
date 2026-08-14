@@ -55,6 +55,26 @@ export const GET: RequestHandler = async ({ params }) => {
 		? db.select().from(books).where(eq(books.id, chapterRow.bookId)).get()
 		: null;
 
+	const allChaptersInBook = chapterRow
+		? db
+				.select({
+					id: chapters.id,
+					seq: chapters.seq,
+					title: chapters.title,
+					titleTarget: chapters.titleTarget,
+				})
+				.from(chapters)
+				.where(eq(chapters.bookId, chapterRow.bookId))
+				.orderBy(chapters.seq)
+				.all()
+		: [];
+	const currentIndex = allChaptersInBook.findIndex((c) => c.id === chapterId);
+	const prevChapter = currentIndex > 0 ? allChaptersInBook[currentIndex - 1] : null;
+	const nextChapter =
+		currentIndex >= 0 && currentIndex < allChaptersInBook.length - 1
+			? allChaptersInBook[currentIndex + 1]
+			: null;
+
 	return json({
 		chapter: chapterRow
 			? {
@@ -67,6 +87,9 @@ export const GET: RequestHandler = async ({ params }) => {
 					targetLang: bookRow?.targetLang || 'en',
 				}
 			: null,
+		allChapters: allChaptersInBook,
+		prevChapter,
+		nextChapter,
 		pages: pageRows.map((p) => ({
 			id: p.id,
 			seq: p.seq,

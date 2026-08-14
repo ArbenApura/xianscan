@@ -34,6 +34,7 @@ import { db } from './db';
 import { chapters, pages, regions, books, type Page } from './db/schema';
 import { extractTerms, translatePage } from './translate';
 import { typesetPage } from './typeset';
+import { detectSourceLanguage } from '$lib/languages';
 
 // -- TYPES -- //
 
@@ -177,7 +178,8 @@ export async function runChapterPipeline(
 
 	const pool = new PQueue({ concurrency: deps.pageConcurrency ?? PAGE_CONCURRENCY });
 	const book = db.select().from(books).where(eq(books.id, chapter.bookId)).get();
-	const pair: LangPair = { sourceLang: book?.sourceLang || 'zh-CN', targetLang: book?.targetLang || 'en' };
+	const initialSource = book?.sourceLang === 'auto' ? detectSourceLanguage(book?.title || '', 'zh-Hans') : (book?.sourceLang || 'zh-Hans');
+	const pair: LangPair = { sourceLang: initialSource, targetLang: book?.targetLang || 'en' };
 	const model = deps.model;
 
 	const targetIdSet = pageIds && pageIds.length > 0 ? new Set(pageIds) : null;
@@ -432,6 +434,13 @@ export async function runChapterPipeline(
 		.join('\n');
 
 	if (chapterText.trim().length > 0) {
+		if (book?.sourceLang === 'auto') {
+			const detected = detectSourceLanguage(chapterText, pair.sourceLang);
+			if (detected !== pair.sourceLang) {
+				pair.sourceLang = detected;
+				db.update(books).set({ sourceLang: detected }).where(eq(books.id, chapter.bookId)).run();
+			}
+		}
 		const tExtract0 = performance.now();
 		emit({ type: 'term-extract-step', chapterId, stepStatus: 'running' });
 		try {

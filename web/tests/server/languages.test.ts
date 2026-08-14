@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	DEFAULT_SOURCE_LANG,
 	DEFAULT_TARGET_LANG,
+	detectSourceLanguage,
 	getLanguage,
 	languageName,
 	LANGUAGES,
@@ -14,7 +15,29 @@ import { matchTerms } from '$lib/server/glossary-match';
 import { typesetPage, wrapText } from '$lib/server/typeset';
 import { createCanvas } from '@napi-rs/canvas';
 
-describe('Language Registry', () => {
+describe('Language Registry & Auto-Detection', () => {
+	it('has exactly four source language options (auto, zh-Hans, zh-Hant, en)', () => {
+		const codes = SOURCE_LANGUAGE_OPTIONS.map((o) => o.value);
+		expect(codes).toEqual(['auto', 'zh-Hans', 'zh-Hant', 'en']);
+	});
+
+	it('auto-detects Simplified Chinese from text', () => {
+		expect(detectSourceLanguage('妖神记 第1话 重生')).toBe('zh-Hans');
+		expect(detectSourceLanguage('全职法师 莫凡')).toBe('zh-Hans');
+		expect(detectSourceLanguage('这里有很多人')).toBe('zh-Hans');
+	});
+
+	it('auto-detects Traditional Chinese from text', () => {
+		expect(detectSourceLanguage('妖神記 第1話 重生')).toBe('zh-Hant');
+		expect(detectSourceLanguage('全職法師 莫凡')).toBe('zh-Hant');
+		expect(detectSourceLanguage('這裡有很多人')).toBe('zh-Hant');
+	});
+
+	it('auto-detects English from text', () => {
+		expect(detectSourceLanguage('Tales of Demons and Gods')).toBe('en');
+		expect(detectSourceLanguage('Chapter 12: Breakthrough')).toBe('en');
+	});
+
 	it('includes core tier 1 and tier 2 languages in LANGUAGES', () => {
 		expect(LANGUAGES.en).toBeDefined();
 		expect(LANGUAGES.en.name).toBe('English');
@@ -51,10 +74,13 @@ describe('Language Registry', () => {
 		expect(getLanguage('ko').name).toBe('Korean');
 		expect(getLanguage('zh-CN').code).toBe('zh-Hans');
 		expect(getLanguage('zh-TW').code).toBe('zh-Hant');
-		expect(getLanguage(undefined).code).toBe(DEFAULT_SOURCE_LANG);
+		expect(getLanguage('auto').code).toBe('zh-Hans');
+		expect(getLanguage(undefined).code).toBe('zh-Hans');
+		expect(DEFAULT_SOURCE_LANG).toBe('auto');
 	});
 
 	it('returns correct display names via languageName', () => {
+		expect(languageName('auto')).toBe('Auto Detect Language');
 		expect(languageName('en')).toBe('English');
 		expect(languageName('ja')).toBe('Japanese');
 		expect(languageName('ko')).toBe('Korean');
