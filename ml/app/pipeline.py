@@ -26,6 +26,19 @@ _QUESTION_TAIL = re.compile(r"[?？]$")
 # A REGION CONTAINING NOTHING BUT 1-2 PUNCTUATION GLYPHS (A LONE "." / "？" / "！").
 _PUNCT_ONLY = re.compile(r"^[.．…·!！?？~～]{1,2}$")
 _STRAY_DOT_LINE = re.compile(r"^[.．·…]$")
+_STRAY_LATIN_SUFFIX = re.compile(r'([\u4e00-\u9fa5]{2,})[a-zA-Z]$')
+
+
+def _clean_stray_ocr_artifacts(text: str) -> str:
+	"""STRIP ISOLATED SINGLE LATIN CHARACTERS GLUED TO THE END OF CHINESE PHRASES (e.g. '柳腾e' -> '柳腾')."""
+	if not text:
+		return text
+	lines = text.split('\n')
+	cleaned_lines = []
+	for line in lines:
+		cleaned = _STRAY_LATIN_SUFFIX.sub(r'\1', line.strip())
+		cleaned_lines.append(cleaned)
+	return '\n'.join(cleaned_lines)
 
 
 def _ellipsis_polygon(base_pts: np.ndarray, union_box: np.ndarray, text: str, page_w: int) -> list[list[int]]:
@@ -162,9 +175,22 @@ def _grow_polygon_by_mask(
 	if hull is None or len(hull) < 3:
 		return None
 	hull_pts = hull.reshape(-1, 2).astype(np.float64)
-	# CLAMP UPWARD AND LEFTWARD EXPANSION — TEXT ONLY GROWS RIGHTWARD (TRAILING DOTS/PUNCTUATION)
-	# AND DOWNWARD (TRAILING BOTTOM DOTS LINE). NEVER INVADE A BUBBLE ABOVE OR TO THE LEFT.
+
+	orig_w = float(max(p[0] for p in polygon) - orig_x0)
+	orig_h = float(max(p[1] for p in polygon) - orig_y0)
+	orig_area = max(1.0, orig_w * orig_h)
+
 	clamped_pts = [[max(int(orig_x0 - 2), int(p[0])), max(int(orig_y0 - 2), int(p[1]))] for p in hull_pts]
+	new_x0 = float(min(p[0] for p in clamped_pts))
+	new_y0 = float(min(p[1] for p in clamped_pts))
+	new_w = float(max(p[0] for p in clamped_pts) - new_x0)
+	new_h = float(max(p[1] for p in clamped_pts) - new_y0)
+	new_area = new_w * new_h
+
+	# Reject growth that balloons into adjacent elements or giant mask blobs (> 2.0x area or > 1.8x dimension)
+	if new_area > 2.0 * orig_area or new_w > 1.8 * max(30.0, orig_w) or new_h > 1.8 * max(30.0, orig_h):
+		return None
+
 	return clamped_pts
 
 
@@ -249,13 +275,13 @@ def _is_multiline_comic_blob(
 	if ch > 2.8 * avg_rh and ch > 160:
 		return True
 
-	# 3. SPANS MULTIPLE VERTICALLY STACKED LINES ALREADY DETECTED
+	# 3. SPANS MULTIPLE LINES ALREADY DETECTED (VERTICALLY STACKED OR SIDE-BY-SIDE COLUMNS)
 	if len(overlapping_rapid) >= 2:
 		for i in range(len(overlapping_rapid)):
 			for j in range(i + 1, len(overlapping_rapid)):
 				r1 = overlapping_rapid[i]
 				r2 = overlapping_rapid[j]
-				if abs(r1[1] - r2[1]) > 0.4 * min(r1[3], r2[3]):
+				if abs(r1[1] - r2[1]) > 0.3 * min(r1[3], r2[3]) or abs(r1[0] - r2[0]) > 0.3 * min(r1[2], r2[2]):
 					return True
 
 	return False
@@ -367,7 +393,8 @@ def _split_lines_by_internal_punctuation(
 		return rapid_lines
 
 	new_lines: list[tuple] = []
-	punct_pattern = re.compile(r"([\u3002!！?？…]+)(?=[^\u3002!！?？…\s])")
+	# Terminal sentence punctuation only (!, ?, 。). Ellipses (…) are normal dialogue pauses and must NOT split speech lines.
+	punct_pattern = re.compile(r"([\u3002!！?？]+)(?=[^\u3002!！?？\s])")
 
 	for item in rapid_lines:
 		pts, t, s, ang = item[:4] if len(item) >= 4 else (*item[:3], detect.calculate_box_angle(item[0]))
@@ -499,6 +526,38 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	rapid_lines = _deduplicate_ocr_lines(normalized_rapid_lines)
 	rapid_lines = _split_lines_by_internal_punctuation(rapid_lines, ocr_img)
 
+	# RECOVER / DISCOVER LINES INSIDE COMIC BOXES THAT FULL-PAGE OCR MISSED (e.g. TITLE LOGOS, HIGH-CONTRAST SFX, SUBTITLES)
+	for cb in comic_boxes:
+		cx, cy, cw, ch = detect.box_to_xywh(cb)
+		overlapping_rapid = [r for r in rapid_lines if detect.line_center_inside(r[0], cb)]
+		if not overlapping_rapid or (ch > 220 and len(overlapping_rapid) <= 1):
+			crop = ocr.crop_region(ocr_img, cb, margin=2)
+			c_res = ocr.recognize_crop(crop)
+			if c_res and c_res.lines:
+				offset_x = max(0, cx - 2)
+				offset_y = max(0, cy - 2)
+				for c_box, c_txt, c_score in c_res.lines:
+					clean_t = c_txt.strip()
+					if not clean_t or len(clean_t) < 2 or c_score < 0.60:
+						continue
+					shifted_box = c_box.copy()
+					shifted_box[:, 0] += offset_x
+					shifted_box[:, 1] += offset_y
+					sx, sy, sw, sh = detect.box_to_xywh(shifted_box)
+					s_area = max(1.0, sw * sh)
+					duplicate = False
+					for r_pts, r_txt, _r_sc, _ang in rapid_lines:
+						rx, ry, rw, rh = detect.box_to_xywh(r_pts)
+						ix = max(0, min(sx + sw, rx + rw) - max(sx, rx))
+						iy = max(0, min(sy + sh, ry + rh) - max(sy, ry))
+						inter = ix * iy
+						if (inter / s_area > 0.45 and (clean_t in r_txt or r_txt in clean_t)) or detect.box_iou(shifted_box, r_pts) > 0.40:
+							duplicate = True
+							break
+					if not duplicate:
+						c_ang = detect.calculate_box_angle(shifted_box)
+						rapid_lines.append((shifted_box, clean_t, c_score, c_ang))
+
 	rapid_boxes = [pts for pts, _t, _s, _ang in rapid_lines]
 	rapid_scores = [float(s) for _pts, _t, s, _ang in rapid_lines]
 	rapid_texts = [t for _pts, t, _s, _ang in rapid_lines]
@@ -567,8 +626,9 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					unique_matched.append(m)
 			matched = unique_matched
 
-			# DISCONNECTED PARAGRAPH SPLIT: IF MATCHED LINES ARE SEPARATED BY LARGE VERTICAL GAPS (> 1.2x LINE HEIGHT)
-			# THEY BELONG TO DIFFERENT SPEECH BUBBLES IN DIFFERENT PANELS AND MUST BE SPLIT INTO SEPARATE REGIONS.
+			# DISCONNECTED PARAGRAPH SPLIT: IF MATCHED LINES ARE SEPARATED BY LARGE VERTICAL GAPS (> 1.2x LINE HEIGHT),
+			# OR ARE SIDE-BY-SIDE IN SEPARATE COLUMNS (MINIMAL X-OVERLAP), OR HAVE EXTREME FONT-SIZE DISPARITY (> 2.2x),
+			# THEY BELONG TO DIFFERENT TEXT ELEMENTS (e.g. TITLE vs CHAPTER SUBTITLE) AND MUST BE SPLIT INTO SEPARATE REGIONS.
 			sub_groups: list[list[tuple]] = []
 			for m in matched:
 				m_line = m[0]
@@ -579,18 +639,30 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					last_m = sub_groups[-1][-1][0]
 					lx, ly, lw, lh = detect.box_to_xywh(last_m)
 					gap = my - (ly + lh)
-					if gap > 1.2 * max(mh, lh):
+					y_overlap = min(my + mh, ly + lh) - max(my, ly)
+					x_overlap = min(mx + mw, lx + lw) - max(mx, lx)
+					min_h = min(mh, lh)
+
+					# Split if:
+					# 1. Large vertical gap (different bubbles across panels)
+					# 2. Parallel vertical side-by-side columns (vertical text column with completely disjoint X-ranges: x_overlap <= 0, but overlapping Y-band)
+					is_vertical_col = detect.is_vertical_box(last_m) or detect.is_vertical_box(m_line)
+					is_side_by_side = is_vertical_col and (x_overlap <= 0) and (y_overlap > 0.50 * min_h)
+					is_disconnected = gap > 1.2 * max(mh, lh) or is_side_by_side
+					if is_disconnected:
 						sub_groups.append([m])
 					else:
 						sub_groups[-1].append(m)
 
 			for s_idx, s_matched in enumerate(sub_groups):
+				raw_text = "\n".join(t for _l, t, _s, _ang in s_matched if t.strip())
+				cleaned_text = _clean_stray_ocr_artifacts(raw_text)
 				s_region = Region(
 					id=f"r{len(regions)}",
 					box=Box(x=0, y=0, w=1, h=1),
 					polygon=[],
 					category="dialogue",
-					text="\n".join(t for _l, t, _s, _ang in s_matched if t.strip()),
+					text=cleaned_text,
 					confidence=float(max(s for _l, _t, s, _ang in s_matched)) if s_matched else 0.0,
 					vertical=False,
 					angle=0.0,
@@ -611,7 +683,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 						and (
 							(1.25 * hh <= bh <= 2.6 * hh)
 							or s_region.confidence < 0.78
-							or (len(s_matched) == 1 and detect.is_vertical_box(hull_pts))
+							or (len(s_matched) == 1 and detect.is_vertical_box(hull_pts) and s_region.confidence < 0.85)
 						)
 					)
 					if needs_rescue:
@@ -628,10 +700,10 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 								s_region.box = Box(x=_bx, y=_by, w=bw, h=bh)
 								s_region.category = detect.classify_region(box, page_w, page_h)  # type: ignore[arg-type]
 								s_region.vertical = detect.is_vertical_box(box)
-								line_angles = [line_ang for _l, _t, _s, line_ang in s_matched if abs(line_ang) >= 1.2]
+								line_angles = [line_ang for _l, _t, _s, line_ang in s_matched if abs(line_ang) >= 2.5]
 								if line_angles:
 									med = float(np.median(line_angles))
-									s_region.angle = 0.0 if abs(med) < 1.2 else round(med, 2)
+									s_region.angle = 0.0 if abs(med) < 2.5 else round(med, 2)
 								else:
 									s_region.angle = 0.0
 								regions.append(s_region)
@@ -672,10 +744,10 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					s_region.vertical = detect.is_vertical_box(box)
 
 				# COMPUTE ORIENTATION ANGLE FROM MATCHED OCR LINE ANGLES (PARAGRAPH MEDIAN)
-				line_angles = [line_ang for _l, _t, _s, line_ang in s_matched if abs(line_ang) >= 1.2]
+				line_angles = [line_ang for _l, _t, _s, line_ang in s_matched if abs(line_ang) >= 2.5]
 				if line_angles:
 					med = float(np.median(line_angles))
-					s_region.angle = 0.0 if abs(med) < 1.2 else round(med, 2)
+					s_region.angle = 0.0 if abs(med) < 2.5 else round(med, 2)
 				else:
 					s_region.angle = 0.0
 
@@ -684,9 +756,62 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 				_apply_mask_growth(s_region, comic_mask, hull_pts, len(s_matched), box, page_w, other_boxes=other_lines)
 				regions.append(s_region)
 		else:
-			ocr_result = ocr.recognize_crop(ocr.crop_region(ocr_img, box))
-			if ocr_result:
-				region.text = ocr_result.text
+			crop = ocr.crop_region(ocr_img, box, margin=2)
+			bx, by, bw, bh = detect.box_to_xywh(box)
+			ocr_result = ocr.recognize_crop(crop)
+			if ocr_result and getattr(ocr_result, "lines", None) and len(ocr_result.lines) > 1:
+				offset_x = max(0, bx - 2)
+				offset_y = max(0, by - 2)
+				crop_sub_groups: list[list[tuple]] = []
+				for c_box, c_txt, c_sc in ocr_result.lines:
+					shifted_box = c_box.copy()
+					shifted_box[:, 0] += offset_x
+					shifted_box[:, 1] += offset_y
+					c_ang = detect.calculate_box_angle(shifted_box)
+					m = (shifted_box, c_txt, c_sc, c_ang)
+					if not crop_sub_groups:
+						crop_sub_groups.append([m])
+					else:
+						last_m = crop_sub_groups[-1][-1][0]
+						lx, ly, lw, lh = detect.box_to_xywh(last_m)
+						mx, my, mw, mh = detect.box_to_xywh(shifted_box)
+						gap = my - (ly + lh)
+						y_overlap = min(my + mh, ly + lh) - max(my, ly)
+						x_overlap = min(mx + mw, lx + lw) - max(mx, lx)
+						min_h = min(mh, lh)
+						is_vertical_col = detect.is_vertical_box(last_m) or detect.is_vertical_box(shifted_box)
+						is_side_by_side = is_vertical_col and (x_overlap <= 0) and (y_overlap > 0.50 * min_h)
+						if gap > 1.2 * max(mh, lh) or is_side_by_side:
+							crop_sub_groups.append([m])
+						else:
+							crop_sub_groups[-1].append(m)
+
+				for s_matched in crop_sub_groups:
+					raw_t = "\n".join(t for _l, t, _s, _a in s_matched if t.strip())
+					clean_t = _clean_stray_ocr_artifacts(raw_t)
+					sub_pts = np.vstack([l.reshape(-1, 2) for l, _, _, _ in s_matched]).astype(np.float32)
+					sub_hull = cv2.convexHull(sub_pts)
+					sub_poly = (
+						sub_hull.reshape(-1, 2).astype(np.float64)
+						if sub_hull is not None and len(sub_hull) >= 3
+						else sub_pts.reshape(-1, 2).astype(np.float64)
+					)
+					shx, shy, shw, shh = detect.box_to_xywh(sub_poly)
+					sub_reg = Region(
+						id=f"r{len(regions)}",
+						box=Box(x=shx, y=shy, w=max(1, shw), h=max(1, shh)),
+						polygon=[[int(p[0]), int(p[1])] for p in sub_poly],
+						category=detect.classify_region(sub_poly, page_w, page_h),
+						text=clean_t,
+						confidence=float(max(s for _l, _t, s, _a in s_matched)),
+						vertical=detect.is_vertical_box(sub_poly),
+						angle=float(np.median([a for _l, _t, _s, a in s_matched])) if s_matched else 0.0,
+					)
+					other_lines = [l[0] for l in rapid_lines if detect.box_iou(l[0], sub_poly) <= 0.50]
+					_apply_mask_growth(sub_reg, comic_mask, sub_poly, len(s_matched), box, page_w, other_boxes=other_lines)
+					regions.append(sub_reg)
+			elif ocr_result:
+				region.text = _clean_stray_ocr_artifacts(ocr_result.text)
 				region.confidence = ocr_result.score
 				region.angle = detect.calculate_box_angle(box)
 				# TRAILING-PUNCTUATION RECOVERY (CROP PATH) — SAME RULES AS THE MATCHED PATH.
@@ -822,7 +947,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		kept_final.sort(key=lambda r: (r.box.y, r.box.x))
 		final_regions = kept_final
 
-	# 4) DISCARD EMPTY, DASH-ONLY NOISE, AND STANDALONE WATERMARK REGIONS (e.g. "速漫库", "qumanku.com")
+	# 4) DISCARD EMPTY, DASH-ONLY NOISE, LOW CONFIDENCE (< 0.55), AND STANDALONE WATERMARK REGIONS (e.g. "速漫库", "qumanku.com")
 	_IGNORED_NOISE_RE = re.compile(r"^[—―\-_~～\s]*$")
 	filtered_regions = []
 	for r in final_regions:
@@ -830,6 +955,8 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		if not t_strip or _IGNORED_NOISE_RE.fullmatch(t_strip) or detect.is_pure_watermark_region(t_strip):
 			continue
 		if _PUNCT_ONLY.fullmatch(t_strip) and r.box.w >= 80:
+			continue
+		if r.confidence < 0.55:
 			continue
 		filtered_regions.append(r)
 	final_regions = filtered_regions

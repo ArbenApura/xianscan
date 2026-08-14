@@ -476,7 +476,7 @@ def group_paragraphs(
 
 			# VERTICAL CONTIGUITY: THE NEW LINE SITS AT OR BELOW THE PARAGRAPH'S BOTTOM LINE.
 			gap = y - (ly + lh)
-			if gap > gap_factor * min(h, lh):
+			if gap > gap_factor * min(h, lh) or y < ly - 0.35 * min(h, lh):
 				continue
 
 			# FONT-SIZE GATE: ONLY LINES OF SIMILAR FONT SIZE GROUP.
