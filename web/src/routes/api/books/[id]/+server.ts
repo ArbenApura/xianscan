@@ -4,9 +4,9 @@ import { error, json } from '@sveltejs/kit';
 import { eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 // IMPORTED MODULES
-import { assertBookExists } from '$lib/server/books';
+import { assertBookExists, getBookDetails } from '$lib/server/books';
 import { db } from '$lib/server/db';
-import { books, chapters, pages } from '$lib/server/db/schema';
+import { books } from '$lib/server/db/schema';
 import type { RequestHandler } from './$types';
 
 const PatchBody = z.object({
@@ -19,68 +19,8 @@ const PatchBody = z.object({
 });
 
 export const GET: RequestHandler = async ({ params }) => {
-	await assertBookExists(params.id);
-	const book = db.select().from(books).where(eq(books.id, params.id)).get();
-	const list = db
-		.select({
-			id: chapters.id,
-			title: chapters.title,
-			titleTarget: chapters.titleTarget,
-			seq: chapters.seq,
-			status: chapters.status,
-			translatedAt: chapters.translatedAt,
-			createdAt: chapters.createdAt,
-		})
-		.from(chapters)
-		.where(eq(chapters.bookId, params.id))
-		.orderBy(chapters.seq)
-		.all();
-
-	const chapterIds = list.map((c) => c.id);
-	const chapterPages =
-		chapterIds.length > 0
-			? db
-					.select({
-						id: pages.id,
-						chapterId: pages.chapterId,
-						seq: pages.seq,
-						status: pages.status,
-						outputPath: pages.outputPath,
-					})
-					.from(pages)
-					.where(inArray(pages.chapterId, chapterIds))
-					.orderBy(pages.chapterId, pages.seq)
-					.all()
-			: [];
-
-	const pagesByChapter = new Map<number, typeof chapterPages>();
-	for (const p of chapterPages) {
-		const arr = pagesByChapter.get(p.chapterId) ?? [];
-		arr.push(p);
-		pagesByChapter.set(p.chapterId, arr);
-	}
-
-	return json({
-		book,
-		chapters: list.map((c) => {
-			const pgs = pagesByChapter.get(c.id) ?? [];
-			const pageCount = pgs.length;
-			const translatedPageCount = pgs.filter((p) => p.status === 'done' || Boolean(p.outputPath)).length;
-			const firstPage = pgs[0] ?? null;
-			const isDone = pageCount > 0 && (c.status === 'done' || translatedPageCount === pageCount);
-			const effectiveStatus = pageCount === 0
-				? 'pending'
-				: (isDone ? 'done' : (c.status === 'done' ? 'pending' : c.status));
-			return {
-				...c,
-				status: effectiveStatus,
-				pageCount,
-				translatedPageCount,
-				coverPageId: firstPage?.id ?? null,
-				coverHasOutput: !!firstPage?.outputPath,
-			};
-		}),
-	});
+	const detail = await getBookDetails(params.id);
+	return json(detail);
 };
 
 export const PATCH: RequestHandler = async ({ params, request }) => {

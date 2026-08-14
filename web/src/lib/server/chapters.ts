@@ -4,11 +4,11 @@ import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join, extname } from 'node:path';
 // IMPORTED DEP-MODULES
 import { error } from '@sveltejs/kit';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 
 // IMPORTED MODULES
 import { db } from './db';
-import { chapters, pages, regions, translations } from './db/schema';
+import { books, chapters, pages, regions, translations } from './db/schema';
 import { clearChapterJob } from './translation-service';
 import { DATA_ROOT } from './paths';
 import type { PipelineClient } from './pipeline-client';
@@ -344,3 +344,154 @@ export async function deleteAllBookChapters(
 
 	return { deletedCount: chapterRows.length };
 }
+
+// -- CHAPTER READER SSR & API DATA FETCHER -- //
+
+export interface ChapterRegionData {
+	id: number;
+	seq: number;
+	box: unknown;
+	category: string;
+	textSource: string;
+	textTarget: string | null;
+	conf: number | null;
+}
+
+export interface ChapterPageData {
+	id: number;
+	seq: number;
+	filePath: string;
+	cleanedPath: string | null;
+	outputPath: string | null;
+	status: 'pending' | 'processing' | 'done' | 'error';
+	error: string | null;
+	width?: number | null;
+	height?: number | null;
+	regions: ChapterRegionData[];
+}
+
+export interface ChapterNavSummary {
+	id: number;
+	seq: number;
+	title: string | null;
+	titleTarget?: string | null;
+}
+
+export interface ChapterReaderResult {
+	chapter: {
+		id: number;
+		bookId: string;
+		seq: number;
+		title: string | null;
+		titleTarget?: string | null;
+		sourceLang: string;
+		targetLang: string;
+	};
+	allChapters: ChapterNavSummary[];
+	prevChapter: ChapterNavSummary | null;
+	nextChapter: ChapterNavSummary | null;
+	pages: ChapterPageData[];
+}
+
+function safeJson(raw: string): unknown {
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return null;
+	}
+}
+
+// FETCH COMPLETE CHAPTER READER DATA (USED BY /app/books/[id]/chapters/[chapterId] SSR & API)
+export async function getChapterReaderData(chapterId: number): Promise<ChapterReaderResult> {
+	await assertChapterExists(chapterId);
+
+	const pageRows = db
+		.select()
+		.from(pages)
+		.where(eq(pages.chapterId, chapterId))
+		.orderBy(pages.seq)
+		.all();
+
+	// ALL REGIONS FOR THESE PAGES IN ONE QUERY, GROUPED BY PAGE
+	const pageIds = pageRows.map((p) => p.id);
+	const regionRows =
+		pageIds.length > 0
+			? db
+					.select()
+					.from(regions)
+					.where(inArray(regions.pageId, pageIds))
+					.orderBy(regions.seq)
+					.all()
+			: [];
+	const byPage = new Map<number, typeof regionRows>();
+	for (const r of regionRows) {
+		const arr = byPage.get(r.pageId) ?? [];
+		arr.push(r);
+		byPage.set(r.pageId, arr);
+	}
+
+	const chapterRow = db
+		.select()
+		.from(chapters)
+		.where(eq(chapters.id, chapterId))
+		.get();
+
+	if (!chapterRow) throw error(404, 'Chapter not found.');
+
+	const bookRow = db.select().from(books).where(eq(books.id, chapterRow.bookId)).get();
+
+	const allChaptersInBook = db
+		.select({
+			id: chapters.id,
+			seq: chapters.seq,
+			title: chapters.title,
+			titleTarget: chapters.titleTarget,
+		})
+		.from(chapters)
+		.where(eq(chapters.bookId, chapterRow.bookId))
+		.orderBy(chapters.seq)
+		.all();
+
+	const currentIndex = allChaptersInBook.findIndex((c) => c.id === chapterId);
+	const prevChapter = currentIndex > 0 ? allChaptersInBook[currentIndex - 1] : null;
+	const nextChapter =
+		currentIndex >= 0 && currentIndex < allChaptersInBook.length - 1
+			? allChaptersInBook[currentIndex + 1]
+			: null;
+
+	return {
+		chapter: {
+			id: chapterRow.id,
+			bookId: chapterRow.bookId,
+			seq: chapterRow.seq,
+			title: chapterRow.title,
+			titleTarget: chapterRow.titleTarget,
+			sourceLang: bookRow?.sourceLang || 'zh-CN',
+			targetLang: bookRow?.targetLang || 'en',
+		},
+		allChapters: allChaptersInBook,
+		prevChapter,
+		nextChapter,
+		pages: pageRows.map((p) => ({
+			id: p.id,
+			seq: p.seq,
+			filePath: p.filePath,
+			cleanedPath: p.cleanedPath,
+			outputPath: p.outputPath,
+			status: p.status,
+			error: p.error,
+			width: p.width,
+			height: p.height,
+			regions: (byPage.get(p.id) ?? []).map((r) => ({
+				id: r.id,
+				seq: r.seq,
+				box: safeJson(r.box),
+				category: r.category,
+				textSource: r.textSource,
+				textTarget: r.textTarget,
+				conf: r.conf,
+			})),
+		})),
+	};
+}
+

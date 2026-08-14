@@ -33,6 +33,9 @@
 	import AlignJustify from 'lucide-svelte/icons/align-justify';
 	import ChevronRight from 'lucide-svelte/icons/chevron-right';
 	import Languages from 'lucide-svelte/icons/languages';
+	import type { PageData } from './$types';
+
+	export let data: PageData;
 
 	// -- TYPES -- //
 
@@ -56,14 +59,14 @@
 		translatedPageCount: number;
 		coverPageId?: number | null;
 		coverHasOutput?: boolean;
-		translatedAt?: number;
+		translatedAt?: number | null;
 	}
 
 	// -- STATES -- //
 
-	let book: Book | null = null;
-	let chapters: Chapter[] = [];
-	let loading = true;
+	let book: Book | null = data.book;
+	let chapters: Chapter[] = data.chapters;
+	let loading = false;
 	let chapterTitle = '';
 	let chapterTitleTarget = '';
 	let creating = false;
@@ -73,6 +76,11 @@
 	let sortAscending = true;
 	let sortMenuOpen = false;
 	let statusFilter: 'all' | 'done' | 'pending' | 'error' = 'all';
+
+	$: {
+		book = data.book;
+		chapters = data.chapters;
+	}
 
 	// VIEW LAYOUT MODES: 'grid' (Comfortable Cards) | 'list' (Media List Rows) | 'compact' (Dense Table Rows)
 	let viewLayout: 'grid' | 'list' | 'compact' = 'grid';
@@ -119,7 +127,7 @@
 
 	// -- LIFECYCLES -- //
 
-	onMount(async () => {
+	onMount(() => {
 		try {
 			const saved = localStorage.getItem('xianscan:chapterViewLayout') || localStorage.getItem('manhua:chapterViewLayout');
 			if (saved === 'grid' || saved === 'list' || saved === 'compact') {
@@ -128,7 +136,6 @@
 		} catch {
 			// ignore
 		}
-		await reload();
 	});
 
 	function setViewLayout(mode: 'grid' | 'list' | 'compact') {

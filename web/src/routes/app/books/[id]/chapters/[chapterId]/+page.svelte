@@ -22,6 +22,9 @@
 	import Loader2 from 'lucide-svelte/icons/loader-2';
 	import Sparkles from 'lucide-svelte/icons/sparkles';
 	import { apiJson } from '$lib/api';
+	import type { PageData as ServerPageData } from './$types';
+
+	export let data: ServerPageData;
 
 	interface Region {
 		id: number;
@@ -33,7 +36,7 @@
 		conf: number | null;
 	}
 
-	interface PageData {
+	interface ChapterPageItem {
 		id: number;
 		seq: number;
 		filePath: string;
@@ -41,8 +44,8 @@
 		outputPath: string | null;
 		status: 'pending' | 'processing' | 'done' | 'error';
 		error: string | null;
-		width?: number;
-		height?: number;
+		width?: number | null;
+		height?: number | null;
 		regions: Region[];
 	}
 
@@ -54,20 +57,28 @@
 		titleTarget?: string | null;
 	}
 
-	let chapter: ChapterData | null = null;
-	let prevChapter: { id: number; seq: number; title: string | null; titleTarget?: string | null } | null = null;
-	let nextChapter: { id: number; seq: number; title: string | null; titleTarget?: string | null } | null = null;
-	let pages: PageData[] = [];
-	let loading = true;
+	let chapter: ChapterData | null = data.chapter;
+	let prevChapter: { id: number; seq: number; title: string | null; titleTarget?: string | null } | null = data.prevChapter;
+	let nextChapter: { id: number; seq: number; title: string | null; titleTarget?: string | null } | null = data.nextChapter;
+	let pages: ChapterPageItem[] = data.pages;
+	let loading = false;
 	let uploading = false;
 	let isDraggingOver = false;
 	let reloadKey = Date.now();
 
+	$: {
+		chapter = data.chapter;
+		prevChapter = data.prevChapter;
+		nextChapter = data.nextChapter;
+		pages = data.pages;
+		loading = false;
+	}
+
 	// MODALS & INSPECTOR
-	let inspectPage: PageData | null = null;
+	let inspectPage: ChapterPageItem | null = null;
 	let inspectModalOpen = false;
 	let deletePageConfirmOpen = false;
-	let pageToDelete: PageData | null = null;
+	let pageToDelete: ChapterPageItem | null = null;
 	let clearChapterConfirmOpen = false;
 	let clearChapterPagesConfirmOpen = false;
 	let resliceModalOpen = false;
@@ -219,16 +230,15 @@
 	let lastLoadedChapterId: number | null = null;
 	$: if (browser && chapterId && chapterId !== lastLoadedChapterId) {
 		lastLoadedChapterId = chapterId;
-		loading = true;
-		void reload().then(() => {
-			if (chapterId) jobTracker.syncChapter(chapterId);
-		});
+		if (chapterId) {
+			void jobTracker.syncChapter(chapterId);
+		}
 	}
 
-	onMount(async () => {
-		if (chapterId && chapterId !== lastLoadedChapterId) {
-			await reload();
-			await jobTracker.syncChapter(chapterId);
+	onMount(() => {
+		lastLoadedChapterId = chapterId;
+		if (chapterId) {
+			void jobTracker.syncChapter(chapterId);
 		}
 	});
 
@@ -297,7 +307,7 @@
 		}
 	}
 
-	async function cancelSinglePage(pg: PageData) {
+	async function cancelSinglePage(pg: ChapterPageItem) {
 		try {
 			await jobTracker.cancelPage(chapterId, pg.id);
 			pg.status = 'pending';
@@ -309,7 +319,7 @@
 		}
 	}
 
-	async function translateSinglePage(pg: PageData) {
+	async function translateSinglePage(pg: ChapterPageItem) {
 		try {
 			if (pg.status === 'done') {
 				const resetResp = await fetch(`/api/pages/${pg.id}/reset`, { method: 'POST' });
@@ -329,7 +339,7 @@
 		}
 	}
 
-	async function clearPageProgress(pg: PageData) {
+	async function clearPageProgress(pg: ChapterPageItem) {
 		try {
 			const resp = await fetch(`/api/pages/${pg.id}/reset`, { method: 'POST' });
 			if (!resp.ok) throw new Error('Reset failed');
@@ -473,7 +483,7 @@
 		}
 	}
 
-	async function stitchPages(pg: PageData) {
+	async function stitchPages(pg: ChapterPageItem) {
 		const idx = pages.findIndex((p) => p.id === pg.id);
 		if (idx === -1 || idx >= pages.length - 1) return;
 		const nextPg = pages[idx + 1];
@@ -494,7 +504,7 @@
 		}
 	}
 
-	function handleMenuAction(action: string, pg: PageData) {
+	function handleMenuAction(action: string, pg: ChapterPageItem) {
 		if (action === 'translate') translateSinglePage(pg);
 		else if (action === 'cancel') cancelSinglePage(pg);
 		else if (action === 'inspect') openInspector(pg);
@@ -506,7 +516,7 @@
 		}
 	}
 
-	function openInspector(pg: PageData) {
+	function openInspector(pg: ChapterPageItem) {
 		inspectPage = pg;
 		inspectModalOpen = true;
 	}
@@ -579,6 +589,11 @@
 		isDraggingOver = true;
 	}
 </script>
+
+<svelte:head>
+	<title>{chapter ? `${chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`} — Xianscan` : 'Chapter Reader'}</title>
+	<meta name="description" content={`Read and translate Chapter ${chapter ? chapter.seq + 1 : ''} with live typesetting and OCR.`} />
+</svelte:head>
 
 <!-- svelte-ignore a11y-no-static-element-interactions -->
 <div

@@ -2,8 +2,6 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { get } from 'svelte/store';
-	import { settings } from '$lib/stores/settings';
 	import { ripple } from '$lib/actions/ripple';
 	import GlossaryPanel from '$lib/components/GlossaryPanel.svelte';
 	import LanguagePicker from '$lib/components/ui/LanguagePicker.svelte';
@@ -12,21 +10,18 @@
 	import ChevronRight from 'lucide-svelte/icons/chevron-right';
 	import BookOpen from 'lucide-svelte/icons/book-open';
 	import Globe from 'lucide-svelte/icons/globe';
+	import type { PageData } from './$types';
 
-	type Book = { id: string; title: string; sourceLang: string; targetLang: string };
+	export let data: PageData;
 
-	const urlParams = $page.url.searchParams;
-	const initialScope = urlParams.get('scope') === 'book' || (urlParams.get('bookId') && urlParams.get('scope') !== 'global') ? 'book' : 'global';
-	const initialBookId = urlParams.get('bookId') || '';
-	const initialSrc = urlParams.get('src') || get(settings).sourceLang;
-	const initialTgt = urlParams.get('tgt') || get(settings).targetLang;
-
-	let sourceLang = initialSrc;
-	let targetLang = initialTgt;
-	let scope: 'global' | 'book' = initialScope;
-	let books: Book[] = [];
-	let selectedBookId = initialBookId;
+	let books = data.books;
+	let sourceLang = data.initialSourceLang;
+	let targetLang = data.initialTargetLang;
+	let scope: 'global' | 'book' = data.initialScope;
+	let selectedBookId = data.initialBookId || (books.length > 0 ? books[0].id : '');
 	let mounted = false;
+
+	$: books = data.books;
 
 	function syncUrl(newScope: 'global' | 'book', bId: string, src: string, tgt: string) {
 		if (!mounted) return;
@@ -44,28 +39,9 @@
 		}
 	}
 
-	onMount(async () => {
-		try {
-			const res = await fetch('/api/books');
-			if (res.ok) {
-				const data = await res.json();
-				books = data.books || [];
-				if (scope === 'book') {
-					if (initialBookId && books.some((b) => b.id === initialBookId)) {
-						selectedBookId = initialBookId;
-					} else if (books.length > 0) {
-						selectedBookId = books[0].id;
-					}
-				} else if (books.length > 0 && !selectedBookId) {
-					selectedBookId = books[0].id;
-				}
-			}
-		} catch {
-			// ignore
-		} finally {
-			mounted = true;
-			syncUrl(scope, selectedBookId, sourceLang, targetLang);
-		}
+	onMount(() => {
+		mounted = true;
+		syncUrl(scope, selectedBookId, sourceLang, targetLang);
 	});
 
 	function setScope(newScope: 'global' | 'book') {
@@ -117,6 +93,7 @@
 
 <svelte:head>
 	<title>{scope === 'global' ? 'Global' : 'Book'} Glossary — Xianscan</title>
+	<meta name="description" content="Manage translation glossary terms, aliases, and character names for comic translation." />
 </svelte:head>
 
 <!-- GLOSSARY MANAGEMENT DASHBOARD -->
@@ -208,7 +185,13 @@
 		</div>
 
 		{#key `${sourceLang}>${targetLang}`}
-			<GlossaryPanel scope="global" {sourceLang} {targetLang} />
+			<GlossaryPanel
+				scope="global"
+				{sourceLang}
+				{targetLang}
+				initialRows={data.initialScope === 'global' && data.initialSourceLang === sourceLang && data.initialTargetLang === targetLang ? data.initialGlossary.rows : null}
+				initialTotal={data.initialScope === 'global' && data.initialSourceLang === sourceLang && data.initialTargetLang === targetLang ? data.initialGlossary.total : null}
+			/>
 		{/key}
 	{:else}
 		<!-- BOOK SCOPE SELECTOR -->
@@ -229,7 +212,13 @@
 
 		{#if selectedBookId && selectedBook}
 			{#key selectedBookId}
-				<GlossaryPanel scope="book" bookId={selectedBookId} bookTitle={selectedBook.title} />
+				<GlossaryPanel
+					scope="book"
+					bookId={selectedBookId}
+					bookTitle={selectedBook.title}
+					initialRows={data.initialScope === 'book' && data.initialBookId === selectedBookId ? data.initialGlossary.rows : null}
+					initialTotal={data.initialScope === 'book' && data.initialBookId === selectedBookId ? data.initialGlossary.total : null}
+				/>
 			{/key}
 		{:else if books.length === 0}
 			<div class="rounded-2xl border border-dashed border-black/15 p-12 text-center text-sm opacity-60 dark:border-white/15">

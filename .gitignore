@@ -1,5 +1,6 @@
 # REASONIX DESKTOP TOOLING STATE
 /.reasonix
+/.agents
 
 # PYTHON (ML SIDECAR)
 __pycache__/

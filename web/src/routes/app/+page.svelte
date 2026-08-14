@@ -31,6 +31,9 @@
 	import X from 'lucide-svelte/icons/x';
 	import Languages from 'lucide-svelte/icons/languages';
 	import { apiJson } from '$lib/api';
+	import type { PageData } from './$types';
+
+	export let data: PageData;
 
 	// -- TYPES -- //
 
@@ -80,8 +83,8 @@
 
 	// -- STATES -- //
 
-	let books: Book[] = [];
-	let loading = true;
+	let books: Book[] = data.books;
+	let loading = false;
 	let title = '';
 	let titleTarget = '';
 	let sourceLang = $settings.sourceLang;
@@ -93,6 +96,8 @@
 	let activeTab: 'all' | 'active' | 'pinned' | 'archived' = 'active';
 	let sortBy: SortOption = 'recent';
 	let sortMenuOpen = false;
+
+	$: books = data.books;
 
 	// VIEW LAYOUT MODES: 'grid' (Comfortable Cards) | 'list' (Media List Rows) | 'compact' (Dense Table Rows)
 	let viewLayout: 'grid' | 'list' | 'compact' = 'grid';
@@ -131,7 +136,6 @@
 		} catch {
 			// ignore
 		}
-		loadBooks();
 	});
 
 	function setViewLayout(mode: 'grid' | 'list' | 'compact') {
@@ -475,6 +479,7 @@
 
 <svelte:head>
 	<title>Library — Xianscan</title>
+	<meta name="description" content="Browse and manage translated comics, manhua, and manga series." />
 </svelte:head>
 
 <!-- LIBRARY DASHBOARD -->

@@ -47,6 +47,9 @@
 	// SERVER-SIDE, SO THESE ARE ONLY MEANINGFUL (AND ONLY SENT) WHEN scope === 'global'.
 	export let sourceLang: string = DEFAULT_SOURCE_LANG;
 	export let targetLang: string = DEFAULT_TARGET_LANG;
+	// OPTIONAL SSR PRELOADED DATA
+	export let initialRows: GlossaryRow[] | null = null;
+	export let initialTotal: number | null = null;
 
 	// -- TYPES -- //
 
@@ -112,13 +115,29 @@
 
 	// -- STATES -- //
 
-	let rows: Entry[] = [];
-	let total = 0;
+	let rows: Entry[] = initialRows
+		? initialRows.map((r) => ({
+				id: r.id,
+				source: r.source,
+				target: r.target,
+				gender: r.gender,
+				context: r.context,
+				tags: r.tags,
+				category: r.category,
+				pinned: r.pinned,
+				status: r.status,
+				aliases: r.aliases ?? [],
+				firstSeq: r.firstSeq,
+				firstChapterTitle: r.firstChapterTitle,
+				firstChapterTitleTarget: r.firstChapterTitleTarget,
+			}))
+		: [];
+	let total = initialTotal ?? 0;
 	let page = 1;
 	let pageSize = 10;
 	let jumpValue: number | string = 1;
 	let query = '';
-	let loading = true;
+	let loading = initialRows === null;
 	let busy = false;
 	// ONE UNIFIED ADD / EDIT DIALOG — THE LIST ITSELF IS READ-ONLY; ALL EDITING HAPPENS HERE.
 	let formOpen = false;
@@ -204,8 +223,12 @@
 		}
 	}
 
-	// LOAD THE FIRST PAGE ON MOUNT.
-	onMount(load);
+	// LOAD THE FIRST PAGE ON MOUNT ONLY IF NOT SSR-PRELOADED.
+	onMount(() => {
+		if (initialRows === null) {
+			load();
+		}
+	});
 
 	function onSearch() {
 		clearTimeout(debounce);
