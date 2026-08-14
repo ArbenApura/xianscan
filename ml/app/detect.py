@@ -179,8 +179,10 @@ def is_vertical_box(box: np.ndarray) -> bool:
 
 
 def calculate_box_angle(box: np.ndarray | list[list[int | float]]) -> float:
-	"""CALCULATE ORIENTATION ANGLE IN DEGREES [-90, 90] OF A 4-POINT POLYGON / BOX OR CONTOUR.
+	"""CALCULATE ORIENTATION ANGLE IN DEGREES [-45, 45] OF A 4-POINT POLYGON / BOX OR CONTOUR.
 	ANGLES WITH MAGNITUDE < 1.5 DEGREES ARE ROUNDED TO 0.0 TO PREVENT SUBPIXEL BLUR ON HORIZONTAL TEXT.
+	VERTICAL TEXT COLUMNS OR STEEP BOXES RETURN 0.0 BECAUSE ENGLISH TRANSLATIONS IN VERTICAL SPEECH
+	BUBBLES ARE ALWAYS TYPESET HORIZONTALLY (UPRIGHT), NEVER ROTATED 90° SIDEWAYS.
 	"""
 	pts = np.array(box, dtype=np.float32).reshape(-1, 2)
 	if len(pts) < 3:
@@ -210,9 +212,9 @@ def calculate_box_angle(box: np.ndarray | list[list[int | float]]) -> float:
 	while angle_deg < -90.0:
 		angle_deg += 180.0
 
-	# Slant angles > 55 degrees are vertical box aspect ratio artifacts, not text baseline slants.
-	# English typeset text is always horizontal; only moderate slants [-55°, 55°] are rotated.
-	if abs(angle_deg) < 1.5 or abs(angle_deg) > 55.0:
+	# Slant angles > 45 degrees are vertical box aspect ratio artifacts, not text baseline slants.
+	# English typeset text is always horizontal; only moderate slants [-45°, 45°] (e.g. dynamic SFX) are rotated.
+	if abs(angle_deg) < 1.5 or abs(angle_deg) > 45.0:
 		return 0.0
 
 	return round(angle_deg, 2)
@@ -335,10 +337,11 @@ def merge_text_lines(
 		x1, y1 = x + w, y + h
 		is_wm = _is_watermark_line(txt)
 		if h > w * 1.2:
-			# VERTICAL COLUMN — ITS OWN LINE, NEVER MERGED
+			# VERTICAL COLUMN — ITS OWN LINE, NEVER HORIZONTALLY MERGED
 			lines.append([x, y, x1, y1, score, is_wm, txt])
 			continue
 		placed = False
+		cy = y + h / 2.0
 		for ln in lines:
 			lx0, ly0, lx1, ly1, lscore, l_is_wm, l_txt = ln
 			# NEVER MERGE A WATERMARK STAMP INTO STORY DIALOGUE
@@ -347,8 +350,12 @@ def merge_text_lines(
 			lh = ly1 - ly0
 			min_h = min(h, lh)
 			overlap = min(y1, ly1) - max(y, ly0)
-			if overlap < overlap_min * min_h:
+			lcy = ly0 + lh / 2.0
+
+			# MUST BE ON THE SAME HORIZONTAL LINE (y-centers aligned within 40% of line height)
+			if abs(cy - lcy) > 0.40 * min_h or overlap < overlap_min * min_h:
 				continue
+
 			gap = x - lx1
 			if gap > gap_factor * max(h, lh):
 				continue
@@ -388,13 +395,11 @@ def merge_text_lines(
 			break
 		if not placed:
 			lines.append([x, y, x1, y1, score, is_wm, txt])
-	merged = []
-	mscores = []
-	for ln in lines:
-		lx0, ly0, lx1, ly1, lscore = ln[:5]
-		merged.append(np.array([[lx0, ly0], [lx1, ly0], [lx1, ly1], [lx0, ly1]], dtype=np.float64))
-		mscores.append(lscore)
-	return merged, mscores
+	merged_boxes = [
+		np.array([[l[0], l[1]], [l[2], l[1]], [l[2], l[3]], [l[0], l[3]]], dtype=np.float64) for l in lines
+	]
+	merged_scores = [l[4] for l in lines]
+	return merged_boxes, merged_scores
 
 
 def _is_url_or_non_chinese(text: str | None) -> bool:
@@ -425,14 +430,14 @@ def group_paragraphs(
 	    MUST STAY SEPARATE REGIONS, AND
 	  - WATERMARK / URL SEPARATION: ENGLISH SCANLATION URLS (.com, .net) OR NON-CHINESE STAMPS
 	    NEVER GROUP INTO CHINESE DIALOGUE BUBBLES.
-	VERTICAL TEXT COLUMNS (h > 1.2×w) NEVER GROUP — EACH COLUMN IS ITS OWN PARAGRAPH.
+	VERTICAL TEXT COLUMNS (h > 2.2×w) NEVER GROUP — EACH COLUMN IS ITS OWN PARAGRAPH.
 	RETURNS (paragraph_boxes, scores) — THE UNION BOX PER PARAGRAPH; STANDALONE LINES UNCHANGED.
 	"""
 	if not boxes:
 		return [], []
 	if texts is None:
 		texts = [''] * len(boxes)
-	# VERTICAL COLUMNS ARE THEIR OWN PARAGRAPHS (NEVER GROUPED); HORIZONTAL LINES GROUP BY GEOMETRY
+	# STANDALONE VERTICAL STRIPES (h > 2.2×w) ARE THEIR OWN PARAGRAPHS (NEVER GROUPED); HORIZONTAL LINES GROUP BY GEOMETRY
 	paragraphs: list[list[np.ndarray]] = []
 	para_scores: list[float] = []
 	para_is_url: list[bool] = []
@@ -443,14 +448,14 @@ def group_paragraphs(
 
 	for box, score, txt in zip(boxes, scores, texts):
 		x, y, w, h = box_to_xywh(box)
-		if h > w * 1.2:
+		if h > w * 2.2:
 			paragraphs.append([box])
 			para_scores.append(score)
 			para_is_url.append(_is_url_or_non_chinese(txt))
 			para_cx_lists.append([x + w / 2.0])
 
 	horizontal = sorted(
-		((b, s, t) for b, s, t in zip(boxes, scores, texts) if box_to_xywh(b)[3] <= box_to_xywh(b)[2] * 1.2),
+		((b, s, t) for b, s, t in zip(boxes, scores, texts) if box_to_xywh(b)[3] <= box_to_xywh(b)[2] * 2.2),
 		key=lambda p: (box_to_xywh(p[0])[1], box_to_xywh(p[0])[0]),
 	)
 

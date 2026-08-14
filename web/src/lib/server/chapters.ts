@@ -9,12 +9,11 @@ import { and, desc, eq } from 'drizzle-orm';
 // IMPORTED MODULES
 import { db } from './db';
 import { chapters, pages, regions, translations } from './db/schema';
-
+import { clearChapterJob } from './translation-service';
 import { DATA_ROOT } from './paths';
 import type { PipelineClient } from './pipeline-client';
 
 // -- CONSTANTS -- //
-
 
 // ACCEPTED PAGE IMAGE FORMATS (MAGIC-BYTE CHECKED IN uploadImages)
 const ALLOWED_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.avif']);
@@ -264,4 +263,64 @@ export async function resliceChapterPages(
 	}
 
 	return { originalCount: pageRows.length, newCount: slicedBuffers.length };
+}
+
+// PERMANENTLY REMOVE ALL PAGES (IMAGES, REGIONS, TRANSLATIONS) FROM A CHAPTER.
+export async function deleteAllChapterPages(
+	chapterId: number,
+	dataRoot: string = DATA_ROOT,
+): Promise<{ deletedCount: number }> {
+	const pageRows = db
+		.select({ id: pages.id, filePath: pages.filePath })
+		.from(pages)
+		.where(eq(pages.chapterId, chapterId))
+		.all();
+
+	const oldFilePaths = pageRows.map((p) => join(dataRoot, p.filePath));
+
+	db.transaction(() => {
+		for (const p of pageRows) {
+			db.delete(translations).where(eq(translations.pageId, p.id)).run();
+			db.delete(regions).where(eq(regions.pageId, p.id)).run();
+		}
+		db.delete(pages).where(eq(pages.chapterId, chapterId)).run();
+		db.update(chapters)
+			.set({ status: 'pending', translatedAt: null })
+			.where(eq(chapters.id, chapterId))
+			.run();
+	});
+
+	// CANCEL & CLEAR ANY ACTIVE JOBS
+	clearChapterJob(chapterId);
+
+	// CLEAN UP OLD UPLOADED IMAGE FILES
+	for (const oldPath of oldFilePaths) {
+		try {
+			unlinkSync(oldPath);
+		} catch {
+			// ignore missing files
+		}
+	}
+
+	return { deletedCount: pageRows.length };
+}
+
+// PERMANENTLY REMOVE ALL CHAPTERS (AND THEIR PAGES, REGIONS, TRANSLATIONS, FILES) FROM A BOOK.
+export async function deleteAllBookChapters(
+	bookId: string,
+	dataRoot: string = DATA_ROOT,
+): Promise<{ deletedCount: number }> {
+	const chapterRows = db
+		.select({ id: chapters.id })
+		.from(chapters)
+		.where(eq(chapters.bookId, bookId))
+		.all();
+
+	for (const ch of chapterRows) {
+		await deleteAllChapterPages(ch.id, dataRoot);
+		clearChapterJob(ch.id);
+		db.delete(chapters).where(eq(chapters.id, ch.id)).run();
+	}
+
+	return { deletedCount: chapterRows.length };
 }

@@ -59,6 +59,7 @@
 	let deletePageConfirmOpen = false;
 	let pageToDelete: PageData | null = null;
 	let clearChapterConfirmOpen = false;
+	let clearChapterPagesConfirmOpen = false;
 	let resliceModalOpen = false;
 
 	// EDIT CHAPTER STATES
@@ -206,7 +207,8 @@
 		}
 
 		try {
-			await jobTracker.startTranslation(chapterId, { force });
+			const shouldForce = force || !currentJobState.running;
+			await jobTracker.startTranslation(chapterId, { force: shouldForce });
 		} catch (e: any) {
 			toast.error(e?.message || 'Translation failed to start.');
 		}
@@ -263,11 +265,10 @@
 			pg.outputPath = null;
 			pg.error = null;
 			pages = [...pages];
-			if (!currentJobState.running) {
-				jobTracker.clearJob(chapterId);
-			}
+			jobTracker.clearJob(chapterId);
 			toast.success(`Cleared progress on Page ${pg.seq + 1}.`);
 			reloadKey = Date.now();
+			await reload();
 		} catch {
 			toast.error('Could not clear page progress.');
 		}
@@ -284,6 +285,23 @@
 			await reload();
 		} catch {
 			toast.error('Could not clear chapter progress.');
+		}
+	}
+
+	async function confirmClearChapterPages() {
+		clearChapterPagesConfirmOpen = false;
+		try {
+			const resp = await fetch(`/api/chapters/${chapterId}/pages`, { method: 'DELETE' });
+			if (!resp.ok) {
+				const err = await resp.json().catch(() => ({}));
+				throw new Error(err.message || 'Failed to clear pages');
+			}
+			const data = await resp.json().catch(() => ({ deletedCount: 0 }));
+			jobTracker.clearJob(chapterId);
+			toast.success(`Cleared ${data.deletedCount} page${data.deletedCount === 1 ? '' : 's'} from chapter.`);
+			await reload();
+		} catch (e: any) {
+			toast.error(e.message || 'Could not clear pages.');
 		}
 	}
 
@@ -466,6 +484,7 @@
 		on:translate={() => startTranslation(false)}
 		on:cancel={cancelTranslation}
 		on:clearProgress={() => (clearChapterConfirmOpen = true)}
+		on:clearAllPages={() => (clearChapterPagesConfirmOpen = true)}
 		on:openReslice={() => (resliceModalOpen = true)}
 		on:editChapter={openEditChapterModal}
 		on:upload={(e) => uploadFiles(e.detail)}
@@ -574,6 +593,17 @@
 	variant="danger"
 	on:confirm={confirmClearChapterProgress}
 	on:cancel={() => (clearChapterConfirmOpen = false)}
+/>
+
+<!-- CLEAR PAGES CONFIRMATION -->
+<ConfirmDialog
+	open={clearChapterPagesConfirmOpen}
+	title="Clear Pages?"
+	message={`Are you sure you want to clear all ${pages.length} page${pages.length === 1 ? '' : 's'} in this chapter? All uploaded page images, OCR data, and translations will be permanently removed.`}
+	confirmLabel="Clear Pages"
+	variant="danger"
+	on:confirm={confirmClearChapterPages}
+	on:cancel={() => (clearChapterPagesConfirmOpen = false)}
 />
 
 <!-- DELETE PAGE CONFIRMATION -->

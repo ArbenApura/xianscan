@@ -11,6 +11,7 @@
 	import Plus from 'lucide-svelte/icons/plus';
 	import Search from 'lucide-svelte/icons/search';
 	import Trash2 from 'lucide-svelte/icons/trash-2';
+	import FileX from 'lucide-svelte/icons/file-x';
 	import ExternalLink from 'lucide-svelte/icons/external-link';
 	import BookOpen from 'lucide-svelte/icons/book-open';
 	import Layers from 'lucide-svelte/icons/layers';
@@ -91,6 +92,10 @@
 	let chapterToDelete: Chapter | null = null;
 	let deleteConfirmOpen = false;
 	let deleting = false;
+
+	let chapterToClearPages: Chapter | null = null;
+	let clearPagesConfirmOpen = false;
+	let clearingPages = false;
 
 	// -- LIFECYCLES -- //
 
@@ -253,6 +258,32 @@
 			deleting = false;
 			deleteConfirmOpen = false;
 			chapterToDelete = null;
+		}
+	}
+
+	function promptClearPages(ch: Chapter) {
+		chapterToClearPages = ch;
+		clearPagesConfirmOpen = true;
+	}
+
+	async function confirmClearPages() {
+		if (!chapterToClearPages) return;
+		clearingPages = true;
+		try {
+			const resp = await fetch(`/api/chapters/${chapterToClearPages.id}/pages`, { method: 'DELETE' });
+			if (!resp.ok) {
+				const err = await resp.json().catch(() => ({}));
+				throw new Error(err.message || 'Failed to clear pages');
+			}
+			const data = await resp.json().catch(() => ({ deletedCount: 0 }));
+			toast.success(`Cleared ${data.deletedCount} page${data.deletedCount === 1 ? '' : 's'} from chapter.`);
+			clearPagesConfirmOpen = false;
+			chapterToClearPages = null;
+			await reload();
+		} catch (e: any) {
+			toast.error(e.message || 'Could not clear pages.');
+		} finally {
+			clearingPages = false;
 		}
 	}
 
@@ -582,11 +613,11 @@
 							<a
 								href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
 								class="group/cover w-20 sm:w-24 shrink-0 transition-transform duration-300 hover:scale-102"
-								title={`Open ${chapter.title || `Chapter ${chapter.seq + 1}`}`}
+								title={`Open ${chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}`}
 							>
 								<LazyImage
 									src={chapter.coverPageId ? `/api/pages/${chapter.coverPageId}/file?kind=thumb&w=260` : ''}
-									alt={chapter.title || `Chapter ${chapter.seq + 1}`}
+									alt={chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									fallbackText={`Ch.${chapter.seq + 1}`}
 									aspectRatio="aspect-[2/3]"
 									showSpineShadow={true}
@@ -601,13 +632,13 @@
 											<a
 												href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
 												class="font-bold text-base tracking-tight hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate"
-												title={chapter.title || `Chapter ${chapter.seq + 1}`}
+												title={chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 											>
-												{chapter.title || `Chapter ${chapter.seq + 1}`}
+												{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 											</a>
-											{#if chapter.titleTarget}
-												<p class="text-xs opacity-60 font-medium truncate mt-0.5" title={chapter.titleTarget}>
-													{chapter.titleTarget}
+											{#if chapter.titleTarget && chapter.title && chapter.titleTarget !== chapter.title}
+												<p class="text-xs opacity-60 font-medium truncate mt-0.5" title={chapter.title}>
+													{chapter.title}
 												</p>
 											{/if}
 										</div>
@@ -616,11 +647,13 @@
 											items={[
 												{ value: 'open', label: 'Open Reader', icon: ExternalLink },
 												{ value: 'edit', label: 'Edit Chapter Details', icon: Pencil },
+												...(chapter.pageCount > 0 ? [{ value: 'clearPages', label: 'Clear Pages', icon: FileX, danger: true }] : []),
 												{ value: 'delete', label: 'Delete Chapter', icon: Trash2, danger: true },
 											]}
 											on:select={(e) => {
 												if (e.detail === 'open') goto(`/app/books/${$page.params.id}/chapters/${chapter.id}/`);
 												else if (e.detail === 'edit') openEditChapterModal(chapter);
+												else if (e.detail === 'clearPages') promptClearPages(chapter);
 												else if (e.detail === 'delete') promptDeleteChapter(chapter);
 											}}
 										/>
@@ -706,11 +739,11 @@
 							<a
 								href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
 								class="w-10 sm:w-12 shrink-0 transition-transform duration-200 group-hover:scale-105"
-								title={`Open ${chapter.title || `Chapter ${chapter.seq + 1}`}`}
+								title={`Open ${chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}`}
 							>
 								<LazyImage
 									src={chapter.coverPageId ? `/api/pages/${chapter.coverPageId}/file?kind=thumb&w=140` : ''}
-									alt={chapter.title || `Chapter ${chapter.seq + 1}`}
+									alt={chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									fallbackText={`#${chapter.seq + 1}`}
 									aspectRatio="aspect-[2/3]"
 									showSpineShadow={false}
@@ -726,13 +759,13 @@
 									<a
 										href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
 										class="font-bold text-sm hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate"
-										title={chapter.title || `Chapter ${chapter.seq + 1}`}
+										title={chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									>
-										{chapter.title || `Chapter ${chapter.seq + 1}`}
+										{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									</a>
-									{#if chapter.titleTarget}
-										<span class="text-xs opacity-60 font-medium truncate hidden sm:inline" title={chapter.titleTarget}>
-											({chapter.titleTarget})
+									{#if chapter.titleTarget && chapter.title && chapter.titleTarget !== chapter.title}
+										<span class="text-xs opacity-60 font-medium truncate hidden sm:inline" title={chapter.title}>
+											({chapter.title})
 										</span>
 									{/if}
 								</div>
@@ -776,11 +809,13 @@
 								items={[
 									{ value: 'open', label: 'Open Reader', icon: ExternalLink },
 									{ value: 'edit', label: 'Edit Chapter Details', icon: Pencil },
+									...(chapter.pageCount > 0 ? [{ value: 'clearPages', label: 'Clear Pages', icon: FileX, danger: true }] : []),
 									{ value: 'delete', label: 'Delete Chapter', icon: Trash2, danger: true },
 								]}
 								on:select={(e) => {
 									if (e.detail === 'open') goto(`/app/books/${$page.params.id}/chapters/${chapter.id}/`);
 									else if (e.detail === 'edit') openEditChapterModal(chapter);
+									else if (e.detail === 'clearPages') promptClearPages(chapter);
 									else if (e.detail === 'delete') promptDeleteChapter(chapter);
 								}}
 							/>
@@ -796,7 +831,7 @@
 						<tr class="border-b border-black/[0.06] bg-black/[0.02] text-[11px] font-semibold opacity-60 dark:border-white/[0.06] dark:bg-white/[0.02]">
 							<th class="py-2.5 pl-4 pr-2 w-14">#</th>
 							<th class="py-2.5 px-3">Chapter Title</th>
-							<th class="py-2.5 px-3 hidden md:table-cell">Translated Subtitle</th>
+							<th class="py-2.5 px-3 hidden md:table-cell">Original Title</th>
 							<th class="py-2.5 px-3 w-24">Pages</th>
 							<th class="py-2.5 px-3 w-28">Status</th>
 							<th class="py-2.5 pr-4 pl-3 w-24 text-right">Actions</th>
@@ -818,11 +853,11 @@
 										href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
 										class="hover:text-[#b23a2e] dark:hover:text-[#e08a63]"
 									>
-										{chapter.title || `Chapter ${chapter.seq + 1}`}
+										{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									</a>
 								</td>
 								<td class="py-2 px-3 opacity-60 hidden md:table-cell truncate max-w-xs">
-									{chapter.titleTarget || '—'}
+									{chapter.titleTarget && chapter.title ? chapter.title : '—'}
 								</td>
 								<td class="py-2 px-3 font-mono opacity-70">
 									{chapter.translatedPageCount || 0}/{chapter.pageCount}
@@ -845,11 +880,13 @@
 											items={[
 												{ value: 'open', label: 'Open Reader', icon: ExternalLink },
 												{ value: 'edit', label: 'Edit Chapter Details', icon: Pencil },
+												...(chapter.pageCount > 0 ? [{ value: 'clearPages', label: 'Clear Pages', icon: FileX, danger: true }] : []),
 												{ value: 'delete', label: 'Delete Chapter', icon: Trash2, danger: true },
 											]}
 											on:select={(e) => {
 												if (e.detail === 'open') goto(`/app/books/${$page.params.id}/chapters/${chapter.id}/`);
 												else if (e.detail === 'edit') openEditChapterModal(chapter);
+												else if (e.detail === 'clearPages') promptClearPages(chapter);
 												else if (e.detail === 'delete') promptDeleteChapter(chapter);
 											}}
 										/>
@@ -901,22 +938,23 @@
 </Modal>
 
 <!-- EDIT BOOK MODAL -->
-<Modal open={editBookModalOpen} title="Edit Book Details" size="sm" on:close={() => (editBookModalOpen = false)}>
+<Modal open={editBookModalOpen} title="Edit Series Details" size="md" on:close={() => (editBookModalOpen = false)}>
 	{#if book}
 		<form class="flex flex-col gap-4" on:submit|preventDefault={updateBook}>
 			<TextField
 				bind:value={editBookTitle}
 				label="Book Title (Source Language)"
-				placeholder="e.g. 星尘"
+				placeholder="e.g. 妖神记"
+				required
 			/>
 
 			<TextField
 				bind:value={editBookTitleTarget}
 				label="Target Title (Translated title)"
-				placeholder="e.g. Stardust"
+				placeholder="e.g. Tales of Demons and Gods"
 			/>
 
-			<div class="grid grid-cols-2 gap-3">
+			<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 				<div>
 					<span class="mb-1 block text-xs font-semibold opacity-60">Source Language</span>
 					<LanguagePicker bind:value={editBookSourceLang} />
@@ -983,9 +1021,20 @@
 <ConfirmDialog
 	open={deleteConfirmOpen}
 	title="Delete Chapter?"
-	message={`Are you sure you want to delete "${chapterToDelete?.title || 'Chapter'}"? All uploaded page images and translation output for this chapter will be permanently removed.`}
+	message={`Are you sure you want to delete "${chapterToDelete?.titleTarget || chapterToDelete?.title || 'Chapter'}"? All uploaded page images and translation output for this chapter will be permanently removed.`}
 	confirmLabel="Delete Chapter"
 	variant="danger"
 	on:confirm={confirmDeleteChapter}
 	on:cancel={() => (deleteConfirmOpen = false)}
+/>
+
+<!-- CLEAR PAGES CONFIRMATION DIALOG -->
+<ConfirmDialog
+	open={clearPagesConfirmOpen}
+	title="Clear Pages?"
+	message={`Are you sure you want to clear all ${chapterToClearPages?.pageCount ?? 0} pages in "${chapterToClearPages?.titleTarget || chapterToClearPages?.title || `Chapter ${(chapterToClearPages?.seq ?? 0) + 1}`}"? All uploaded page images, OCR data, and translations will be permanently removed.`}
+	confirmLabel="Clear Pages"
+	variant="danger"
+	on:confirm={confirmClearPages}
+	on:cancel={() => (clearPagesConfirmOpen = false)}
 />

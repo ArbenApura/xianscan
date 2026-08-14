@@ -14,6 +14,7 @@
 	import Sparkles from 'lucide-svelte/icons/sparkles';
 	import Square from 'lucide-svelte/icons/square';
 	import Pencil from 'lucide-svelte/icons/pencil';
+	import FileX from 'lucide-svelte/icons/file-x';
 
 	export let bookId: string;
 	export let chapterId: number;
@@ -31,6 +32,7 @@
 		translate: void;
 		cancel: void;
 		clearProgress: void;
+		clearAllPages: void;
 		openReslice: void;
 		editChapter: void;
 		upload: FileList;
@@ -68,14 +70,20 @@
 			<div>
 				<div class="flex items-center gap-2 flex-wrap">
 					<h1 class="text-lg font-bold tracking-tight">
-						{#if chapterTitle}
+						{#if chapterTitleTarget}
+							{#if /^(chapter|ch\.?|ep\.?|第|\d+)/i.test(chapterTitleTarget.trim())}
+								{chapterTitleTarget}
+							{:else}
+								Chapter {chapterSeq + 1}: {chapterTitleTarget}
+							{/if}
+							{#if chapterTitle && chapterTitle !== chapterTitleTarget}
+								<span class="text-sm font-normal opacity-70 ml-1.5">({chapterTitle})</span>
+							{/if}
+						{:else if chapterTitle}
 							{#if /^(chapter|ch\.?|ep\.?|第|\d+)/i.test(chapterTitle.trim())}
 								{chapterTitle}
 							{:else}
 								Chapter {chapterSeq + 1}: {chapterTitle}
-							{/if}
-							{#if chapterTitleTarget}
-								<span class="text-sm font-normal opacity-70 ml-1.5">({chapterTitleTarget})</span>
 							{/if}
 						{:else}
 							Chapter {chapterSeq + 1}
@@ -142,6 +150,20 @@
 				>
 					<RotateCcw size={14} />
 					<span class="hidden sm:inline">Clear Progress</span>
+				</Button>
+			{/if}
+
+			<!-- CLEAR ALL PAGES -->
+			{#if totalPages > 0}
+				<Button
+					variant="secondary"
+					size="sm"
+					disabled={running}
+					class="text-red-600 hover:bg-red-500/10 dark:text-red-400"
+					on:click={() => dispatch('clearAllPages')}
+				>
+					<FileX size={14} />
+					<span class="hidden sm:inline">Clear Pages</span>
 				</Button>
 			{/if}
 

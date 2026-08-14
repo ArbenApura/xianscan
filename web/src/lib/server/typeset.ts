@@ -642,12 +642,13 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 			color = { fill: '#111111', stroke: '#ffffff' };
 		}
 
+		const angleDeg = r.angle ?? 0;
+		const hasRotation = Math.abs(angleDeg) >= 2.0 && Math.abs(angleDeg) <= 45.0;
+
 		const font = fontFor(r.category, text);
 		const startSize = Math.max(MIN_FONT_SIZE, Math.min(w, h) * (r.category === 'sfx' ? 0.6 : 0.45) * scale);
 
 		// CAP DIALOGUE MAX FONT SIZE SO IT SITS NATURALLY INSIDE THE BUBBLE CONTOUR
-		// For dialogue/mono: also cap at MAX_DIALOGUE_FONT_SIZE so an oversized bounding box
-		// (e.g. a wide paragraph union box) doesn't inflate text to fill the whole region.
 		const rawMax = r.category === 'sfx' ? startSize : Math.max(startSize, Math.min(h * 0.6, startSize * 1.25));
 		const categoryCap = r.category === 'sfx' ? MAX_SFX_FONT_SIZE : MAX_DIALOGUE_FONT_SIZE * scale;
 		const maxSize = Math.min(rawMax, categoryCap);
@@ -658,9 +659,6 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		const lines = reflowText(ctx, text, maxW);
 		const lineH = size * LINE_HEIGHT;
 		const totalH = lines.length * lineH;
-
-		const angleDeg = r.angle ?? 0;
-		const hasRotation = Math.abs(angleDeg) >= 2.0;
 
 		ctx.save();
 		ctx.textAlign = 'center';

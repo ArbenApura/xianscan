@@ -11,6 +11,7 @@
 	import Plus from 'lucide-svelte/icons/plus';
 	import Search from 'lucide-svelte/icons/search';
 	import Trash2 from 'lucide-svelte/icons/trash-2';
+	import BookX from 'lucide-svelte/icons/book-x';
 	import ExternalLink from 'lucide-svelte/icons/external-link';
 	import Layers from 'lucide-svelte/icons/layers';
 	import Pencil from 'lucide-svelte/icons/pencil';
@@ -82,6 +83,11 @@
 	let bookToDelete: Book | null = null;
 	let deleteConfirmOpen = false;
 	let deleting = false;
+
+	// CLEAR CHAPTERS CONFIRMATION
+	let bookToClearChapters: Book | null = null;
+	let clearChaptersConfirmOpen = false;
+	let clearingChapters = false;
 
 	// -- LIFECYCLES -- //
 
@@ -246,6 +252,31 @@
 			deleting = false;
 			deleteConfirmOpen = false;
 			bookToDelete = null;
+		}
+	}
+
+	function promptClearChapters(book: Book) {
+		bookToClearChapters = book;
+		clearChaptersConfirmOpen = true;
+	}
+
+	async function confirmClearChapters() {
+		if (!bookToClearChapters) return;
+		clearingChapters = true;
+		try {
+			const resp = await fetch(`/api/books/${bookToClearChapters.id}/clear-chapters`, {
+				method: 'DELETE',
+			});
+			if (!resp.ok) throw new Error('Clear chapters failed');
+			const { deleted } = await resp.json();
+			toast.success(`Cleared ${deleted} chapter${deleted === 1 ? '' : 's'} from "${bookToClearChapters.title}".`);
+			loadBooks();
+		} catch {
+			toast.error('Could not clear chapters.');
+		} finally {
+			clearingChapters = false;
+			clearChaptersConfirmOpen = false;
+			bookToClearChapters = null;
 		}
 	}
 
@@ -547,14 +578,14 @@
 											<a
 												href={`/app/books/${book.id}/`}
 												class="font-bold text-base tracking-tight hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate"
-												title={book.title}
+												title={book.titleTarget || book.title}
 											>
-												{book.title}
+												{book.titleTarget || book.title}
 											</a>
 										</div>
-										{#if book.titleTarget}
-											<p class="text-xs opacity-60 font-medium truncate mt-0.5" title={book.titleTarget}>
-												{book.titleTarget}
+										{#if book.titleTarget && book.titleTarget !== book.title}
+											<p class="text-xs opacity-60 font-medium truncate mt-0.5" title={book.title}>
+												{book.title}
 											</p>
 										{/if}
 									</div>
@@ -565,6 +596,7 @@
 											{ value: 'edit', label: 'Edit Book Details', icon: Pencil },
 											{ value: 'pin', label: book.pinned ? 'Unpin from Top' : 'Pin to Top', icon: Pin },
 											{ value: 'archive', label: book.archived ? 'Unarchive Series' : 'Archive Series', icon: Archive },
+											{ value: 'clearChapters', label: 'Clear Chapters', icon: BookX, danger: true },
 											{ value: 'delete', label: 'Delete Book', icon: Trash2, danger: true },
 										]}
 										on:select={(e) => {
@@ -572,6 +604,7 @@
 											else if (e.detail === 'edit') openEditBook(book);
 											else if (e.detail === 'pin') togglePin(book);
 											else if (e.detail === 'archive') toggleArchive(book);
+											else if (e.detail === 'clearChapters') promptClearChapters(book);
 											else if (e.detail === 'delete') promptDeleteBook(book);
 										}}
 									/>
@@ -622,7 +655,7 @@
 								use:ripple
 							>
 								<Play size={11} class="fill-current" />
-								<span>{book.latestChapter.title || `Ch. ${book.latestChapter.seq + 1}`}</span>
+								<span>{book.latestChapter.titleTarget || book.latestChapter.title || `Ch. ${book.latestChapter.seq + 1}`}</span>
 							</a>
 						{:else}
 							<span class="text-[11px] opacity-40">No chapters yet</span>
@@ -640,21 +673,24 @@
 		</ul>
 	{:else if viewLayout === 'list'}
 		<!-- MODE 2: MEDIA LIST STRIP (HORIZONTAL ROWS) -->
-		<ul class="flex flex-col gap-3 w-full">
+		<ul class="flex flex-col gap-2.5 w-full">
 			{#each filteredBooks as book (book.id)}
 				{@const progress = getProgress(book)}
-				<li class="group flex items-center justify-between gap-4 rounded-xl border border-black/[0.07] bg-white/60 p-3.5 transition-all hover:border-[#b23a2e]/40 hover:bg-white hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02] dark:hover:bg-white/[0.04]">
+				<li
+					id={`book-card-${book.id}`}
+					class="group flex items-center justify-between gap-4 rounded-xl border border-black/[0.07] bg-white/60 p-3 transition-all hover:border-[#b23a2e]/40 hover:bg-white hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02] dark:hover:bg-white/[0.04]"
+				>
 					<div class="flex items-center gap-3.5 min-w-0 flex-1">
-						<!-- 48px MINI THUMBNAIL -->
+						<!-- 40px MINI THUMBNAIL -->
 						<a
 							href={`/app/books/${book.id}/`}
-							class="w-12 sm:w-14 shrink-0 transition-transform duration-200 group-hover:scale-105"
-							title={`Open ${book.title}`}
+							class="w-10 sm:w-12 shrink-0 transition-transform duration-200 group-hover:scale-105"
+							title={`Open ${book.titleTarget || book.title}`}
 						>
 							<LazyImage
-								src={book.coverPageId ? `/api/pages/${book.coverPageId}/file?kind=thumb&w=160` : ''}
-								alt={`${book.title} Cover`}
-								fallbackText={book.title.slice(0, 1) || '书'}
+								src={book.coverChapterId ? `/api/pages/${book.coverChapterId}/file?kind=thumb&w=140` : ''}
+								alt={book.titleTarget || book.title}
+								fallbackText={book.titleTarget || book.title}
 								aspectRatio="aspect-[2/3]"
 								showSpineShadow={false}
 								class="rounded-lg shadow-2xs"
@@ -671,13 +707,13 @@
 								<a
 									href={`/app/books/${book.id}/`}
 									class="font-bold text-sm sm:text-base hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate"
-									title={book.title}
+									title={book.titleTarget || book.title}
 								>
-									{book.title}
+									{book.titleTarget || book.title}
 								</a>
-								{#if book.titleTarget}
-									<span class="text-xs opacity-60 font-medium truncate hidden sm:inline" title={book.titleTarget}>
-										({book.titleTarget})
+								{#if book.titleTarget && book.titleTarget !== book.title}
+									<span class="text-xs opacity-60 font-medium truncate hidden sm:inline" title={book.title}>
+										({book.title})
 									</span>
 								{/if}
 								<span class="rounded-md bg-[#b23a2e]/10 px-2 py-0.5 text-[10px] font-semibold text-[#b23a2e] dark:text-[#e08a63]">
@@ -704,7 +740,7 @@
 								use:ripple
 							>
 								<Play size={11} class="fill-current" />
-								<span>{book.latestChapter.title || `Ch. ${book.latestChapter.seq + 1}`}</span>
+								<span>{book.latestChapter.titleTarget || book.latestChapter.title || `Ch. ${book.latestChapter.seq + 1}`}</span>
 							</a>
 						{/if}
 
@@ -721,6 +757,7 @@
 								{ value: 'edit', label: 'Edit Book Details', icon: Pencil },
 								{ value: 'pin', label: book.pinned ? 'Unpin from Top' : 'Pin to Top', icon: Pin },
 								{ value: 'archive', label: book.archived ? 'Unarchive Series' : 'Archive Series', icon: Archive },
+								{ value: 'clearChapters', label: 'Clear Chapters', icon: BookX, danger: true },
 								{ value: 'delete', label: 'Delete Book', icon: Trash2, danger: true },
 							]}
 							on:select={(e) => {
@@ -728,6 +765,7 @@
 								else if (e.detail === 'edit') openEditBook(book);
 								else if (e.detail === 'pin') togglePin(book);
 								else if (e.detail === 'archive') toggleArchive(book);
+								else if (e.detail === 'clearChapters') promptClearChapters(book);
 								else if (e.detail === 'delete') promptDeleteBook(book);
 							}}
 						/>
@@ -742,10 +780,10 @@
 				<thead>
 					<tr class="border-b border-black/[0.06] bg-black/[0.02] text-[11px] font-semibold opacity-60 dark:border-white/[0.06] dark:bg-white/[0.02]">
 						<th class="py-2.5 pl-4 pr-2 w-10">★</th>
-						<th class="py-2.5 px-3">Book Series Title</th>
-						<th class="py-2.5 px-3 hidden md:table-cell">Translated Subtitle</th>
+						<th class="py-2.5 px-3">Title</th>
+						<th class="py-2.5 px-3 hidden md:table-cell">Original Title</th>
 						<th class="py-2.5 px-3 w-28">Languages</th>
-						<th class="py-2.5 px-3 w-24">Chapters</th>
+						<th class="py-2.5 px-3 w-32">Chapters</th>
 						<th class="py-2.5 px-3 w-36">Progress</th>
 						<th class="py-2.5 pr-4 pl-3 w-24 text-right">Actions</th>
 					</tr>
@@ -768,11 +806,11 @@
 									href={`/app/books/${book.id}/`}
 									class="hover:text-[#b23a2e] dark:hover:text-[#e08a63]"
 								>
-									{book.title}
+									{book.titleTarget || book.title}
 								</a>
 							</td>
-							<td class="py-2.5 px-3 opacity-60 hidden md:table-cell truncate max-w-xs">
-								{book.titleTarget || '—'}
+							<td class="py-2.5 px-3 opacity-60 hidden md:table-cell truncate max-w-xs" title={book.title}>
+								{book.title}
 							</td>
 							<td class="py-2.5 px-3">
 								<span class="rounded bg-[#b23a2e]/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-[#b23a2e] dark:text-[#e08a63]">
@@ -780,7 +818,7 @@
 								</span>
 							</td>
 							<td class="py-2.5 px-3 font-mono opacity-70">
-								{book.chapterCount} chs ({book.pageCount || 0} pgs)
+								{book.chapterCount} chs
 							</td>
 							<td class="py-2.5 px-3">
 								<div class="flex items-center gap-2">
@@ -810,6 +848,7 @@
 											{ value: 'edit', label: 'Edit Book Details', icon: Pencil },
 											{ value: 'pin', label: book.pinned ? 'Unpin from Top' : 'Pin to Top', icon: Pin },
 											{ value: 'archive', label: book.archived ? 'Unarchive Series' : 'Archive Series', icon: Archive },
+											{ value: 'clearChapters', label: 'Clear Chapters', icon: BookX, danger: true },
 											{ value: 'delete', label: 'Delete Book', icon: Trash2, danger: true },
 										]}
 										on:select={(e) => {
@@ -817,6 +856,7 @@
 											else if (e.detail === 'edit') openEditBook(book);
 											else if (e.detail === 'pin') togglePin(book);
 											else if (e.detail === 'archive') toggleArchive(book);
+											else if (e.detail === 'clearChapters') promptClearChapters(book);
 											else if (e.detail === 'delete') promptDeleteBook(book);
 										}}
 									/>
@@ -918,4 +958,15 @@
 	variant="danger"
 	on:confirm={confirmDeleteBook}
 	on:cancel={() => (deleteConfirmOpen = false)}
+/>
+
+<!-- CLEAR CHAPTERS CONFIRMATION DIALOG -->
+<ConfirmDialog
+	open={clearChaptersConfirmOpen}
+	title="Clear Chapters?"
+	message={`Are you sure you want to clear all chapters from "${bookToClearChapters?.title}"? All chapters, pages, OCR data, and translations will be permanently removed, but the book series itself will be kept.`}
+	confirmLabel="Clear Chapters"
+	variant="danger"
+	on:confirm={confirmClearChapters}
+	on:cancel={() => (clearChaptersConfirmOpen = false)}
 />

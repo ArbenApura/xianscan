@@ -268,6 +268,56 @@ def test_page_1088_bubble_paragraphs_unified():
     assert right_bubble.box.h >= 130, f"Right bubble should span all 4 lines (h >= 130): {right_bubble.box}"
 
 
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_825.jpg").exists(),
+    reason="Page 825 sample fixture not found",
+)
+def test_page_825_vertical_bubbles_stay_upright():
+    """Page 825 regression test:
+    Vertical dialogue bubbles ('叽叽喳喳', '吵闹') must have angle=0.0 so their English
+    translations ('CHATTER', 'NOISY') are typeset horizontally (upright), NOT rotated 90° sideways.
+    """
+    img_path = FIXTURES_DIR / "page_825.jpg"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    chatter = next((r for r in resp.regions if "叽叽喳喳" in r.text), None)
+    assert chatter is not None, "Vertical bubble '叽叽喳喳' must be detected"
+    assert chatter.angle == 0.0, f"Vertical bubble must have angle 0.0 (upright), got {chatter.angle}"
+
+    noisy_vert = next((r for r in resp.regions if "吵" in r.text and r.box.y >= 900), None)
+    assert noisy_vert is not None, "Vertical bubble '吵闹' in panel 3 must be detected"
+    assert noisy_vert.angle == 0.0, f"Vertical bubble must have angle 0.0 (upright), got {noisy_vert.angle}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_828.jpg").exists(),
+    reason="Page 828 sample fixture not found",
+)
+def test_page_828_stacked_bubble_lines_unified():
+    """Page 828 regression test:
+    The 4-line speech bubble ('往聂\\n离那\\n里去\\n了！') must be grouped into a single unified
+    region spanning all 4 lines, not split into ('往聂离那') and ('里去了！').
+    """
+    img_path = FIXTURES_DIR / "page_828.jpg"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    bubble = next((r for r in resp.regions if "往聂" in r.text or "里去" in r.text), None)
+    assert bubble is not None, "Speech bubble '往聂离那里去了！' must be detected"
+    assert "往聂" in bubble.text, f"Line 1 '往聂' missing: {repr(bubble.text)}"
+    assert "离那" in bubble.text, f"Line 2 '离那' missing: {repr(bubble.text)}"
+    assert "里去" in bubble.text, f"Line 3 '里去' missing: {repr(bubble.text)}"
+    assert "了" in bubble.text, f"Line 4 '了！' missing: {repr(bubble.text)}"
+    assert bubble.box.h >= 100, f"Bubble box height should cover all 4 lines (h >= 100): {bubble.box}"
+
+
+
+
 
 
 

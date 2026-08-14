@@ -33,3 +33,14 @@ export const PUT: RequestHandler = async ({ params, request }) => {
 	reorderPages(chapterId, parsed.data.pageIds);
 	return json({ success: true });
 };
+
+export const DELETE: RequestHandler = async ({ params }) => {
+	const chapterId = Number(params.id);
+	if (!Number.isInteger(chapterId)) throw error(400, 'Invalid chapter id.');
+	await assertChapterExists(chapterId);
+
+	const { deleteAllChapterPages } = await import('$lib/server/chapters');
+	const result = await deleteAllChapterPages(chapterId);
+	return json({ success: true, deletedCount: result.deletedCount });
+};
+
