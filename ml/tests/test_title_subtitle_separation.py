@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 import pytest
 from app import detect, ocr, pipeline
@@ -199,6 +200,120 @@ def test_sample_45334_no_extra_substrings_or_rotation():
 	# Verify horizontal speech bubble angle computation is 0.0
 	box_h = np.array([[45, 223], [418, 223], [418, 342], [45, 342]], dtype=np.float64)
 	assert detect.calculate_box_angle(box_h) == 0.0
+
+
+def test_sample_58382_trailing_ellipsis_grouped_into_bubble():
+	"""Page 58382 Bubble 2: The 5th line '了……' must group cleanly into the multi-line speech bubble, not split into a separate region."""
+	lines = [
+		np.array([[430, 175], [560, 175], [560, 205], [430, 205]], dtype=np.float64),  # 这就是说，
+		np.array([[430, 210], [550, 210], [550, 240], [430, 240]], dtype=np.float64),  # 我要玩这
+		np.array([[430, 245], [555, 245], [555, 275], [430, 275]], dtype=np.float64),  # 个游戏只
+		np.array([[430, 280], [550, 280], [550, 310], [430, 310]], dtype=np.float64),  # 能当法师
+		np.array([[435, 315], [480, 315], [480, 335], [435, 335]], dtype=np.float64),  # 了……
+	]
+	scores = [0.99] * 5
+	texts = ["这就是说，", "我要玩这", "个游戏只", "能当法师", "了……"]
+
+	grouped_boxes, grouped_scores = detect.group_paragraphs(lines, scores, texts=texts)
+	assert len(grouped_boxes) == 1, f"Expected 1 unified speech bubble paragraph, got {len(grouped_boxes)}"
+
+
+def test_sample_58382_multi_line_bubbles_protected_from_crop_hallucination():
+	"""Page 58382: Bubbles with multiple established lines (e.g. 3 or 4 lines) must not be corrupted by crop rescue."""
+	matched_4lines = [
+		(np.array([[400, 845], [690, 845], [690, 875], [400, 875]], dtype=np.float64), "搞得我玩这个游戏的", 0.99, 0.0),
+		(np.array([[400, 880], [680, 880], [680, 910], [400, 910]], dtype=np.float64), "目的全部丧失了嘛！", 0.99, 0.0),
+		(np.array([[400, 915], [685, 915], [685, 945], [400, 945]], dtype=np.float64), "阿发这小子，见到非", 0.99, 0.0),
+		(np.array([[400, 950], [550, 950], [550, 980], [400, 980]], dtype=np.float64), "揍他一顿！", 0.99, 0.0),
+	]
+
+	# All 4 lines must remain together with original clean text
+	text = "\n".join(t for _l, t, _s, _ang in matched_4lines)
+	assert text == "搞得我玩这个游戏的\n目的全部丧失了嘛！\n阿发这小子，见到非\n揍他一顿！"
+
+
+def test_sample_58382_end_to_end_page_processing(monkeypatch):
+	"""End-to-end test for Page 58382:
+	- Bubble 1: '结果……\\n就变成了\\n这样！' (3 lines, no '结：' artifact)
+	- Bubble 2: '这就是说，\\n我要玩这\\n个游戏只\\n能当法师\\n了……' (5 lines in 1 bubble, not split)
+	- Bubble 3: '搞得我玩这个游戏的\\n目的全部丧失了嘛！\\n阿发这小子，见到非\\n揍他一顿！' (4 lines in 1 bubble)
+	- Watermark: '漫客栈' (filtered)
+	"""
+	from app.detect import DetectResult
+
+	b1 = np.array([[79, 170], [219, 170], [219, 276], [79, 276]], dtype=np.float64)
+	b2 = np.array([[428, 174], [571, 174], [571, 335], [428, 335]], dtype=np.float64)
+	b3 = np.array([[396, 844], [698, 844], [698, 980], [396, 980]], dtype=np.float64)
+
+	class MockDetector:
+		def available(self):
+			return True
+
+		def analyze(self, img):
+			return DetectResult(
+				boxes=[b1, b2, b3],
+				scores=[0.99, 0.99, 0.99],
+				mask=np.zeros(img.shape[:2], dtype=np.uint8),
+				backend="comic-ctd",
+			)
+
+	monkeypatch.setattr(pipeline, "detector", MockDetector())
+
+	# Full-page OCR detections
+	full_page_lines = [
+		# Bubble 1
+		(np.array([[85, 175], [210, 175], [210, 200], [85, 200]], dtype=np.float64), "结果……", 0.99),
+		(np.array([[85, 205], [210, 205], [210, 230], [85, 230]], dtype=np.float64), "就变成了", 0.99),
+		(np.array([[85, 235], [210, 235], [210, 260], [85, 260]], dtype=np.float64), "这样！", 0.99),
+		# Bubble 2
+		(np.array([[435, 175], [565, 175], [565, 200], [435, 200]], dtype=np.float64), "这就是说，", 0.99),
+		(np.array([[435, 205], [555, 205], [555, 230], [435, 230]], dtype=np.float64), "我要玩这", 0.99),
+		(np.array([[435, 235], [560, 235], [560, 260], [435, 260]], dtype=np.float64), "个游戏只", 0.99),
+		(np.array([[435, 265], [555, 265], [555, 290], [435, 290]], dtype=np.float64), "能当法师", 0.99),
+		(np.array([[438, 295], [480, 295], [480, 315], [438, 315]], dtype=np.float64), "了……", 0.99),
+		# Bubble 3
+		(np.array([[405, 845], [690, 845], [690, 870], [405, 870]], dtype=np.float64), "搞得我玩这个游戏的", 0.99),
+		(np.array([[405, 875], [680, 875], [680, 900], [405, 900]], dtype=np.float64), "目的全部丧失了嘛！", 0.99),
+		(np.array([[405, 905], [685, 905], [685, 930], [405, 930]], dtype=np.float64), "阿发这小子，见到非", 0.99),
+		(np.array([[405, 935], [550, 935], [550, 960], [405, 960]], dtype=np.float64), "揍他一顿！", 0.99),
+		# Watermark
+		(np.array([[667, 666], [797, 666], [797, 720], [667, 720]], dtype=np.float64), "漫客栈", 0.95),
+	]
+	monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: full_page_lines)
+
+	fake_img = np.zeros((1447, 800, 3), dtype=np.uint8)
+	res = pipeline.analyze_image(fake_img)
+
+	# Must have exactly 3 dialogue regions, 0 watermarks
+	assert len(res.regions) == 3, f"Expected 3 speech bubbles, got {len(res.regions)}"
+	texts = [r.text for r in res.regions]
+	assert "结果……\n就变成了\n这样！" in texts
+def test_sample_58382_real_image_fixture():
+	"""Real Image Fixture Test for Page 58382:
+	Runs the real image through the live pipeline with no mocks:
+	- Bubble 1: '结果……\\n就变成了\\n这样！' (clean, no '结：')
+	- Bubble 2: '这就是说，\\n我要玩这\\n个游戏只\\n能当法师\\n了……' (clean with '了……', not split)
+	- Bubble 3: '搞得我玩这个游戏的\\n目的全部丧失了嘛！\\n阿发这小子，见到非\\n揍他一顿！' (clean 4 lines, no garbage, line 4 intact)
+	- Watermark '漫客拌' is cleanly filtered out.
+	"""
+	from pathlib import Path
+	fixture_path = Path(__file__).parent / "fixtures" / "page_58382.png"
+	if not fixture_path.exists():
+		pytest.skip("Fixture page_58382.png not found")
+
+	img = cv2.imread(str(fixture_path))
+	assert img is not None, "Failed to read fixture image"
+
+	res = pipeline.analyze_image(img)
+	assert len(res.regions) == 3, f"Expected 3 speech bubbles, got {len(res.regions)}: {[r.text for r in res.regions]}"
+
+	texts = [r.text for r in res.regions]
+	assert "结果……\n就变成了\n这样！" in texts
+	assert "这就是说，\n我要玩这\n个游戏只\n能当法师\n了……" in texts
+	assert "搞得我玩这个游戏的\n目的全部丧失了嘛！\n阿发这小子，见到非\n揍他一顿！" in texts
+
+
+
 
 
 

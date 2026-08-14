@@ -265,7 +265,7 @@ _WATERMARK_RE = re.compile(
 	r'速漫库|速漫|漫库|qumanku|包子|baozimh|colamanga|colamanhua|acloudmerge|oamanhua|'
 	r'yumanhua|mangabox|comick|腾讯|微信|公众号|qq群|企鹅群|群号|'
 	r'严禁转载|独家|扫图|录入|修图|嵌字|翻译|汉化组|'
-	r'免费漫画|最新免费|漫画网|看漫画|首发|独家首发|漫客栈|mkzhan)',
+	r'免费漫画|最新免费|漫画网|看漫画|首发|独家首发|漫客[栈拌]|漫客|mkzhan)',
 	re.IGNORECASE,
 )
 
@@ -476,11 +476,17 @@ def group_paragraphs(
 
 			# VERTICAL CONTIGUITY: THE NEW LINE SITS AT OR BELOW THE PARAGRAPH'S BOTTOM LINE.
 			gap = y - (ly + lh)
-			if gap > gap_factor * min(h, lh) or y < ly - 0.35 * min(h, lh):
+			is_trailing_tail = (w <= max(60, int(lw * 0.6)) and h <= lh * 1.5) or bool(re.search(r"[…\.。！!？?]$", txt))
+			max_allowed_gap = (gap_factor * 1.4 * min(h, lh)) if is_trailing_tail else (gap_factor * min(h, lh))
+			if gap > max_allowed_gap or y < ly - 0.35 * min(h, lh):
 				continue
 
-			# FONT-SIZE GATE: ONLY LINES OF SIMILAR FONT SIZE GROUP.
-			if max(h, lh) / max(1.0, float(min(h, lh))) > height_sim_max:
+			# FONT-SIZE GATE: ONLY LINES OF SIMILAR FONT SIZE GROUP (OR SHORT TRAILING LINE / ELLIPSIS).
+			height_ratio = max(h, lh) / max(1.0, float(min(h, lh)))
+			if is_trailing_tail:
+				if height_ratio > 2.5:
+					continue
+			elif height_ratio > height_sim_max:
 				continue
 
 			# HORIZONTAL ALIGNMENT: X-RANGES OVERLAP LIKE CENTERED BUBBLE LINES

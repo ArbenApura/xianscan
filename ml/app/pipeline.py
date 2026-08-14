@@ -326,7 +326,9 @@ def _apply_mask_growth(
 	matched_count: int,
 	box: np.ndarray,
 	page_w: int,
+	page_h: int = 0,
 	other_boxes: list[np.ndarray] | None = None,
+	ocr_img: np.ndarray | None = None,
 ) -> None:
 	if comic_mask is None or not region.polygon or detect._is_watermark_line(region.text):
 		return
@@ -353,14 +355,36 @@ def _apply_mask_growth(
 			line_h = float(detect.box_to_xywh(box)[3])
 		else:
 			line_h = 0.0
-		# A SHORT BAND ADDED BELOW THE TEXT IS A DOTS LINE ONLY IF THE TEXT DOES NOT END IN A TERMINATING PUNCTUATION
-		if line_h > 0 and 0.35 * line_h <= added_h <= 1.05 * line_h:
+		# A SHORT BAND ADDED BELOW THE TEXT IS A MISSED TRAILING LINE OR DOTS LINE
+		if line_h > 0 and 0.35 * line_h <= added_h <= 1.5 * line_h:
 			last_char = region.text.rstrip()[-1] if region.text.strip() else ""
 			if last_char not in "。.;；:：!！?？)]】”’\"'":
-				unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
-				region.text = region.text.rstrip() + "\n" + unit
+				recognized_tail = False
+				if ocr_img is not None and page_h > 0 and page_w > 0:
+					band_y0 = int(prev_bottom - 2)
+					band_y1 = int(max(p[1] for p in grown) + 2)
+					band_x0 = int(min(p[0] for p in grown))
+					band_x1 = int(max(p[0] for p in grown))
+					band_crop = ocr_img[max(0, band_y0):min(page_h, band_y1), max(0, band_x0):min(page_w, band_x1)]
+					if band_crop.size > 0:
+						rec = ocr.recognize_line(band_crop)
+						if rec and rec.text.strip() and rec.score >= 0.55:
+							tail_t = rec.text.strip()
+							if _ELLIPSIS_TAIL.search(tail_t) or _ALL_ELLIPSIS.fullmatch(tail_t):
+								tail_t = re.sub(r'[.．…·]{1,}$', '……', tail_t)
+							region.text = region.text.rstrip() + "\n" + tail_t
+							recognized_tail = True
+				if not recognized_tail:
+					unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
+					region.text = region.text.rstrip() + "\n" + unit
+		last_pts = [p for p in region.polygon if p[1] >= prev_bottom - max(15.0, line_h * 1.2)]
+		last_right = max(p[0] for p in last_pts) if last_pts else prev_right
+		grown_last_pts = [p for p in grown if p[1] >= prev_bottom - max(15.0, line_h * 1.2)]
+		grown_last_right = max(p[0] for p in grown_last_pts) if grown_last_pts else max(p[0] for p in grown)
+		added_tail_w = grown_last_right - last_right
+
 		# A REAL HORIZONTAL EXTENSION TO THE RIGHT IS MISSED TRAILING PUNCTUATION OR ELLIPSIS
-		if line_h > 0 and added_w >= max(10.0, line_h * 0.25):
+		if line_h > 0 and (added_w >= max(10.0, line_h * 0.25) or added_tail_w >= max(10.0, line_h * 0.25)):
 			if _ELLIPSIS_TAIL.search(region.text):
 				region.text = _append_ellipsis(region.text)
 			elif _EXCLAIM_TAIL.search(region.text) or _QUESTION_TAIL.search(region.text):
@@ -393,8 +417,8 @@ def _split_lines_by_internal_punctuation(
 		return rapid_lines
 
 	new_lines: list[tuple] = []
-	# Terminal sentence punctuation only (!, ?, 。). Ellipses (…) are normal dialogue pauses and must NOT split speech lines.
-	punct_pattern = re.compile(r"([\u3002!！?？]+)(?=[^\u3002!！?？\s])")
+	# Terminal sentence punctuation (!, 。) separating two distinct utterances across a wide bubble span.
+	punct_pattern = re.compile(r"([\u3002!！]+)(?=[^\u3002!！?？\s])")
 
 	for item in rapid_lines:
 		pts, t, s, ang = item[:4] if len(item) >= 4 else (*item[:3], detect.calculate_box_angle(item[0]))
@@ -410,34 +434,18 @@ def _split_lines_by_internal_punctuation(
 			len2 = len(part2)
 			total_len = len1 + len2
 
-			# Both parts must be substantial clauses (e.g. len1 >= 3, len2 >= 2)
-			# to avoid splitting leading single-character interjections like "咦！", "哈！", "喂！"
-			if total_len > 0 and len1 >= 3 and len2 >= 2:
+			# Only split wide cross-panel / multi-bubble lines spanning across bubbles (w >= 220 and w > 4.5*h)
+			# with substantial clauses on both sides (len1 >= 4, len2 >= 2)
+			if total_len > 0 and len1 >= 4 and len2 >= 2 and w >= 220 and w > 4.5 * max(1.0, float(h)):
 				prop_x = int(w * (len1 / total_len))
-				crop_band = ocr_img[max(0, y) : min(ocr_img.shape[0], y + h), max(0, x) : min(ocr_img.shape[1], x + w)]
 				split_px = prop_x
-				if crop_band.size > 0:
-					gray = cv2.cvtColor(crop_band, cv2.COLOR_BGR2GRAY)
-					col_mean = np.mean(gray, axis=0)
-					win_start = max(10, prop_x - int(h * 0.5))
-					win_end = min(w - 10, prop_x + int(h * 0.5))
-					if win_end > win_start:
-						peak_idx = win_start + np.argmax(col_mean[win_start:win_end])
-						split_px = int(peak_idx)
 
 				b1 = np.array([[x, y], [x + split_px, y], [x + split_px, y + h], [x, y + h]], dtype=np.float64)
 				b2 = np.array([[x + split_px, y], [x + w, y], [x + w, y + h], [x + split_px, y + h]], dtype=np.float64)
 
-				crop1 = ocr.crop_region(ocr_img, b1, margin=2)
-				crop2 = ocr.crop_region(ocr_img, b2, margin=2)
-
-				rec1 = ocr.recognize_line(crop1)
-				rec2 = ocr.recognize_line(crop2)
-
-				if rec1 and rec2 and rec1.text.strip() and rec2.text.strip():
-					new_lines.append((b1, rec1.text.strip(), rec1.score, detect.calculate_box_angle(b1)))
-					new_lines.append((b2, rec2.text.strip(), rec2.score, detect.calculate_box_angle(b2)))
-					continue
+				new_lines.append((b1, part1, s, detect.calculate_box_angle(b1)))
+				new_lines.append((b2, part2, s, detect.calculate_box_angle(b2)))
+				continue
 
 		new_lines.append((pts, t, s, ang))
 
@@ -527,36 +535,45 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	rapid_lines = _split_lines_by_internal_punctuation(rapid_lines, ocr_img)
 
 	# RECOVER / DISCOVER LINES INSIDE COMIC BOXES THAT FULL-PAGE OCR MISSED (e.g. TITLE LOGOS, HIGH-CONTRAST SFX, SUBTITLES)
+	rapid_boxes_xywh = [detect.box_to_xywh(r[0]) for r in rapid_lines]
 	for cb in comic_boxes:
 		cx, cy, cw, ch = detect.box_to_xywh(cb)
-		overlapping_rapid = [r for r in rapid_lines if detect.line_center_inside(r[0], cb)]
-		if not overlapping_rapid or (ch > 220 and len(overlapping_rapid) <= 1):
-			crop = ocr.crop_region(ocr_img, cb, margin=2)
-			c_res = ocr.recognize_crop(crop)
-			if c_res and c_res.lines:
-				offset_x = max(0, cx - 2)
-				offset_y = max(0, cy - 2)
-				for c_box, c_txt, c_score in c_res.lines:
-					clean_t = c_txt.strip()
-					if not clean_t or len(clean_t) < 2 or c_score < 0.60:
-						continue
-					shifted_box = c_box.copy()
-					shifted_box[:, 0] += offset_x
-					shifted_box[:, 1] += offset_y
-					sx, sy, sw, sh = detect.box_to_xywh(shifted_box)
-					s_area = max(1.0, sw * sh)
-					duplicate = False
-					for r_pts, r_txt, _r_sc, _ang in rapid_lines:
-						rx, ry, rw, rh = detect.box_to_xywh(r_pts)
-						ix = max(0, min(sx + sw, rx + rw) - max(sx, rx))
-						iy = max(0, min(sy + sh, ry + rh) - max(sy, ry))
-						inter = ix * iy
-						if (inter / s_area > 0.45 and (clean_t in r_txt or r_txt in clean_t)) or detect.box_iou(shifted_box, r_pts) > 0.40:
-							duplicate = True
-							break
-					if not duplicate:
-						c_ang = detect.calculate_box_angle(shifted_box)
-						rapid_lines.append((shifted_box, clean_t, c_score, c_ang))
+		cb_area = max(1.0, float(cw * ch))
+		total_inter = 0.0
+		for rx, ry, rw, rh in rapid_boxes_xywh:
+			ix = max(0, min(cx + cw, rx + rw) - max(cx, rx))
+			iy = max(0, min(cy + ch, ry + rh) - max(cy, ry))
+			total_inter += ix * iy
+		# If this comic box is already well covered by detected text lines (> 35%), skip re-cropping
+		if total_inter / cb_area > 0.35:
+			continue
+
+		crop = ocr.crop_region(ocr_img, cb, margin=2)
+		c_res = ocr.recognize_crop(crop)
+		if c_res and c_res.lines:
+			offset_x = max(0, cx - 2)
+			offset_y = max(0, cy - 2)
+			for c_box, c_txt, c_score in c_res.lines:
+				clean_t = c_txt.strip()
+				if not clean_t or len(clean_t) < 2 or c_score < 0.60:
+					continue
+				shifted_box = c_box.copy()
+				shifted_box[:, 0] += offset_x
+				shifted_box[:, 1] += offset_y
+				sx, sy, sw, sh = detect.box_to_xywh(shifted_box)
+				s_area = max(1.0, sw * sh)
+				duplicate = False
+				for r_pts, r_txt, _r_sc, _ang in rapid_lines:
+					rx, ry, rw, rh = detect.box_to_xywh(r_pts)
+					ix = max(0, min(sx + sw, rx + rw) - max(sx, rx))
+					iy = max(0, min(sy + sh, ry + rh) - max(sy, ry))
+					inter = ix * iy
+					if (inter / s_area > 0.45 and (clean_t in r_txt or r_txt in clean_t)) or detect.box_iou(shifted_box, r_pts) > 0.40:
+						duplicate = True
+						break
+				if not duplicate:
+					c_ang = detect.calculate_box_angle(shifted_box)
+					rapid_lines.append((shifted_box, clean_t, c_score, c_ang))
 
 	rapid_boxes = [pts for pts, _t, _s, _ang in rapid_lines]
 	rapid_scores = [float(s) for _pts, _t, s, _ang in rapid_lines]
@@ -676,14 +693,15 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					hull_pts = hull.reshape(-1, 2).astype(np.float64)
 					_hx, _hy, hw, hh = detect.box_to_xywh(hull_pts)
 
-					# MULTI-LINE / STAT-CARD RESCUE: FOR COMPACT SINGLE-BUBBLE / CARD DETECTIONS OR MISMATCHED SINGLE-LINE CROPS
+					# MULTI-LINE / STAT-CARD RESCUE: FOR COMPACT SINGLE-BUBBLE / CARD DETECTIONS WHERE ONLY 1 LINE WAS FOUND
 					needs_rescue = (
 						len(sub_groups) == 1
-						and 45 <= bh <= 280
+						and len(s_matched) == 1
+						and 45 <= bh <= 320
 						and (
-							(1.25 * hh <= bh <= 2.6 * hh)
+							(1.25 * hh <= bh <= 4.0 * hh)
 							or s_region.confidence < 0.78
-							or (len(s_matched) == 1 and detect.is_vertical_box(hull_pts) and s_region.confidence < 0.85)
+							or (detect.is_vertical_box(hull_pts) and s_region.confidence < 0.85)
 						)
 					)
 					if needs_rescue:
@@ -753,7 +771,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 				# MASK-GUIDED GROWTH FOR s_region (EXCLUDING OTHER LINES TO PREVENT INVADING NEIGHBOURING BUBBLES)
 				other_lines = [l[0] for l in rapid_lines if not any(detect.box_iou(l[0], sm[0]) > 0.50 for sm in s_matched)]
-				_apply_mask_growth(s_region, comic_mask, hull_pts, len(s_matched), box, page_w, other_boxes=other_lines)
+				_apply_mask_growth(s_region, comic_mask, hull_pts, len(s_matched), box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img)
 				regions.append(s_region)
 		else:
 			crop = ocr.crop_region(ocr_img, box, margin=2)
@@ -808,7 +826,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 						angle=float(np.median([a for _l, _t, _s, a in s_matched])) if s_matched else 0.0,
 					)
 					other_lines = [l[0] for l in rapid_lines if detect.box_iou(l[0], sub_poly) <= 0.50]
-					_apply_mask_growth(sub_reg, comic_mask, sub_poly, len(s_matched), box, page_w, other_boxes=other_lines)
+					_apply_mask_growth(sub_reg, comic_mask, sub_poly, len(s_matched), box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img)
 					regions.append(sub_reg)
 			elif ocr_result:
 				region.text = _clean_stray_ocr_artifacts(ocr_result.text)
@@ -839,7 +857,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 				# MASK-GUIDED GROWTH FOR crop region
 				other_lines = [l[0] for l in rapid_lines if detect.box_iou(l[0], box) <= 0.50]
-				_apply_mask_growth(region, comic_mask, None, 0, box, page_w, other_boxes=other_lines)
+				_apply_mask_growth(region, comic_mask, None, 0, box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img)
 				regions.append(region)
 
 	# -- STRAY-DOT CLEANUP: REC MODELS SOMETIMES SPLIT A FINAL "..." INTO THE LAST WORD PLUS A
