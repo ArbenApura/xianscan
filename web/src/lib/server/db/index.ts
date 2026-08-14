@@ -52,10 +52,26 @@ if (!globalThis.__mtSqlite) {
 	sqlite.pragma('foreign_keys = ON');
 	// SELF-HOSTED FRIENDLINESS: RUN PENDING MIGRATIONS AT BOOT SO `npm run dev` / `npm run start` WORK ON
 	// A FRESH CLONE WITHOUT A MANUAL `npm run db:migrate` STEP (migrate RUNS ONLY PENDING ONES — THE
-	// __drizzle_migrations JOURNAL MAKES THIS IDEMPOTENT AND CHEAP).
 	migrate(drizzle(sqlite, { schema }), { migrationsFolder: MIGRATIONS_DIR });
+	// AUTO-SYNC CHAPTER STATUSES FOR CHAPTERS WHOSE PAGES HAVE FINISHED TRANSLATING
+	try {
+		sqlite.exec(`
+			UPDATE chapters 
+			SET status = 'done' 
+			WHERE status != 'done' 
+			  AND id IN (
+				SELECT chapter_id 
+				FROM pages 
+				GROUP BY chapter_id 
+				HAVING count(*) > 0 
+				   AND count(*) = sum(CASE WHEN status = 'done' OR output_path IS NOT NULL THEN 1 ELSE 0 END)
+			  );
+		`);
+	} catch {
+		// ignore
+	}
 }
-const sqlite = globalThis.__mtSqlite;
+const sqlite = globalThis.__mtSqlite!;
 
 export const db = drizzle(sqlite, { schema });
 

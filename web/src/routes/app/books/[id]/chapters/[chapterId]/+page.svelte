@@ -3,7 +3,7 @@
 	import { browser } from '$app/environment';
 	import { toast } from 'svelte-sonner';
 	import { page } from '$app/stores';
-	import { ConfirmDialog } from '$lib/components/ui';
+	import { ConfirmDialog, Modal, TextField, Button } from '$lib/components/ui';
 	import { settings } from '$lib/stores/settings';
 	import { jobTracker } from '$lib/stores/job-tracker';
 	import ChapterToolbar from '$lib/components/chapter/ChapterToolbar.svelte';
@@ -60,6 +60,49 @@
 	let pageToDelete: PageData | null = null;
 	let clearChapterConfirmOpen = false;
 	let resliceModalOpen = false;
+
+	// EDIT CHAPTER STATES
+	let editChapterModalOpen = false;
+	let editChapterTitle = '';
+	let editChapterTitleTarget = '';
+	let editChapterSeq = 1;
+	let updatingChapter = false;
+
+	function openEditChapterModal() {
+		if (!chapter) return;
+		editChapterTitle = chapter.title || '';
+		editChapterTitleTarget = chapter.titleTarget || '';
+		editChapterSeq = (chapter.seq ?? 0) + 1;
+		editChapterModalOpen = true;
+	}
+
+	async function updateChapter() {
+		if (!chapter) return;
+		updatingChapter = true;
+		try {
+			const resp = await fetch(`/api/chapters/${chapterId}`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					title: editChapterTitle.trim(),
+					titleTarget: editChapterTitleTarget.trim() || null,
+					seq: Math.max(0, editChapterSeq - 1),
+				}),
+			});
+			if (!resp.ok) throw new Error('Update failed');
+			const data = await resp.json();
+			chapter = {
+				...chapter,
+				...data.chapter,
+			};
+			toast.success('Chapter updated.');
+			editChapterModalOpen = false;
+		} catch {
+			toast.error('Could not update chapter.');
+		} finally {
+			updatingChapter = false;
+		}
+	}
 
 	// DRAG & DROP REORDERING STATE
 	let draggedPageIndex: number | null = null;
@@ -408,6 +451,7 @@
 		on:cancel={cancelTranslation}
 		on:clearProgress={() => (clearChapterConfirmOpen = true)}
 		on:openReslice={() => (resliceModalOpen = true)}
+		on:editChapter={openEditChapterModal}
 		on:upload={(e) => uploadFiles(e.detail)}
 		on:changeViewMode={(e) => settings.update((s) => ({ ...s, readerViewMode: e.detail }))}
 		on:changeWebtoonKind={(e) => settings.update((s) => ({ ...s, webtoonKind: e.detail }))}
@@ -525,3 +569,39 @@
 	on:confirm={confirmDeletePage}
 	on:cancel={() => (deletePageConfirmOpen = false)}
 />
+
+<!-- EDIT CHAPTER MODAL -->
+<Modal open={editChapterModalOpen} title="Edit Chapter Details" size="sm" on:close={() => (editChapterModalOpen = false)}>
+	{#if chapter}
+		<form class="flex flex-col gap-4" on:submit|preventDefault={updateChapter}>
+			<TextField
+				bind:value={editChapterTitle}
+				label="Chapter Title (Source Language)"
+				placeholder="e.g. 第1话"
+			/>
+
+			<TextField
+				bind:value={editChapterTitleTarget}
+				label="Target Title (Translated title)"
+				placeholder="e.g. Chapter 1: The Awakening"
+			/>
+
+			<div>
+				<span class="mb-1 block text-xs font-semibold opacity-60">Chapter Sequence # (1-indexed)</span>
+				<input
+					type="number"
+					min="1"
+					bind:value={editChapterSeq}
+					class="w-full rounded-xl border border-black/10 bg-transparent px-3 py-2 text-sm outline-none transition placeholder:opacity-40 focus:border-[#b23a2e] dark:border-white/10"
+				/>
+			</div>
+		</form>
+	{/if}
+
+	<svelte:fragment slot="footer">
+		<Button on:click={() => (editChapterModalOpen = false)}>Cancel</Button>
+		<Button variant="primary" disabled={updatingChapter} loading={updatingChapter} on:click={updateChapter}>
+			Save Changes
+		</Button>
+	</svelte:fragment>
+</Modal>

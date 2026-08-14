@@ -9,6 +9,7 @@
 	import LanguagePicker from '$lib/components/ui/LanguagePicker.svelte';
 	import Select from '$lib/components/ui/Select.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
+	import ArrowLeft from 'lucide-svelte/icons/arrow-left';
 	import Sparkles from 'lucide-svelte/icons/sparkles';
 	import BookOpen from 'lucide-svelte/icons/book-open';
 	import Globe from 'lucide-svelte/icons/globe';
@@ -72,64 +73,79 @@
 </script>
 
 <svelte:head>
-	<title>{scope === 'global' ? 'Global' : 'Book'} Glossary — Manua Translator</title>
+	<title>{scope === 'global' ? 'Global' : 'Book'} Glossary — Manhua Translator</title>
 </svelte:head>
 
-<div class="mx-auto min-h-full w-full max-w-4xl px-4 py-8 sm:px-6">
-	<!-- BACK NAVIGATION -->
-	<div class="mb-4 flex items-center justify-between">
-		<a href="/app/" use:ripple class="text-sm opacity-60 hover:text-[#b23a2e]">← Library</a>
+<!-- GLOSSARY MANAGEMENT DASHBOARD -->
+<div class="flex flex-col gap-6">
+	<!-- BACK BUTTON -->
+	<div>
+		<a
+			href="/app/"
+			class="inline-flex items-center gap-1.5 text-xs font-semibold opacity-60 transition hover:opacity-100 hover:text-[#b23a2e]"
+			use:ripple
+		>
+			<ArrowLeft size={14} /> Back to Library
+		</a>
 	</div>
 
-	<!-- PAGE HEADER -->
-	<header class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="text-2xl font-bold leading-tight sm:text-3xl">Glossary Terms</h1>
-			<p class="mt-1 text-sm opacity-60">
-				{scope === 'global'
-					? 'Global terms applied to every book matching the selected language pair'
-					: 'Private terms specific to the selected book'}
-			</p>
-		</div>
-
-		<!-- SCOPE SWITCHER TABS -->
-		<div class="flex items-center gap-1 rounded-xl bg-black/5 p-1 dark:bg-white/5">
-			<button
-				type="button"
-				class={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-					scope === 'global'
-						? 'bg-white font-semibold text-black shadow-sm dark:bg-white/10 dark:text-white'
-						: 'opacity-60 hover:opacity-100'
-				}`}
-				on:click={() => (scope = 'global')}
-			>
-				<Globe size={14} /> Global Scope
-			</button>
-			<button
-				type="button"
-				class={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-					scope === 'book'
-						? 'bg-white font-semibold text-black shadow-sm dark:bg-white/10 dark:text-white'
-						: 'opacity-60 hover:opacity-100'
-				}`}
-				on:click={() => (scope = 'book')}
-			>
-				<BookOpen size={14} /> Book Scope
-			</button>
-		</div>
-	</header>
-
-	<!-- SCOPE CONTROLS -->
-	{#if scope === 'global'}
-		<div class="mb-5 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-end">
-			<div class="min-w-0">
-				<span class="mb-1 block text-xs opacity-50">Source (original)</span>
-				<LanguagePicker value={sourceLang} on:change={(e) => (sourceLang = e.detail)} />
+	<!-- HERO HEADER CARD -->
+	<div class="relative overflow-hidden rounded-2xl border border-black/[0.08] bg-white/50 p-6 backdrop-blur dark:border-white/[0.06] dark:bg-white/[0.02]">
+		<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+			<div>
+				<h1 class="text-2xl font-bold tracking-tight sm:text-3xl">Glossary Terms</h1>
+				<p class="mt-1 text-sm opacity-60">
+					{scope === 'global'
+						? 'Global terms applied to every book matching the selected language pair.'
+						: 'Book-specific terms and character names private to the selected series.'}
+				</p>
 			</div>
-			<span class="hidden pb-2 text-center opacity-40 sm:block">→</span>
-			<div class="min-w-0">
-				<span class="mb-1 block text-xs opacity-50">Target (translation)</span>
-				<LanguagePicker value={targetLang} on:change={(e) => (targetLang = e.detail)} />
+
+			<!-- SCOPE SWITCHER TABS -->
+			<div class="flex items-center gap-1 rounded-xl bg-black/[0.04] p-1 dark:bg-white/[0.04]">
+				<button
+					type="button"
+					class={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+						scope === 'global'
+							? 'bg-white font-semibold text-black shadow-xs dark:bg-[#201c18] dark:text-white'
+							: 'opacity-60 hover:opacity-100'
+					}`}
+					on:click={() => (scope = 'global')}
+					use:ripple
+				>
+					<Globe size={14} />
+					<span>Global Scope</span>
+				</button>
+				<button
+					type="button"
+					class={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+						scope === 'book'
+							? 'bg-white font-semibold text-black shadow-xs dark:bg-[#201c18] dark:text-white'
+							: 'opacity-60 hover:opacity-100'
+					}`}
+					on:click={() => (scope = 'book')}
+					use:ripple
+				>
+					<BookOpen size={14} />
+					<span>Book Scope</span>
+				</button>
+			</div>
+		</div>
+	</div>
+
+	<!-- SCOPE CONTROLS CARD -->
+	{#if scope === 'global'}
+		<div class="rounded-2xl border border-black/[0.08] bg-white/40 p-4 dark:border-white/[0.06] dark:bg-white/[0.02]">
+			<div class="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-end">
+				<div class="min-w-0">
+					<span class="mb-1 block text-xs font-semibold opacity-60">Source (original)</span>
+					<LanguagePicker value={sourceLang} on:change={(e) => (sourceLang = e.detail)} />
+				</div>
+				<span class="hidden pb-2 text-center text-sm font-bold opacity-40 sm:block">→</span>
+				<div class="min-w-0">
+					<span class="mb-1 block text-xs font-semibold opacity-60">Target (translation)</span>
+					<LanguagePicker value={targetLang} on:change={(e) => (targetLang = e.detail)} />
+				</div>
 			</div>
 		</div>
 
@@ -138,32 +154,34 @@
 		{/key}
 	{:else}
 		<!-- BOOK SCOPE SELECTOR & AUTO-EXTRACT TRIGGER -->
-		<div class="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-			<div class="w-full sm:max-w-xs">
-				<span class="mb-1 block text-xs opacity-50">Select Book</span>
-				{#if books.length > 0}
-					<Select
-						items={bookSelectItems}
-						value={selectedBookId}
-						on:change={(e) => (selectedBookId = String(e.detail))}
-					/>
-				{:else}
-					<p class="text-xs opacity-50">No books created yet.</p>
+		<div class="rounded-2xl border border-black/[0.08] bg-white/40 p-4 dark:border-white/[0.06] dark:bg-white/[0.02]">
+			<div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+				<div class="w-full sm:max-w-xs">
+					<span class="mb-1 block text-xs font-semibold opacity-60">Select Series</span>
+					{#if books.length > 0}
+						<Select
+							items={bookSelectItems}
+							value={selectedBookId}
+							on:change={(e) => (selectedBookId = String(e.detail))}
+						/>
+					{:else}
+						<p class="text-xs opacity-50">No books created yet.</p>
+					{/if}
+				</div>
+
+				{#if selectedBookId}
+					<Button
+						variant="secondary"
+						size="sm"
+						disabled={isExtracting}
+						on:click={triggerExtract}
+						class="flex items-center gap-1.5"
+					>
+						<Sparkles size={14} class="text-amber-500" />
+						<span>{isExtracting ? 'Extracting Terms...' : 'Auto-Extract AI Terms'}</span>
+					</Button>
 				{/if}
 			</div>
-
-			{#if selectedBookId}
-				<Button
-					variant="secondary"
-					size="sm"
-					disabled={isExtracting}
-					on:click={triggerExtract}
-					class="flex items-center gap-1.5"
-				>
-					<Sparkles size={14} class="text-amber-500" />
-					{isExtracting ? 'Extracting Terms...' : 'Auto-Extract AI Terms'}
-				</Button>
-			{/if}
 		</div>
 
 		{#if selectedBookId && selectedBook}
@@ -171,7 +189,7 @@
 				<GlossaryPanel scope="book" bookId={selectedBookId} bookTitle={selectedBook.title} />
 			{/key}
 		{:else if books.length === 0}
-			<div class="rounded-xl border p-8 text-center opacity-60 dark:border-white/10">
+			<div class="rounded-2xl border border-dashed border-black/15 p-12 text-center text-sm opacity-60 dark:border-white/15">
 				Create a book first to add book-specific glossary terms.
 			</div>
 		{/if}

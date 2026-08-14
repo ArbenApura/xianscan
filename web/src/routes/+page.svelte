@@ -19,7 +19,7 @@
 </script>
 
 <svelte:head>
-	<title>Manua Translator — Self-hosted Manhua Translation</title>
+	<title>Manhua Translator — Self-hosted Manhua Translation</title>
 </svelte:head>
 
 <div class="relative flex min-h-screen flex-col items-center justify-center px-4 py-12 text-center">
@@ -37,7 +37,7 @@
 
 	<!-- MAIN TITLE -->
 	<h1 class="relative z-10 max-w-3xl text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl">
-		Manua <span class="bg-gradient-to-r from-[#b23a2e] to-amber-600 bg-clip-text text-transparent dark:from-[#e08a63] dark:to-amber-400">Translator</span>
+		Manhua <span class="bg-gradient-to-r from-[#b23a2e] to-amber-600 bg-clip-text text-transparent dark:from-[#e08a63] dark:to-amber-400">Translator</span>
 	</h1>
 
 	<!-- SUBTITLE -->
@@ -50,7 +50,7 @@
 		<Button href="/app/" variant="primary" size="md" class="px-6 py-3 text-base shadow-lg shadow-[#b23a2e]/20">
 			Launch Library <ArrowRight size={18} class="ml-1" />
 		</Button>
-		<Button href="/app/glossary" variant="secondary" size="md" class="px-6 py-3 text-base">
+		<Button href="/app/glossary/" variant="secondary" size="md" class="px-6 py-3 text-base">
 			Manage Glossary
 		</Button>
 	</div>

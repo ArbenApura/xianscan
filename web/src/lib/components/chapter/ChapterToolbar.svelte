@@ -13,6 +13,7 @@
 	import Scissors from 'lucide-svelte/icons/scissors';
 	import Sparkles from 'lucide-svelte/icons/sparkles';
 	import Square from 'lucide-svelte/icons/square';
+	import Pencil from 'lucide-svelte/icons/pencil';
 
 	export let bookId: string;
 	export let chapterId: number;
@@ -31,6 +32,7 @@
 		cancel: void;
 		clearProgress: void;
 		openReslice: void;
+		editChapter: void;
 		upload: FileList;
 		changeViewMode: 'reader' | 'grid' | 'compare';
 		changeWebtoonKind: 'output' | 'original';
@@ -55,7 +57,7 @@
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div class="flex items-center gap-3">
 			<a
-				href={`/app/books/${bookId}`}
+				href={`/app/books/${bookId}/`}
 				class="flex h-9 w-9 items-center justify-center rounded-xl border border-black/10 text-current opacity-70 transition hover:bg-black/5 hover:opacity-100 dark:border-white/10 dark:hover:bg-white/5"
 				use:ripple
 				aria-label="Back to Book"
@@ -64,7 +66,7 @@
 			</a>
 
 			<div>
-				<div class="flex items-center gap-2">
+				<div class="flex items-center gap-2 flex-wrap">
 					<h1 class="text-lg font-bold tracking-tight">
 						{#if chapterTitle}
 							{#if /^(chapter|ch\.?|ep\.?|第|\d+)/i.test(chapterTitle.trim())}
@@ -79,6 +81,15 @@
 							Chapter {chapterSeq + 1}
 						{/if}
 					</h1>
+					<button
+						type="button"
+						on:click={() => dispatch('editChapter')}
+						class="rounded-md p-1 opacity-50 transition hover:bg-black/5 hover:opacity-100 dark:hover:bg-white/5"
+						title="Edit chapter title & sequence"
+						use:ripple
+					>
+						<Pencil size={13} />
+					</button>
 					<span class="rounded-md bg-black/5 px-2 py-0.5 text-xs font-semibold opacity-60 dark:bg-white/5">
 						{totalPages} page{totalPages === 1 ? '' : 's'}
 					</span>

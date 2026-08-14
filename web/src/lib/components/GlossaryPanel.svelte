@@ -156,7 +156,7 @@
 	$: rootClass = surface ? 'flex min-h-0 flex-1 flex-col' : 'flex flex-col gap-4';
 	$: headerClass = cn(
 		'flex flex-col gap-3 border-b border-black/[0.06] pb-3 dark:border-white/[0.045]',
-		surface ? `shrink-0 pt-5 ${surface}` : `sticky top-0 z-20 pt-4 ${pageSurface}`,
+		surface ? `shrink-0 pt-5 ${surface}` : '',
 	);
 	// THE LIST SCROLL AREA — THE ONLY SCROLLER IN DIALOG MODE; A TRANSPARENT PASS-THROUGH STANDALONE.
 	$: scrollClass = surface ? 'min-h-0 flex-1 overflow-y-auto py-4' : '';

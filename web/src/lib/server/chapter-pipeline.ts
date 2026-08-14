@@ -153,6 +153,9 @@ export async function runChapterPipeline(
 		.where(and(eq(pages.chapterId, chapterId), eq(pages.status, 'processing')))
 		.run();
 
+	// UPDATE CHAPTER STATUS TO PROCESSING
+	db.update(chapters).set({ status: 'processing' }).where(eq(chapters.id, chapterId)).run();
+
 	const pageRows = db
 		.select()
 		.from(pages)
@@ -715,6 +718,24 @@ export async function runChapterPipeline(
 
 	// WAIT FOR ANY DYNAMICALLY INJECTED PAGES IN THE QUEUE TO ALSO COMPLETE
 	await pool.onIdle();
+
+	// UPDATE CHAPTER FINAL STATUS & TRANSLATED TIMESTAMP
+	const finalPages = db
+		.select({ status: pages.status, outputPath: pages.outputPath })
+		.from(pages)
+		.where(eq(pages.chapterId, chapterId))
+		.all();
+	const allDone = finalPages.length > 0 && finalPages.every((p) => p.status === 'done' || Boolean(p.outputPath));
+	const anyError = finalPages.some((p) => p.status === 'error');
+	const finalStatus = allDone ? 'done' : anyError ? 'error' : 'pending';
+
+	db.update(chapters)
+		.set({
+			status: finalStatus,
+			translatedAt: allDone ? Date.now() : chapter.translatedAt,
+		})
+		.where(eq(chapters.id, chapterId))
+		.run();
 }
 
 // -- HELPERS FOR THE API LAYER -- //

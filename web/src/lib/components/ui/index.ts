@@ -11,6 +11,7 @@ export { default as DropCap } from './DropCap.svelte';
 export { default as EmptyState } from './EmptyState.svelte';
 export { default as InkDivider } from './InkDivider.svelte';
 export { default as LanguagePicker } from './LanguagePicker.svelte';
+export { default as LazyImage } from './LazyImage.svelte';
 export { default as Modal } from './Modal.svelte';
 export { default as RangeField } from './RangeField.svelte';
 export { default as Seal } from './Seal.svelte';
@@ -21,4 +22,3 @@ export { default as Skeleton } from './Skeleton.svelte';
 export { default as TextArea } from './TextArea.svelte';
 export { default as TextField } from './TextField.svelte';
 export { default as Toggle } from './Toggle.svelte';
-
