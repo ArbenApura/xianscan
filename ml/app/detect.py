@@ -1,4 +1,4 @@
-# COMIC TEXT DETECTOR — ONNX RUNTIME PORT OF manga-image-translator's ctd.py (Apache-2.0).
+# COMIC TEXT DETECTOR — ONNX RUNTIME PORT OF manga-image-translator's ctd.py (GPL-3.0).
 #
 # THE `comictextdetector.pt.onnx` MODEL (FROM THE beta-0.3 RELEASE) OUTPUTS THREE TENSORS:
 #   [0] YOLO BLOB      — UNUSED (UPSTREAM ONLY USES IT FOR LANGUAGE CLASSIFICATION WE DON'T NEED)

@@ -213,10 +213,10 @@ cd ml
 
 ## 📜 Licenses & Acknowledgments
 
-All bundled components and architectures are Apache-2.0 and MIT compatible:
-- **ComicTextDetector**: Model weights and text detection architecture based on [manga-image-translator](https://github.com/zyddnys/manga-image-translator).
-- **RapidOCR**: Apache-2.0 PP-OCRv4 models and inference by [RapidOCR](https://github.com/RapidAI/RapidOCR).
-- **LaMa Inpainting**: Large Mask Inpainting model by [advimman/lama](https://github.com/advimman/lama) & [Sanster/models](https://github.com/Sanster/models).
-- **Comic Fonts**: Open Font License (OFL) CC Wild Words.
+All bundled code in this repository is licensed under the **[MIT License](LICENSE)** (Copyright © 2026 Arben Apura).
 
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+Upstream AI models, weights, and tools are acknowledged under their respective open-source licenses:
+- **ComicTextDetector**: Model weights and text detection architecture adapted from [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0). Model weights are downloaded dynamically at runtime.
+- **RapidOCR Engine**: PP-OCRv4 ONNX models and inference by [RapidOCR](https://github.com/RapidAI/RapidOCR) (Apache-2.0).
+- **LaMa Inpainting**: Large Mask Inpainting model by [advimman/lama](https://github.com/advimman/lama) & [Sanster/models](https://github.com/Sanster/models) (Apache-2.0).
+- **Comic Fonts**: CC Wild Words & Friendly Sans under the Open Font License (OFL-1.1).

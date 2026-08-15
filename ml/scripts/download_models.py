@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Download the ML models the sidecar needs into ./models (gitignored).
 
-Manifest (all Apache-2.0 or permissive):
-- comictextdetector.pt.onnx  — comic text detector ONNX export (manga-image-translator, Apache-2.0).
+Manifest:
+- comictextdetector.pt.onnx  — comic text detector ONNX export (manga-image-translator, GPL-3.0).
   SHA-256 is pinned in manga-image-translator/detection/ctd.py for the 'model-cpu' variant.
 - lama.onnx                  — LaMa inpainting ONNX weights (Carve/LaMa-ONNX, Apache-2.0).
   Standard resolution-robust LaMa UNet ONNX model for onnxruntime inference.
