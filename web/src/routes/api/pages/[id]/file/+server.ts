@@ -23,6 +23,13 @@ const MIME_BY_EXT: Record<string, string> = {
 	'.avif': 'image/avif',
 };
 
+// NO-CACHE HEADERS FOR INTERACTIVE COMIC EDITOR / STUDIO
+const NO_CACHE_HEADERS = {
+	'cache-control': 'no-cache, no-store, must-revalidate',
+	'pragma': 'no-cache',
+	'expires': '0',
+};
+
 export const GET: RequestHandler = async ({ params, url, request }) => {
 	const pageId = Number(params.id);
 	if (!Number.isInteger(pageId)) throw error(400, 'Invalid page id.');
@@ -39,6 +46,10 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
 		const rel = (target === 'output' && page.outputPath) ? page.outputPath : page.filePath;
 		if (!rel) throw error(404, 'No image available for this page.');
 
+		const sourcePath = join(DATA_ROOT, rel);
+		if (!existsSync(sourcePath)) throw error(404, 'Source image file not found on disk.');
+
+		const sourceStat = await stat(sourcePath);
 		const isOutput = rel === page.outputPath;
 		const thumbDir = join(DATA_ROOT, 'cache', 'thumbs');
 		const cacheKey = `${page.id}_${isOutput ? 'out' : 'orig'}_${targetWidth}.jpg`;
@@ -46,30 +57,33 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
 
 		if (existsSync(cachePath)) {
 			const fileStat = await stat(cachePath);
-			const etag = `W/"${fileStat.size.toString(16)}-${Math.floor(fileStat.mtimeMs).toString(16)}"`;
-			if (request.headers.get('if-none-match') === etag) {
-				return new Response(null, {
-					status: 304,
+			// ONLY SERVE CACHED THUMBNAIL IF IT WAS GENERATED AFTER THE SOURCE IMAGE WAS MODIFIED
+			if (fileStat.mtimeMs >= sourceStat.mtimeMs) {
+				const etag = `W/"${fileStat.size.toString(16)}-${Math.floor(fileStat.mtimeMs).toString(16)}"`;
+				if (request.headers.get('if-none-match') === etag) {
+					return new Response(null, {
+						status: 304,
+						headers: {
+							etag,
+							...NO_CACHE_HEADERS,
+						},
+					});
+				}
+
+				const cachedBytes = await readFile(cachePath);
+				return new Response(cachedBytes, {
 					headers: {
-						'etag': etag,
-						'cache-control': 'public, max-age=604800, stale-while-revalidate=86400',
+						'content-type': 'image/jpeg',
+						etag,
+						...NO_CACHE_HEADERS,
 					},
 				});
 			}
-
-			const cachedBytes = await readFile(cachePath);
-			return new Response(cachedBytes, {
-				headers: {
-					'content-type': 'image/jpeg',
-					'etag': etag,
-					'cache-control': 'public, max-age=604800, stale-while-revalidate=86400',
-				},
-			});
 		}
 
 		try {
 			mkdirSync(thumbDir, { recursive: true });
-			const img = await loadImage(join(DATA_ROOT, rel));
+			const img = await loadImage(sourcePath);
 			const scale = targetWidth / img.width;
 			const targetHeight = Math.round(img.height * scale);
 
@@ -83,17 +97,16 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
 			return new Response(new Uint8Array(jpegBuffer), {
 				headers: {
 					'content-type': 'image/jpeg',
-					'cache-control': 'public, max-age=604800, stale-while-revalidate=86400',
+					...NO_CACHE_HEADERS,
 				},
 			});
 		} catch {
 			// FALLBACK TO FULL IMAGE IF THUMBNAIL RESIZING ENCOUNTERS AN UNEXPECTED IO ISSUE
-			const fullPath = join(DATA_ROOT, rel);
-			const bytes = await readFile(fullPath);
+			const bytes = await readFile(sourcePath);
 			return new Response(bytes, {
 				headers: {
 					'content-type': MIME_BY_EXT[extname(rel).toLowerCase()] ?? 'image/jpeg',
-					'cache-control': 'public, max-age=86400, stale-while-revalidate=86400',
+					...NO_CACHE_HEADERS,
 				},
 			});
 		}
@@ -118,8 +131,8 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
 		return new Response(null, {
 			status: 304,
 			headers: {
-				'etag': etag,
-				'cache-control': 'public, max-age=86400, stale-while-revalidate=86400',
+				etag,
+				...NO_CACHE_HEADERS,
 			},
 		});
 	}
@@ -130,8 +143,8 @@ export const GET: RequestHandler = async ({ params, url, request }) => {
 	return new Response(bytes, {
 		headers: {
 			'content-type': mime,
-			'etag': etag,
-			'cache-control': 'public, max-age=86400, stale-while-revalidate=86400',
+			etag,
+			...NO_CACHE_HEADERS,
 		},
 	});
 };

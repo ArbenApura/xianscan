@@ -119,7 +119,6 @@
 	<div class={`w-full ${widthClasses[webtoonWidth]} flex flex-col items-center bg-black transition-all duration-300 shadow-2xl`}>
 		{#each pages as page, idx (page.id)}
 			{@const hasRatio = Boolean(page.width && page.height)}
-			{@const estimatedHeight = hasRatio ? Math.round((page.height / page.width) * 700) : 1000}
 			<div
 				draggable="true"
 				on:dragstart={(e) => dispatch('dragStart', { event: e, index: idx })}
@@ -130,15 +129,18 @@
 					dragOverPageIndex === idx ? 'ring-4 ring-[#b23a2e] z-10 scale-[1.01]' : ''
 				} ${draggedPageIndex === idx ? 'opacity-40' : ''}`}
 				data-page-seq={page.seq}
-				style={`content-visibility: auto; contain-intrinsic-size: auto ${estimatedHeight}px;`}
+				data-page-id={page.id}
+				style={hasRatio ? `aspect-ratio: ${page.width} / ${page.height};` : ''}
 			>
 				<div
-					class="w-full bg-black/40 overflow-hidden"
+					class="w-full h-full bg-black/40 overflow-hidden"
 					style={hasRatio ? `aspect-ratio: ${page.width} / ${page.height};` : ''}
 				>
 					<img
-						src={`/api/pages/${page.id}/file?kind=${webtoonKind === 'output' && page.outputPath ? 'output' : 'original'}&v=${page.outputPath || 'orig'}${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
+						src={`/api/pages/${page.id}/file?kind=${webtoonKind === 'output' && page.outputPath ? 'output' : 'original'}&v=${reloadKey}_${page.outputPath || 'orig'}${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
 						alt={`Page ${page.seq + 1}`}
+						width={page.width || undefined}
+						height={page.height || undefined}
 						draggable="false"
 						class="w-full block h-auto object-contain leading-none border-0 p-0 m-0 select-none pointer-events-none"
 						loading="lazy"

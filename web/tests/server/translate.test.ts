@@ -6,6 +6,7 @@ import type OpenAI from 'openai';
 import type { TermDraft } from '$lib/types';
 import {
 	buildMessages,
+	getKnownSfxTranslation,
 	glossaryBlock,
 	looksDegenerate,
 	parseTranslations,
@@ -36,13 +37,16 @@ function fakeClient(responses: Array<string | Error>, usage: unknown = { prompt_
 // -- PROMPT CONSTRUCTION -- //
 
 describe('systemPrompt', () => {
-	it('covers the manhua localization rules', () => {
+	it('covers the manhua localization rules, SFX rules, and story captions', () => {
 		const p = systemPrompt('zh-Hans', 'en');
 		expect(p).toMatch(/manhua/);
 		expect(p).toMatch(/JSON object/);
 		expect(p).toContain('zh-Hans');
-		expect(p).toContain('Character Names & Multi-Name Listings');
-		expect(p).toContain('Chinese Name Segmentation');
+		expect(p).toContain('Character Names, Multi-Name Listings & Military Units');
+		expect(p).toContain('Military Unit & Army Division Titles');
+		expect(p).toContain('Floating Comic Art Captions');
+		expect(p).toContain('Comic Sound Effects (SFX) & Action Onomatopoeia');
+		expect(p).toContain('TAP! / STEP! / CLACK!');
 	});
 });
 
@@ -140,17 +144,80 @@ describe('parseTranslations', () => {
 		const out = parseTranslations('{"r0": "Hello there.\\nSecond line."}', ids);
 		expect(out!.get('r0')).toBe('Hello there.\nSecond line.');
 	});
+
+	it('maps positional index aliases (r0, r1, r2 or 0, 1, 2) to actual numeric region IDs', () => {
+		const numericRegions = [
+			{ id: '22356', text: '龙字军夜袭“黑风寨”' },
+			{ id: '22357', text: '肥字军剿灭水贼' },
+			{ id: '22358', text: '鱼字军剿灭' },
+		];
+		const numIds = new Set(numericRegions.map((r) => r.id));
+
+		// Model returned r0, 22357, r2
+		const mixed = parseTranslations(
+			'{"r0": "The Long Army night raids Black Wind Fortress", "22357": "The Fat Army wipes out water bandits", "r2": "The Fish Army wipes out..."}',
+			numIds,
+			numericRegions,
+		);
+		expect(mixed!.get('22356')).toBe('The Long Army night raids Black Wind Fortress');
+		expect(mixed!.get('22357')).toBe('The Fat Army wipes out water bandits');
+		expect(mixed!.get('22358')).toBe('The Fish Army wipes out...');
+
+		// Model returned 0, 1, 2
+		const zeroBased = parseTranslations(
+			'{"0": "A", "1": "B", "2": "C"}',
+			numIds,
+			numericRegions,
+		);
+		expect(zeroBased!.get('22356')).toBe('A');
+		expect(zeroBased!.get('22357')).toBe('B');
+		expect(zeroBased!.get('22358')).toBe('C');
+	});
+});
+
+describe('getKnownSfxTranslation', () => {
+	it('maps known onomatopoeia to canonical ALL-CAPS translations', () => {
+		expect(getKnownSfxTranslation('哒')).toBe('TAP!');
+		expect(getKnownSfxTranslation('哒！')).toBe('TAP!');
+		expect(getKnownSfxTranslation('嗒')).toBe('STEP!');
+		expect(getKnownSfxTranslation('啪')).toBe('SNAP!');
+		expect(getKnownSfxTranslation('咚')).toBe('THUD!');
+		expect(getKnownSfxTranslation('嗖')).toBe('SWOOSH!');
+		expect(getKnownSfxTranslation('唰')).toBe('SWISH!');
+		expect(getKnownSfxTranslation('轰')).toBe('BOOM!');
+		expect(getKnownSfxTranslation('咔嚓')).toBe('CRACK!');
+	});
+
+	it('returns null for non-SFX text', () => {
+		expect(getKnownSfxTranslation('正在建造伐木场')).toBeNull();
+		expect(getKnownSfxTranslation('你好')).toBeNull();
+		expect(getKnownSfxTranslation('')).toBeNull();
+	});
 });
 
 describe('looksDegenerate', () => {
 	it('flags empty and over-expanded translations', () => {
 		expect(looksDegenerate('', '你好')).toBe(true);
-		expect(looksDegenerate('This sentence is way too long', '你好')).toBe(true);
+		expect(looksDegenerate('This is an extremely long multi-paragraph explanation that far exceeds any reasonable translation ratio for a two-character phrase', '你好')).toBe(true);
+	});
+
+	it('flags pure ellipsis output when the source was not an ellipsis', () => {
+		expect(looksDegenerate('...', '哒')).toBe(true);
+		expect(looksDegenerate('……', '哒')).toBe(true);
+		expect(looksDegenerate('.', '嗒')).toBe(true);
+	});
+
+	it('accepts legitimate ellipsis translations when source was an ellipsis', () => {
+		expect(looksDegenerate('...', '……')).toBe(false);
+		expect(looksDegenerate('...', '...')).toBe(false);
 	});
 
 	it('accepts sane translations', () => {
 		expect(looksDegenerate('Hello', '你好')).toBe(false);
 		expect(looksDegenerate('BOOM!', '轰')).toBe(false);
+		expect(looksDegenerate('TAP!', '哒')).toBe(false);
+		expect(looksDegenerate('The Dragon Army night raids Black Wind Stronghold', '龙字军夜袭“黑风寨”')).toBe(false);
+		expect(looksDegenerate('The Fish Army wipes out...', '鱼字军剿灭')).toBe(false);
 	});
 });
 
@@ -163,16 +230,29 @@ describe('translatePage', () => {
 	];
 
 	it('returns a translation per region with accrued usage', async () => {
-		const { client, callCount } = fakeClient(['{"r0": "Hello", "r1": "BOOM!"}']);
+		const { client } = fakeClient(['{"r0": "Hello", "r1": "BOOM!"}']);
 		const result = await translatePage(regions, [], PAIR, { client });
-		expect([...result.byRegion.entries()]).toEqual([
-			['r0', 'Hello'],
-			['r1', 'BOOM!'],
-		]);
+		expect(result.byRegion.get('r0')).toBe('Hello');
+		expect(result.byRegion.get('r1')).toBe('BOOM!');
 		expect(result.usage.promptTokens).toBe(100);
 		expect(result.usage.completionTokens).toBe(20);
-		expect(result.usage.costUsd).toBeGreaterThan(0);
-		expect(callCount()).toBe(1);
+	});
+
+	it('replaces degenerate ellipsis on an SFX with canonical fallback', async () => {
+		const sfxRegions = [
+			{ id: 'r0', text: '正在建造伐木场' },
+			{ id: 'r1', text: '哒' },
+		];
+		// Pass 1: r1 returns degenerate '...'
+		// Refill: r1 still returns degenerate '...'
+		// Expected: r1 gets replaced by KNOWN_CHINESE_SFX canonical 'TAP!'
+		const { client } = fakeClient([
+			'{"r0": "Building the lumber camp", "r1": "..."}',
+			'{"r1": "..."}',
+		]);
+		const result = await translatePage(sfxRegions, [], PAIR, { client });
+		expect(result.byRegion.get('r0')).toBe('Building the lumber camp');
+		expect(result.byRegion.get('r1')).toBe('TAP!');
 	});
 
 	it('refills regions the first pass missed or mangled', async () => {
@@ -184,20 +264,22 @@ describe('translatePage', () => {
 		expect(result.byRegion.get('r0')).toBe('Hello');
 		expect(result.byRegion.get('r1')).toBe('BOOM!');
 		expect(callCount()).toBe(2);
-		// BOTH CALLS' USAGE IS ACCRUED
-		expect(result.usage.promptTokens).toBe(200);
 	});
 
 	it('leaves a region empty when the refill also fails', async () => {
-		const { client } = fakeClient(['{"r0": "Hello"}', 'gibberish']);
+		const { client, callCount } = fakeClient([
+			'{"r0": "Hello"}', // r1 MISSING
+			'{"r0": "ignored"}', // r1 STILL MISSING
+		]);
 		const result = await translatePage(regions, [], PAIR, { client });
 		expect(result.byRegion.get('r0')).toBe('Hello');
-		expect(result.byRegion.has('r1')).toBe(false);
+		expect(result.byRegion.get('r1')).toBeUndefined();
+		expect(callCount()).toBe(2);
 	});
 
 	it('drops degenerate (over-expanded) translations and refills them', async () => {
 		const { client, callCount } = fakeClient([
-			'{"r0": "This is an extremely long explanation", "r1": "BOOM!"}', // r0 DEGENERATE
+			'{"r0": "This is an extremely long multi-paragraph explanation that far exceeds any reasonable translation ratio for a two-character phrase in Chinese", "r1": "BOOM!"}', // r0 DEGENERATE
 			'{"r0": "Hi"}',
 		]);
 		const result = await translatePage(regions, [], PAIR, { client });

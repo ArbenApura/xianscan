@@ -51,21 +51,25 @@ export async function createChapter(bookId: string, title: string): Promise<{ id
 // OLD NAMES, SO A SEQ-BASED NAME CAN REUSE A FILE STILL REFERENCED BY ANOTHER PAGE — THE OLD SCHEME
 // OVERWROTE THE LAST REMAINING PAGE'S IMAGE ON THE NEXT UPLOAD, MAKING THE LAST TWO PAGES SHOW THE
 // SAME PICTURE (EVERY RE-UPLOAD RE-DUPLICATED IT).
-// CONVERT ARBITRARY IMAGE BUFFER (PNG/JPEG/AVIF) TO OPTIMIZED WEBP.
-async function convertBufferToWebP(buffer: Buffer, originalExt: string): Promise<{ data: Buffer; ext: string }> {
-	if (originalExt === '.webp') return { data: buffer, ext: '.webp' };
+// CONVERT ARBITRARY IMAGE BUFFER (PNG/JPEG/AVIF) TO OPTIMIZED WEBP & EXTRACT INTRINSIC DIMENSIONS.
+async function convertBufferToWebP(
+	buffer: Buffer,
+	originalExt: string,
+): Promise<{ data: Buffer; ext: string; width: number | null; height: number | null }> {
 	try {
-		const { loadImage } = await import('@napi-rs/canvas');
+		const { loadImage, createCanvas } = await import('@napi-rs/canvas');
 		const img = await loadImage(buffer);
-		const { createCanvas } = await import('@napi-rs/canvas');
+		const width = img.width || null;
+		const height = img.height || null;
+		if (originalExt === '.webp') return { data: buffer, ext: '.webp', width, height };
 		const canvas = createCanvas(img.width, img.height);
 		const ctx = canvas.getContext('2d');
 		ctx.drawImage(img, 0, 0);
 		const webpBuf = await canvas.encode('webp', 85);
-		return { data: webpBuf, ext: '.webp' };
+		return { data: webpBuf, ext: '.webp', width, height };
 	} catch {
 		// FALLBACK TO ORIGINAL BUFFER IF ENCODER FAILS
-		return { data: buffer, ext: originalExt };
+		return { data: buffer, ext: originalExt, width: null, height: null };
 	}
 }
 
@@ -78,11 +82,17 @@ export async function uploadPages(chapterId: number, files: File[]): Promise<num
 		const ext = extname(file.name).toLowerCase();
 		if (!ALLOWED_EXT.has(ext)) throw error(400, `Unsupported image type "${ext}" — use PNG/JPEG/WebP/AVIF.`);
 		const rawBuf = Buffer.from(await file.arrayBuffer());
-		const { data: webpBuf, ext: finalExt } = await convertBufferToWebP(rawBuf, ext);
+		const { data: webpBuf, ext: finalExt, width, height } = await convertBufferToWebP(rawBuf, ext);
 		const fileName = `${randomUUID()}${finalExt}`;
 		writeFileSync(join(uploadDir, fileName), webpBuf);
 		db.insert(pages)
-			.values({ chapterId, seq, filePath: `uploads/${chapterId}/${fileName}` })
+			.values({
+				chapterId,
+				seq,
+				filePath: `uploads/${chapterId}/${fileName}`,
+				width: width ?? null,
+				height: height ?? null,
+			})
 			.run();
 		seq++;
 		count++;
@@ -147,6 +157,17 @@ export async function stitchPageWithNext(
 	const stitched = await pipeline.stitch(topBytes, botBytes);
 	writeFileSync(topAbs, stitched);
 
+	let w: number | null = null;
+	let h: number | null = null;
+	try {
+		const { loadImage } = await import('@napi-rs/canvas');
+		const img = await loadImage(stitched);
+		w = img.width || null;
+		h = img.height || null;
+	} catch {
+		// ignore
+	}
+
 	// RESET TOP PAGE PIPELINE STATE & CLEAR OBSOLETE OUTPUTS
 	db.update(pages)
 		.set({
@@ -154,8 +175,8 @@ export async function stitchPageWithNext(
 			cleanedPath: null,
 			outputPath: null,
 			error: null,
-			width: null,
-			height: null,
+			width: w,
+			height: h,
 		})
 		.where(eq(pages.id, topPage.id))
 		.run();
@@ -248,16 +269,28 @@ export async function resliceChapterPages(
 	// OLD FILES TO REMOVE AFTER SUCCESS
 	const oldFilePaths = pageRows.map((p) => join(dataRoot, p.filePath));
 
-	const newPageRows: { chapterId: number; seq: number; filePath: string }[] = [];
+	const newPageRows: { chapterId: number; seq: number; filePath: string; width: number | null; height: number | null }[] = [];
 	for (let seq = 0; seq < slicedBuffers.length; seq++) {
 		signal?.throwIfAborted();
 		const fileName = `${randomUUID()}.png`;
 		const absPath = join(uploadDir, fileName);
 		writeFileSync(absPath, slicedBuffers[seq]);
+		let w: number | null = null;
+		let h: number | null = null;
+		try {
+			const { loadImage } = await import('@napi-rs/canvas');
+			const img = await loadImage(slicedBuffers[seq]);
+			w = img.width || null;
+			h = img.height || null;
+		} catch {
+			// ignore
+		}
 		newPageRows.push({
 			chapterId,
 			seq,
 			filePath: `uploads/${chapterId}/${fileName}`,
+			width: w,
+			height: h,
 		});
 	}
 
@@ -410,6 +443,28 @@ export async function getChapterReaderData(chapterId: number): Promise<ChapterRe
 		.where(eq(pages.chapterId, chapterId))
 		.orderBy(pages.seq)
 		.all();
+
+	// SELF-HEALING: EXTRACT AND CACHE DIMENSIONS FOR ANY PAGES MISSING THEM SO SSR HAS EXACT RATIOS
+	for (const p of pageRows) {
+		if ((p.width === null || p.height === null) && p.filePath) {
+			const absPath = join(DATA_ROOT, p.filePath);
+			try {
+				const buf = readFileSync(absPath);
+				const { loadImage } = await import('@napi-rs/canvas');
+				const img = await loadImage(buf);
+				if (img.width && img.height) {
+					p.width = img.width;
+					p.height = img.height;
+					db.update(pages)
+						.set({ width: img.width, height: img.height })
+						.where(eq(pages.id, p.id))
+						.run();
+				}
+			} catch {
+				// ignore if file is missing or unreadable
+			}
+		}
+	}
 
 	// ALL REGIONS FOR THESE PAGES IN ONE QUERY, GROUPED BY PAGE
 	const pageIds = pageRows.map((p) => p.id);

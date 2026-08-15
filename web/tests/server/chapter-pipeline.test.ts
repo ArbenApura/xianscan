@@ -149,19 +149,18 @@ describe('runChapterPipeline', () => {
 		expect(pipeline.cleanCalls).toBe(1);
 	});
 
-	it('serves the second run from the translation cache (no second LLM call)', async () => {
+	it('re-translates freshly when page is reset to pending (direct translation without caching)', async () => {
 		const { chapter, page } = seedChapterWithPage('c1-p0.png');
 		const llm = fakeLlm();
 		await run(chapter.id, llm);
-		// SEND THE PAGE BACK TO 'pending' (e.g. CLEAR PROGRESS) SO THE SECOND RUN RE-ENTERS THE
-		// PIPELINE INSTEAD OF SKIPPING THE 'done' PAGE — THE translations CACHE IS THE HIT PATH.
+		// SEND THE PAGE BACK TO 'pending' SO THE SECOND RUN RE-ENTERS THE PIPELINE FRESHLY
 		db.update(pages).set({ status: 'pending' }).where(eq(pages.id, page.id)).run();
 		await run(chapter.id, llm);
 
 		const regions2 = db.select().from(regions).all();
 		expect(regions2).toHaveLength(1); // REGIONS WERE REPLACED, NOT DUPLICATED
 		expect(regions2[0].textTarget).toBe('Hello');
-		expect(pipeline.analyzeCalls).toBe(2); // BOTH RUNS ANALYZED (NO SKIP) — CACHE SAVED THE LLM CALL
+		expect(pipeline.analyzeCalls).toBe(2);
 	});
 
 	it('skips already-translated pages on re-run (resume without redundant work)', async () => {
@@ -368,17 +367,17 @@ describe('runChapterPipeline', () => {
 		expect(rows[1].textTarget).toBeNull(); // WATERMARK HAS NO TRANSLATED TARGET
 	});
 
-	it('does not re-record spend on translation cache hits', async () => {
+	it('records translation usage on each re-run of a pending page', async () => {
 		const { chapter, page } = seedChapterWithPage('c1-p0.png');
 		const llm = fakeLlm();
 		const usages: unknown[] = [];
 		const deps = { pipeline, dataRoot, llm, onUsage: (u: unknown) => usages.push(u) };
 		await chapterWork(chapter.id, deps)(new AbortController().signal, () => {});
-		// SEND THE PAGE BACK TO 'pending' SO THE SECOND RUN TAKES THE CACHE-HIT PATH (NOT THE SKIP)
+		// SEND THE PAGE BACK TO 'pending' SO THE SECOND RUN TRANSLATES FRESHLY
 		db.update(pages).set({ status: 'pending' }).where(eq(pages.id, page.id)).run();
 		await chapterWork(chapter.id, deps)(new AbortController().signal, () => {});
-		// RUN 1: CHAPTER EXTRACTION (1) + TRANSLATION (1). RUN 2: EXTRACTION (1) + CACHE HIT (0).
-		expect(usages.length).toBe(3);
+		// RUN 1: CHAPTER EXTRACTION (1) + TRANSLATION (1). RUN 2: EXTRACTION (1) + TRANSLATION (1) -> 4 USAGES.
+		expect(usages.length).toBe(4);
 	});
 
 	it('skips pages entirely on re-run when everything is done (no extraction call either)', async () => {

@@ -120,7 +120,8 @@
 					? 'border-[#b23a2e] ring-2 ring-[#b23a2e]/40 bg-[#b23a2e]/5 scale-[1.01] z-10'
 					: 'border-black/[0.08] bg-white/40 hover:border-[#b23a2e]/40 hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02]'
 			} ${draggedPageIndex === idx ? 'opacity-40 scale-95' : ''}`}
-			style="content-visibility: auto; contain-intrinsic-size: auto 600px;"
+			data-page-seq={page.seq}
+			data-page-id={page.id}
 		>
 			<div class="mb-3 flex items-center justify-between text-xs font-bold">
 				<div class="flex items-center gap-2">
@@ -164,7 +165,7 @@
 						<!-- svelte-ignore a11y-click-events-have-key-events -->
 						<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
 						<img
-							src={`/api/pages/${page.id}/file?kind=original&v=orig${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
+							src={`/api/pages/${page.id}/file?kind=original&v=${reloadKey}_orig${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
 							alt={`Page ${page.seq + 1} Original`}
 							loading="lazy"
 							decoding="async"
@@ -190,7 +191,7 @@
 							<!-- svelte-ignore a11y-click-events-have-key-events -->
 							<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
 							<img
-								src={`/api/pages/${page.id}/file?kind=output&v=${page.outputPath}${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
+								src={`/api/pages/${page.id}/file?kind=output&v=${reloadKey}_${page.outputPath || 'out'}${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
 								alt={`Page ${page.seq + 1} Output`}
 								loading="lazy"
 								decoding="async"

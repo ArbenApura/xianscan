@@ -54,45 +54,16 @@ function parseContent(contentTarget: string): Map<string, string> {
 	}
 }
 
-export function getCachedPageTranslation(pageId: number, cacheKey: string): CachedPageTranslation | null {
-	// EXPLICIT and(eq, eq) — THE `a && b` CALLBACK FORM DOES NOT COMBINE CONDITIONS IN DRIZZLE
-	const row = db
-		.select()
-		.from(translations)
-		.where(and(eq(translations.pageId, pageId), eq(translations.cacheKey, cacheKey)))
-		.get();
-	if (!row) return null;
-	const usage =
-		row.costUsd !== null && row.promptTokens !== null
-			? {
-					model: row.model,
-					promptTokens: row.promptTokens,
-					cachedTokens: row.cachedTokens ?? 0,
-					completionTokens: row.completionTokens ?? 0,
-					costUsd: row.costUsd,
-				}
-			: null;
-	return { byRegion: parseContent(row.contentTarget), usage };
+export function getCachedPageTranslation(_pageId: number, _cacheKey: string): CachedPageTranslation | null {
+	return null;
 }
 
 export function savePageTranslation(
-	pageId: number,
-	cacheKey: string,
-	byRegion: Map<string, string>,
-	model: string,
-	usage: TranslationUsage,
+	_pageId: number,
+	_cacheKey: string,
+	_byRegion: Map<string, string>,
+	_model: string,
+	_usage: TranslationUsage,
 ): void {
-	db.insert(translations)
-		.values({
-			pageId,
-			cacheKey,
-			contentTarget: JSON.stringify(Object.fromEntries(byRegion)),
-			model,
-			promptTokens: usage.promptTokens,
-			cachedTokens: usage.cachedTokens,
-			completionTokens: usage.completionTokens,
-			costUsd: usage.costUsd,
-		})
-		.onConflictDoNothing({ target: [translations.pageId, translations.cacheKey] })
-		.run();
+	// TRANSLATION CACHING REMOVED AS REQUESTED — ALWAYS CALL TRANSLATION DIRECTLY
 }

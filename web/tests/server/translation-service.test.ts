@@ -96,8 +96,8 @@ describe('pageCacheKey', () => {
 	});
 });
 
-describe('translation cache DB round-trip', () => {
-	it('saves and reloads a page translation', () => {
+describe('translation cache disabled', () => {
+	it('getCachedPageTranslation returns null and savePageTranslation is a no-op', () => {
 		seedBook(db, { id: 'b1' });
 		const chapter = seedChapter(db, { bookId: 'b1', seq: 0 });
 		const page = seedPage(db, { chapterId: chapter.id, seq: 0 });
@@ -113,39 +113,7 @@ describe('translation cache DB round-trip', () => {
 			{ model: 'deepseek-v4-flash', promptTokens: 10, cachedTokens: 0, completionTokens: 2, costUsd: 0.001 },
 		);
 
-		const cached = getCachedPageTranslation(page.id, key);
-		expect(cached?.byRegion.get('r0')).toBe('Hello');
-		expect(cached?.usage?.costUsd).toBe(0.001);
-	});
-
-	it('a different cache key misses', () => {
-		seedBook(db, { id: 'b1' });
-		const chapter = seedChapter(db, { bookId: 'b1', seq: 0 });
-		const page = seedPage(db, { chapterId: chapter.id, seq: 0 });
-		const key1 = pageCacheKey([{ id: 'r0', text: '你好' }], [], 'deepseek-v4-flash', PAIR);
-		const key2 = pageCacheKey([{ id: 'r0', text: '你好' }], [], 'deepseek-v4-pro', PAIR);
-		savePageTranslation(page.id, key1, new Map([['r0', 'Hello']]), 'deepseek-v4-flash', {
-			model: 'deepseek-v4-flash',
-			promptTokens: 1,
-			cachedTokens: 0,
-			completionTokens: 1,
-			costUsd: 0,
-		});
-		expect(getCachedPageTranslation(page.id, key2)).toBeNull();
-	});
-
-	it('identical pages each get their own cache row (per-page uniqueness)', () => {
-		seedBook(db, { id: 'b1' });
-		const chapter = seedChapter(db, { bookId: 'b1', seq: 0 });
-		const p0 = seedPage(db, { chapterId: chapter.id, seq: 0 });
-		const p1 = seedPage(db, { chapterId: chapter.id, seq: 1 });
-		const key = pageCacheKey([{ id: 'r0', text: '你好' }], [], 'deepseek-v4-flash', PAIR);
-		const usage = { model: 'deepseek-v4-flash', promptTokens: 1, cachedTokens: 0, completionTokens: 1, costUsd: 0 };
-		// TWO IDENTICAL PAGES SHARE THE SAME CONTENT KEY — EACH MUST STILL SAVE ITS OWN ROW
-		savePageTranslation(p0.id, key, new Map([['r0', 'Hello']]), 'deepseek-v4-flash', usage);
-		savePageTranslation(p1.id, key, new Map([['r0', 'Hello']]), 'deepseek-v4-flash', usage);
-		expect(getCachedPageTranslation(p0.id, key)?.byRegion.get('r0')).toBe('Hello');
-		expect(getCachedPageTranslation(p1.id, key)?.byRegion.get('r0')).toBe('Hello');
+		expect(getCachedPageTranslation(page.id, key)).toBeNull();
 	});
 });
 

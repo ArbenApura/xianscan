@@ -27,7 +27,6 @@ import type { TranslationUsage, PipelineStep, LangPair } from '$lib/types';
 // IMPORTED MODULES
 import { addNewTerms, bookPair, getEffectiveGlossary } from './glossary';
 import { matchTerms } from './glossary-match';
-import { getCachedPageTranslation, pageCacheKey, savePageTranslation } from './cache';
 import type { JobEvent } from './translation-service';
 import type { AnalyzeResult, PipelineClient, PipelineRegion } from './pipeline-client';
 import { db } from './db';
@@ -257,23 +256,15 @@ export async function runChapterPipeline(
 						const matchedSources = new Set(matched.map((m) => m.source));
 						const currentEffective = await getEffectiveGlossary(chapter.bookId);
 						const pageTerms = currentEffective.filter((t) => t.pinned || matchedSources.has(t.source));
-						const cacheKey = pageCacheKey(sources, pageTerms, model ?? 'default', pair, deps.cacheSalt);
-						const cached = getCachedPageTranslation(injectRow.id, cacheKey);
-						emit({ type: 'page-step-end', chapterId, page: injectIdx, pageId: injectRow.id, step: 'match_glossary', stepStatus: 'completed', stepDetails: { cacheHit: Boolean(cached) } });
+						emit({ type: 'page-step-end', chapterId, page: injectIdx, pageId: injectRow.id, step: 'match_glossary', stepStatus: 'completed' });
 						if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
 						emit({ type: 'page-step-start', chapterId, page: injectIdx, pageId: injectRow.id, step: 'translate' });
 						const tT0 = performance.now();
-						if (cached) {
-							for (const [id, text] of cached.byRegion) byRegion.set(id, text);
-							emit({ type: 'page-step-end', chapterId, page: injectIdx, pageId: injectRow.id, step: 'translate', stepStatus: 'completed', durationMs: performance.now() - tT0, stepDetails: { cacheHit: true } });
-						} else {
-							const translated = await translatePage(sources, pageTerms, pair, { client: deps.llm, model, signal });
-							if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
-							for (const [id, text] of translated.byRegion) byRegion.set(id, text);
-							savePageTranslation(injectRow.id, cacheKey, byRegion, translated.usage.model, translated.usage);
-							emit({ type: 'page-step-end', chapterId, page: injectIdx, pageId: injectRow.id, step: 'translate', stepStatus: 'completed', durationMs: performance.now() - tT0, stepDetails: { cacheHit: false, model: translated.usage.model, tokens: (translated.usage.promptTokens ?? 0) + (translated.usage.completionTokens ?? 0), costUsd: translated.usage.costUsd } });
-							if (translated.usage && deps.onUsage) deps.onUsage(translated.usage);
-						}
+						const translated = await translatePage(sources, pageTerms, pair, { client: deps.llm, model, signal });
+						if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
+						for (const [id, text] of translated.byRegion) byRegion.set(id, text);
+						emit({ type: 'page-step-end', chapterId, page: injectIdx, pageId: injectRow.id, step: 'translate', stepStatus: 'completed', durationMs: performance.now() - tT0, stepDetails: { cacheHit: false, model: translated.usage.model, tokens: (translated.usage.promptTokens ?? 0) + (translated.usage.completionTokens ?? 0), costUsd: translated.usage.costUsd } });
+						if (translated.usage && deps.onUsage) deps.onUsage(translated.usage);
 					}
 
 					if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
@@ -509,9 +500,6 @@ export async function runChapterPipeline(
 					const currentEffective = await getEffectiveGlossary(chapter.bookId);
 					const pageTerms = currentEffective.filter((t) => t.pinned || matchedSources.has(t.source));
 
-					const cacheKey = pageCacheKey(sources, pageTerms, model ?? 'default', pair, deps.cacheSalt);
-					const cached = getCachedPageTranslation(page.id, cacheKey);
-
 					emit({
 						type: 'page-step-end',
 						chapterId,
@@ -519,7 +507,6 @@ export async function runChapterPipeline(
 						pageId: page.id,
 						step: 'match_glossary',
 						stepStatus: 'completed',
-						stepDetails: { cacheHit: Boolean(cached) },
 					});
 
 					if (deps.isPageCancelled?.(page.id)) return;
@@ -528,46 +515,30 @@ export async function runChapterPipeline(
 					emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'translate' });
 					const tTrans0 = performance.now();
 
-					if (cached) {
-						for (const [id, text] of cached.byRegion) byRegion.set(id, text);
-						const tTrans = performance.now() - tTrans0;
-						emit({
-							type: 'page-step-end',
-							chapterId,
-							page: i,
-							pageId: page.id,
-							step: 'translate',
-							stepStatus: 'completed',
-							durationMs: tTrans,
-							stepDetails: { cacheHit: true },
-						});
-					} else {
-						const translated = await translatePage(sources, pageTerms, pair, {
-							client: deps.llm,
-							model,
-							signal,
-						});
-						if (deps.isPageCancelled?.(page.id)) return;
-						for (const [id, text] of translated.byRegion) byRegion.set(id, text);
-						savePageTranslation(page.id, cacheKey, byRegion, translated.usage.model, translated.usage);
-						const tTrans = performance.now() - tTrans0;
-						emit({
-							type: 'page-step-end',
-							chapterId,
-							page: i,
-							pageId: page.id,
-							step: 'translate',
-							stepStatus: 'completed',
-							durationMs: tTrans,
-							stepDetails: {
-								cacheHit: false,
-								model: translated.usage.model,
-								tokens: (translated.usage.promptTokens ?? 0) + (translated.usage.completionTokens ?? 0),
-								costUsd: translated.usage.costUsd,
-							},
-						});
-						if (translated.usage && deps.onUsage) deps.onUsage(translated.usage);
-					}
+					const translated = await translatePage(sources, pageTerms, pair, {
+						client: deps.llm,
+						model,
+						signal,
+					});
+					if (deps.isPageCancelled?.(page.id)) return;
+					for (const [id, text] of translated.byRegion) byRegion.set(id, text);
+					const tTrans = performance.now() - tTrans0;
+					emit({
+						type: 'page-step-end',
+						chapterId,
+						page: i,
+						pageId: page.id,
+						step: 'translate',
+						stepStatus: 'completed',
+						durationMs: tTrans,
+						stepDetails: {
+							cacheHit: false,
+							model: translated.usage.model,
+							tokens: (translated.usage.promptTokens ?? 0) + (translated.usage.completionTokens ?? 0),
+							costUsd: translated.usage.costUsd,
+						},
+					});
+					if (translated.usage && deps.onUsage) deps.onUsage(translated.usage);
 				}
 
 				if (deps.isPageCancelled?.(page.id)) return;

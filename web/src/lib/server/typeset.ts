@@ -50,8 +50,8 @@ const MIN_FONT_SIZE = 6;
 const LINE_HEIGHT = 1.2;
 // TEXT OUTLINE (THE BLACK/WHITE STROKE DRAWN UNDER THE FILL) — SIZED RELATIVE TO THE FONT WITH A
 // FLOOR FOR SMALL TEXT. HEAVY ENOUGH TO KEEP TRANSLATED TEXT READABLE ON BUSY ARTWORK.
-const OUTLINE_FACTOR = 0.115;
-const OUTLINE_MIN = 2;
+const OUTLINE_FACTOR = 0.18;
+const OUTLINE_MIN = 2.5;
 
 // A FRAGMENT OF NOTHING BUT TRAILING PUNCTUATION (e.g. THE "." THAT CHARACTER-BREAKING WOULD
 // OTHERWISE STRAND ON ITS OWN LINE).
@@ -552,12 +552,23 @@ export function typesetStatPanel(
 		ctx.textBaseline = 'alphabetic';
 
 		const tx = hasRotation ? 0 : x + w / 2;
+		const isDarkStroke = stroke === 'black' || stroke === '#000000' || stroke === '#111111';
 		for (const line of lines) {
 			const drawY = ty + size * 0.85;
 			ctx.lineWidth = Math.max(OUTLINE_MIN, size * OUTLINE_FACTOR);
 			ctx.lineJoin = 'round';
 			ctx.strokeStyle = stroke;
+			ctx.shadowColor = isDarkStroke ? 'rgba(0, 0, 0, 0.85)' : 'rgba(255, 255, 255, 0.85)';
+			ctx.shadowBlur = Math.max(2.5, size * 0.18);
+			ctx.shadowOffsetX = isDarkStroke ? 1.0 : 0;
+			ctx.shadowOffsetY = isDarkStroke ? 1.5 : 0;
 			ctx.strokeText(line, tx, drawY);
+
+			// Reset shadow for crisp fill rendering
+			ctx.shadowColor = 'transparent';
+			ctx.shadowBlur = 0;
+			ctx.shadowOffsetX = 0;
+			ctx.shadowOffsetY = 0;
 			ctx.fillStyle = color;
 			ctx.fillText(line, tx, drawY);
 			ty += lineH;
@@ -694,10 +705,14 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'alphabetic';
 		
-		// On light dialogue bubbles (black text), avoid thick white stroke that erodes thin glyph stems.
+		// High-contrast stroke + shadow for maximum legibility on comics and floating captions
 		const isBlackOnLight = color.fill === 'black' || color.fill === '#111111';
-		const needsStroke = !isBlackOnLight || size > 14;
-		ctx.lineWidth = isBlackOnLight ? 1 : (size < 9 ? 1 : Math.max(OUTLINE_MIN, size * OUTLINE_FACTOR));
+		const isDarkStroke = color.stroke === 'black' || color.stroke === '#000000' || color.stroke === '#111111';
+		const strokeWidth = isBlackOnLight
+			? Math.max(1.8, size * 0.10)
+			: Math.max(3.0, size * OUTLINE_FACTOR);
+
+		ctx.lineWidth = strokeWidth;
 		ctx.lineJoin = 'round';
 		ctx.strokeStyle = color.stroke;
 		ctx.fillStyle = color.fill;
@@ -709,7 +724,16 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 			ctx.rotate((angleDeg * Math.PI) / 180);
 			let ty = -totalH / 2 + size * 0.85;
 			for (const line of lines) {
-				if (needsStroke) ctx.strokeText(line, 0, ty);
+				ctx.shadowColor = isDarkStroke ? 'rgba(0, 0, 0, 0.85)' : 'rgba(255, 255, 255, 0.85)';
+				ctx.shadowBlur = Math.max(2.5, size * 0.18);
+				ctx.shadowOffsetX = isDarkStroke ? 1.0 : 0;
+				ctx.shadowOffsetY = isDarkStroke ? 1.5 : 0;
+				ctx.strokeText(line, 0, ty);
+
+				ctx.shadowColor = 'transparent';
+				ctx.shadowBlur = 0;
+				ctx.shadowOffsetX = 0;
+				ctx.shadowOffsetY = 0;
 				ctx.fillText(line, 0, ty);
 				ty += lineH;
 			}
@@ -717,7 +741,16 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 			const tx = x + w / 2;
 			let ty = y + (h - totalH) / 2 + size * 0.85;
 			for (const line of lines) {
-				if (needsStroke) ctx.strokeText(line, tx, ty);
+				ctx.shadowColor = isDarkStroke ? 'rgba(0, 0, 0, 0.85)' : 'rgba(255, 255, 255, 0.85)';
+				ctx.shadowBlur = Math.max(2.5, size * 0.18);
+				ctx.shadowOffsetX = isDarkStroke ? 1.0 : 0;
+				ctx.shadowOffsetY = isDarkStroke ? 1.5 : 0;
+				ctx.strokeText(line, tx, ty);
+
+				ctx.shadowColor = 'transparent';
+				ctx.shadowBlur = 0;
+				ctx.shadowOffsetX = 0;
+				ctx.shadowOffsetY = 0;
 				ctx.fillText(line, tx, ty);
 				ty += lineH;
 			}

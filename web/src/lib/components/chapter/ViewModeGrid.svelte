@@ -123,6 +123,8 @@
 					? 'border-[#b23a2e] ring-2 ring-[#b23a2e]/40 bg-[#b23a2e]/5 scale-[1.02] z-10'
 					: 'border-black/[0.08] bg-white/40 hover:border-[#b23a2e]/40 hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02]'
 			} ${draggedPageIndex === idx ? 'opacity-40 scale-95' : ''}`}
+			data-page-seq={page.seq}
+			data-page-id={page.id}
 			style="content-visibility: auto; contain-intrinsic-size: auto 380px;"
 		>
 			<div>
@@ -165,7 +167,7 @@
 					<!-- svelte-ignore a11y-click-events-have-key-events -->
 					<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
 					<img
-						src={`/api/pages/${page.id}/file?kind=thumb&w=480&target=${isOutput ? 'output' : 'original'}&v=${page.outputPath || 'orig'}${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
+						src={`/api/pages/${page.id}/file?kind=thumb&w=480&target=${isOutput ? 'output' : 'original'}&v=${reloadKey}_${page.outputPath || 'orig'}${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
 						alt={`Page ${page.seq + 1}`}
 						loading="lazy"
 						decoding="async"

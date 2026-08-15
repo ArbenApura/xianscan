@@ -35,7 +35,7 @@ export interface PageTranslation {
 // -- CONSTANTS -- //
 
 // PART OF THE CACHE KEY — BUMP WHEN THE PROMPTS CHANGE SO STALE CACHED TRANSLATIONS NEVER RESURFACE.
-export const PROMPT_VERSION = 'v9';
+export const PROMPT_VERSION = 'v12';
 
 // A TRANSLATION LONGER THAN 6× THE SOURCE IS ALMOST CERTAINLY THE MODEL REWRITING THE PROMPT / ADDING
 // EXPLANATIONS — FLAGGED FOR A REFILL (SAME HEURISTIC AS xianslate's looksOverExpanded).
@@ -77,12 +77,33 @@ Manhua Conversation & Dialogue Style:
   * sfx: Comic onomatopoeia in ALL-CAPS (e.g. 轰 → BOOM!, 呼 → WHOOSH!, 唰 → SWOOSH!, 砰 → THUD!, 咔嚓 → CRACK!, 哐当 → CLANG!).
   * other: UI, system prompts, stat cards, or narrator captions.
 
-Character Names & Multi-Name Listings:
+Comic Sound Effects (SFX) & Action Onomatopoeia:
+- Isolated Action Sounds: Single or short repeated characters without sentence punctuation (e.g. 哒, 嗒, 啪, 咚, 咚咚, 哐, 哐当, 嗖, 唰, 砰, 嘭, 咔, 咔嚓, 轰, 轰隆, 嘶, 呼, 哧, 嗡, 踏, 铛) represent action sound effects (SFX), footsteps, landings, impacts, swings, or movements.
+- NEVER convert isolated SFX characters into ellipses ("..."), pauses, or empty strings.
+- Render all SFX into concise, punchy ALL-CAPS ${tgtName} onomatopoeia:
+  * 哒 / 嗒 → TAP! / STEP! / CLACK! (footsteps, landing on branch/ground, light tap)
+  * 啪 → SNAP! / SLAP! / CLAP!
+  * 咚 / 哐 → THUD! / BOOM! / CLANG!
+  * 嗖 / 唰 → SWOOSH! / SWISH! / DASH!
+  * 砰 / 嘭 → BANG! / THUD! / POW!
+  * 咔 / 咔嚓 → CLICK! / CRACK! / SNAP!
+  * 轰 / 轰隆 → BOOM! / RUMBLE!
+  * 呼 / 哧 → WHOOSH! / HUFF! / GASP!
+  * 嘶 → HISS! / GASP!
+  * 嗡 → HUM! / BUZZ!
+  * 踏 → STEP! / STOMP!
+
+Character Names, Multi-Name Listings & Military Units:
 - Chinese Name Segmentation: Chinese personal names (courtesy names, given names, full names) are typically 2 or 3 characters each (e.g. 子龙, 童菲, 张飞/张肥, 关羽/关鱼, 赵云, 诸葛亮).
 - Consecutive Name Listings & Sparse Punctuation: In military orders, roster listings, and dialogue, multiple names are frequently written back-to-back with sparse or missing punctuation (e.g. "子龙童菲，张肥关鱼" or "刘关张").
   * NEVER combine adjacent 2-character names into a single 4-character compound name (e.g. "子龙童菲" represents TWO separate persons "Zilong" and "Tong Fei", NOT "Zilong Tongfei"; "张肥关鱼" represents TWO separate persons "Zhang Fei" and "Guan Yu", NOT "Zhang Fei Guan Yu").
   * When translating name series, render all individuals clearly separated with proper punctuation and conjunctions (e.g. "子龙童菲，张肥关鱼" → "Zilong, Tong Fei, Zhang Fei, and Guan Yu").
 - Parody, Homophone & OCR Typo Names: In comedic, parody, or OCR'd manhua, character names may appear as homophones or humorous variants (e.g. 张肥 for 张飞 / Zhang Fei, 关鱼 for 关羽 / Guan Yu). Recognize these as individual character names rather than literal common nouns ("fat", "fish") and translate them cleanly as names.
+- Military Unit & Army Division Titles: In war, military, or historical manhua, army divisions, brigades, or squads named after characters/monikers (e.g. 龙字军, 肥字军, 鱼字军, 虎字营, 豹字部) represent legitimate in-universe armed forces (e.g. "The Long Army / Dragon Division", "The Fei Army / Fat Division", "The Yu Army / Fish Division"). ALWAYS translate them.
+
+Story Narration, Sketch Captions & Incomplete Fragments:
+- Floating Comic Art Captions: Handwritten text floating on illustrations, parchment, or battle plan sketches (e.g. "龙字军夜袭“黑风寨”", "肥字军剿灭水贼“混江龙”", "鱼字军剿灭……") is essential story narrative. ALWAYS translate it.
+- Incomplete / Cut-off Phrases: If a story caption or dialogue is cut off or incomplete at the edge of the panel (e.g. "鱼字军剿灭"), translate the partial phrase with a natural trailing ellipsis (e.g. "The Yu Army wipes out..."). NEVER drop incomplete sentences or return empty strings for story text.
 
 Punctuation & Reaction Bubbles:
 - NEVER invent or use em-dashes (— or --) for pauses, thinking, or sentence breaks. Use natural commas (,), periods (.), or ellipses (...) matching the source punctuation.
@@ -91,7 +112,8 @@ Punctuation & Reaction Bubbles:
 - Only output a dash if the original source text explicitly contains a dash/hyphen.
 
 Watermark & Scanlation Tag Filtering:
-- Piracy Watermarks & Aggregator Ads: If a text region is a third-party pirate watermark, scanlation group recruitment ad, website URL/domain, aggregator watermark, scanlation QQ/Discord group, or uploader logo (e.g. BaoziManhua, Colamanga, Qumanku, 速漫库, 包子漫画, "扫图", "汉化组招募", "严禁转载", "独家", "修图", "首发", etc.), return an EMPTY STRING "" for its id.
+- Piracy Watermarks & Aggregator Ads: If a text region is STRICTLY a third-party pirate watermark, scanlation group recruitment ad, website URL/domain, aggregator watermark, scanlation QQ/Discord group, or uploader logo (e.g. BaoziManhua, Colamanga, Qumanku, 速漫库, 包子漫画, "扫图", "汉化组招募", "严禁转载", "独家", "修图", "首发", etc.), return an EMPTY STRING "" for its id.
+- Story Text is NOT a Watermark: In-universe military forces (龙字军, 肥字军, 鱼字军), bandit fortresses (黑风寨), location names, or character sketch captions are NOT watermarks. NEVER filter them out.
 - Official Comic Staff & Production Credits: ALWAYS TRANSLATE official manga/manhua author, artist, and studio production credits (e.g. STAFF, 原作 [Original Work], 主笔 [Main Artist], 助手 [Assistants], 承制 [Production], 分镜 [Storyboard], 线稿 [Line Art], 总监制 [Executive Producer], 监制 [Supervisor], 上色 [Coloring], 出品 [Presented by], 制作 [Production], etc.).
 - If a dialogue bubble contains legitimate character speech mixed with a trailing watermark or website URL, translate ONLY the dialogue portion and omit the watermark entirely.
 
@@ -144,11 +166,16 @@ export function regionPayload(regions: RegionSource[]): string {
 }
 
 export function userPrompt(regions: RegionSource[]): string {
+	const exampleEntries = regions
+		.slice(0, 2)
+		.map((r, i) => `"${r.id}": "Translation ${i + 1}"`)
+		.join(', ');
+	const exampleJson = exampleEntries ? `{${exampleEntries}}` : '{"r0": "Hello"}';
 	return `Translate the following regions of a manhua page. Each entry has an id and the source text.
 
 ${regionPayload(regions)}
 
-Return a JSON object mapping each id to its ${'translation'}, e.g. {"r0": "Hello", "r1": "BOOM!"}. Every id must appear exactly once. No markdown fences.`;
+Return a JSON object mapping each id exactly to its translation, e.g. ${exampleJson}. Every id must appear exactly once using the exact same id string as provided above. No markdown fences.`;
 }
 
 export function buildMessages(regions: RegionSource[], terms: TermDraft[], pair: LangPair): OpenAI.Chat.ChatCompletionMessageParam[] {
@@ -164,32 +191,153 @@ export function buildMessages(regions: RegionSource[], terms: TermDraft[], pair:
 // -- PARSING -- //
 
 // SALVAGE-PARSE THE MODEL'S JSON OBJECT (PORTED PATTERN FROM xianslate's parseTermObjects): STRIP CODE
-// FENCES, THEN EITHER PARSE THE WHOLE OBJECT OR SALVAGE `{"id": "text"}` FRAGMENTS. NULL WHEN NOTHING
-// USABLE SURVIVES. PURE — UNIT-TESTED.
-export function parseTranslations(raw: string, knownIds: Set<string>): Map<string, string> | null {
-	const cleaned = raw
-		.replace(/```(?:json)?/gi, '')
-		.trim()
-		.replace(/^\{/, '')
-		.replace(/\}$/, '');
+// FENCES, THEN EITHER PARSE THE WHOLE OBJECT OR SALVAGE `{"id": "text"}` FRAGMENTS. SUPPORTS EXACT ID MATCHING
+// AND POSITIONAL ALIASES (r0, 0, region_0) IN CASE THE MODEL NORMALIZED IDS. PURE — UNIT-TESTED.
+export function parseTranslations(
+	raw: string,
+	knownIds: Set<string>,
+	regions?: RegionSource[],
+): Map<string, string> | null {
+	const cleaned = raw.replace(/```(?:json)?/gi, '').trim();
 	const out = new Map<string, string>();
-	for (const m of cleaned.matchAll(/"([A-Za-z0-9_-]+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
-		const id = m[1];
-		if (!knownIds.has(id)) continue;
-		const text = m[2]
-			.replace(/\\n/g, '\n') // PRESERVE PARAGRAPH LINE BREAKS (MULTI-LINE BUBBLES)
-			.replace(/\\"/g, '"')
-			.replace(/\\\\/g, '\\')
-			.trim();
-		if (text) out.set(id, text);
+	const rawMap = new Map<string, string>();
+
+	// 1. TRY PARSING AS FULL JSON FIRST
+	try {
+		const firstBrace = cleaned.indexOf('{');
+		const lastBrace = cleaned.lastIndexOf('}');
+		if (firstBrace !== -1 && lastBrace > firstBrace) {
+			const jsonStr = cleaned.slice(firstBrace, lastBrace + 1);
+			const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+				for (const [k, val] of Object.entries(parsed)) {
+					if (typeof val === 'string') {
+						const trimmed = val.trim();
+						if (trimmed) rawMap.set(k, trimmed);
+					} else if (val && typeof val === 'object' && 'text' in val && typeof (val as { text: unknown }).text === 'string') {
+						const trimmed = (val as { text: string }).text.trim();
+						if (trimmed) rawMap.set(k, trimmed);
+					}
+				}
+			}
+		}
+	} catch {
+		// FALL THROUGH TO REGEX SALVAGE
 	}
+
+	// 2. REGEX SALVAGE (CAPTURES ENTRIES EVEN IF JSON HAS BROKEN TRAILING COMMAS OR UNESCAPED FRAGMENTS)
+	if (rawMap.size === 0) {
+		const unbraced = cleaned.replace(/^\{/, '').replace(/\}$/, '');
+		for (const m of unbraced.matchAll(/"([A-Za-z0-9_-]+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
+			const k = m[1];
+			const text = m[2]
+				.replace(/\\n/g, '\n')
+				.replace(/\\"/g, '"')
+				.replace(/\\\\/g, '\\')
+				.trim();
+			if (text) rawMap.set(k, text);
+		}
+	}
+
+	if (rawMap.size === 0) return null;
+
+	// 3. RESOLVE KEYS: EXACT ID MATCH FIRST
+	for (const [k, text] of rawMap) {
+		if (knownIds.has(k)) {
+			out.set(k, text);
+		}
+	}
+
+	// 4. RESOLVE REMAINING MISSING REGIONS BY POSITIONAL ALIASES (r0, 0, region_0, item_0, 1-based, or text match)
+	if (regions && regions.length > 0) {
+		for (const [k, text] of rawMap) {
+			if (knownIds.has(k)) continue;
+
+			// Match by source text match
+			const matchedRegion = regions.find((r) => r.text.trim() === k.trim() && !out.has(r.id));
+			if (matchedRegion) {
+				out.set(matchedRegion.id, text);
+				continue;
+			}
+
+			// Match index pattern e.g. "r0", "0", "region0", "item0"
+			const idxMatch = k.match(/^(?:r|region|seq|item)?_?(\d+)$/i);
+			if (idxMatch) {
+				const num = parseInt(idxMatch[1], 10);
+				// 0-indexed match (e.g. "r0" -> regions[0])
+				if (num >= 0 && num < regions.length) {
+					const targetReg = regions[num];
+					if (!out.has(targetReg.id) && !/^r\d+$/i.test(targetReg.id)) {
+						out.set(targetReg.id, text);
+						continue;
+					}
+				}
+				// 1-indexed match (e.g. "1" -> regions[0])
+				if (num >= 1 && num <= regions.length) {
+					const targetReg = regions[num - 1];
+					if (!out.has(targetReg.id) && !/^r\d+$/i.test(targetReg.id)) {
+						out.set(targetReg.id, text);
+						continue;
+					}
+				}
+			}
+		}
+	}
+
 	return out.size > 0 ? out : null;
 }
 
-// DEGENERATE = EMPTY, OR EXPANDED > 6× THE SOURCE (THE MODEL EXPLAINED INSTEAD OF TRANSLATING).
+export const KNOWN_CHINESE_SFX: Record<string, string> = {
+	'哒': 'TAP!',
+	'嗒': 'STEP!',
+	'哒哒': 'TAP-TAP!',
+	'嗒嗒': 'PITTER-PATTER!',
+	'啪': 'SNAP!',
+	'啪啪': 'CLAP-CLAP!',
+	'咚': 'THUD!',
+	'咚咚': 'THUMP-THUMP!',
+	'哐': 'CLANG!',
+	'哐当': 'CLANG!',
+	'嗖': 'SWOOSH!',
+	'唰': 'SWISH!',
+	'砰': 'BANG!',
+	'嘭': 'POW!',
+	'咔': 'CLICK!',
+	'咔嚓': 'CRACK!',
+	'轰': 'BOOM!',
+	'轰隆': 'RUMBLE!',
+	'呼': 'WHOOSH!',
+	'哧': 'CHIRP!',
+	'嘶': 'HISS!',
+	'嗡': 'BUZZ!',
+	'踏': 'STEP!',
+	'铛': 'CLANG!',
+};
+
+export function getKnownSfxTranslation(source: string): string | null {
+	if (!source) return null;
+	const stripped = source.replace(/[!！?？~～\s]/g, '').trim();
+	return KNOWN_CHINESE_SFX[stripped] ?? null;
+}
+
+// DEGENERATE = EMPTY, OR EXPANDED BEYOND REASONABLE RATIO (THE MODEL EXPLAINED INSTEAD OF TRANSLATING),
+// OR A NON-PUNCTUATION SOURCE ERRONEOUSLY TRANSLATED AS PURE ELLIPSIS/DOTS.
+// SHORT STRINGS (1-10 CHARS) NATURALLY EXPAND 5-10× INTO ENGLISH SENTENCES (e.g. 鱼字军剿灭 -> "The Fish Army wipes out...").
 export function looksDegenerate(translated: string, source: string): boolean {
 	if (!translated || !source) return true;
-	return translated.length > source.length * MAX_EXPANSION;
+	const cleanSource = source.trim();
+	const cleanTarget = translated.trim();
+	if (!cleanTarget) return true;
+
+	// Over-expansion check: Only flag when target exceeds a generous floor + ratio
+	const maxAllowedLength = Math.max(120, cleanSource.length * 10);
+	if (cleanTarget.length > maxAllowedLength) return true;
+
+	// If source is not dots/ellipses but translation is purely dots/ellipses
+	if (!/^[.．…·\s]+$/.test(cleanSource) && /^[.．…·\s]+$/.test(cleanTarget)) {
+		return true;
+	}
+	return false;
 }
 
 // -- CORE -- //
@@ -239,9 +387,12 @@ export async function translatePage(
 	if (regions.length === 0) return { byRegion: new Map(), usage };
 
 	// FIRST PASS — THE FULL REGION LIST
+	console.log(`[translatePage] Translating ${regions.length} regions:`, JSON.stringify(regions.map(r => ({ id: r.id, text: r.text }))));
 	const { raw, usage: u1 } = await callTranslate(regions, terms, pair, opts);
 	mergeUsage(usage, u1);
-	const byRegion = parseTranslations(raw, new Set(regions.map((r) => r.id))) ?? new Map();
+	console.log(`[translatePage] Raw LLM response:`, raw);
+	const byRegion = parseTranslations(raw, new Set(regions.map((r) => r.id)), regions) ?? new Map();
+	console.log(`[translatePage] Parsed byRegion:`, [...byRegion.entries()]);
 
 	// REFILL — REGIONS THAT CAME BACK EMPTY / MISSING / DEGENERATE GET ONE TARGETED CALL
 	const missing = regions.filter((r) => {
@@ -251,10 +402,29 @@ export async function translatePage(
 	if (missing.length > 0) {
 		const { raw: raw2, usage: u2 } = await callTranslate(missing, terms, pair, opts);
 		mergeUsage(usage, u2);
-		const refill = parseTranslations(raw2, new Set(missing.map((r) => r.id))) ?? new Map();
+		const refill = parseTranslations(raw2, new Set(missing.map((r) => r.id)), missing) ?? new Map();
 		for (const r of missing) {
 			const t = refill.get(r.id);
-			if (t && !looksDegenerate(t, r.text)) byRegion.set(r.id, t);
+			if (t && !looksDegenerate(t, r.text)) {
+				byRegion.set(r.id, t);
+			} else if (t && looksDegenerate(t, r.text)) {
+				const sfxFallback = getKnownSfxTranslation(r.text);
+				if (sfxFallback) byRegion.set(r.id, sfxFallback);
+				else byRegion.delete(r.id);
+			}
+		}
+	}
+
+	// CLEANUP: RESOLVE ANY REMAINING DEGENERATE OUTPUTS FROM PASS 1 (e.g. IF REFILL WAS SILENT)
+	for (const r of regions) {
+		const current = byRegion.get(r.id);
+		if (current && looksDegenerate(current, r.text)) {
+			const sfxFallback = getKnownSfxTranslation(r.text);
+			if (sfxFallback) {
+				byRegion.set(r.id, sfxFallback);
+			} else {
+				byRegion.delete(r.id);
+			}
 		}
 	}
 
