@@ -20,16 +20,11 @@ class TestBox:
 class TestRegion:
     def test_valid(self):
         r = Region(id="r0", box=Box(x=0, y=0, w=10, h=10), polygon=[[0, 0], [10, 0], [10, 10], [0, 10]])
-        assert r.category == "other"  # DEFAULT
         assert r.vertical is False
 
     def test_rejects_bad_polygon_points(self):
         with pytest.raises(ValidationError):
             Region(id="r0", box=Box(x=0, y=0, w=10, h=10), polygon=[[0, 0, 0]])
-
-    def test_rejects_unknown_category(self):
-        with pytest.raises(ValidationError):
-            Region(id="r0", box=Box(x=0, y=0, w=10, h=10), category="shout")
 
     def test_confidence_range(self):
         with pytest.raises(ValidationError):

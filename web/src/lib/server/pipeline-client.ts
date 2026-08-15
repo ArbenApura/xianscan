@@ -14,7 +14,6 @@ export interface PipelineRegion {
 	id: string;
 	box: PipelineBox;
 	polygon: number[][];
-	category: 'dialogue' | 'sfx' | 'mono' | 'other';
 	text: string;
 	confidence: number;
 	vertical: boolean;

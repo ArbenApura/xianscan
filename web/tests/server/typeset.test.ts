@@ -34,16 +34,24 @@ describe('pickTextColor', () => {
 });
 
 describe('fontFor', () => {
-	it('uses one uniform font for every category', () => {
-		expect(fontFor('sfx')).toBe('CC Wild Words');
-		expect(fontFor('dialogue')).toBe('CC Wild Words');
-		expect(fontFor('mono')).toBe('CC Wild Words');
+	it('uses CC Wild Words even when text contains tildes or special punctuation', () => {
+		expect(fontFor()).toBe('CC Wild Words');
+		expect(fontFor("And those heroines' scandalous news, heh heh heh~")).toBe('CC Wild Words');
+		expect(fontFor('Boss, you don\'t know! [Item]')).toBe('CC Wild Words');
+	});
+
+	it('uses fallback font for CJK text', () => {
+		expect(fontFor('还有那些侠女的花边新闻')).toBe('Friendly Sans');
 	});
 });
 
 // -- SANITIZE & RENDER STRING -- //
 
 describe('sanitizeForFont', () => {
+	it('normalizes full-width tildes to ASCII tilde', () => {
+		expect(sanitizeForFont('Heh heh heh～～～')).toBe('Heh heh heh~~~');
+	});
+
 	it('replaces em-dashes and en-dashes with natural comma pauses', () => {
 		expect(sanitizeForFont('Might as well use them all—who knows, I might get something good.')).toBe(
 			'Might as well use them all, who knows, I might get something good.',
@@ -63,17 +71,16 @@ describe('renderText', () => {
 				id: 'r0',
 				box: { x: 0, y: 0, w: 10, h: 10 },
 				text: 'Might as well use them all—who knows',
-				category: 'dialogue',
 			}),
 		).toBe('MIGHT AS WELL USE THEM ALL, WHO KNOWS');
 	});
 
 	it('uppercases accented letters', () => {
-		expect(renderText({ id: 'r0', box: { x: 0, y: 0, w: 10, h: 10 }, text: 'héllo wörld', category: 'dialogue' })).toBe('HÉLLO WÖRLD');
+		expect(renderText({ id: 'r0', box: { x: 0, y: 0, w: 10, h: 10 }, text: 'héllo wörld' })).toBe('HÉLLO WÖRLD');
 	});
 
 	it('leaves CJK and punctuation unchanged (preserves unicode symbols for font fallback rendering)', () => {
-		expect(renderText({ id: 'r0', box: { x: 0, y: 0, w: 10, h: 10 }, text: '小心！BOOM…', category: 'dialogue' })).toBe('小心！BOOM…');
+		expect(renderText({ id: 'r0', box: { x: 0, y: 0, w: 10, h: 10 }, text: '小心！BOOM…' })).toBe('小心！BOOM…');
 	});
 });
 
@@ -242,7 +249,7 @@ describe('typesetPage', () => {
 
 	it('renders text over a dark page with a light fill', async () => {
 		const out = await typesetPage(blankPng(400, 300, 'black'), [
-			{ id: 'r0', box: { x: 50, y: 100, w: 300, h: 80 }, text: 'Hello world', category: 'dialogue' },
+			{ id: 'r0', box: { x: 50, y: 100, w: 300, h: 80 }, text: 'Hello world' },
 		]);
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])); // PNG MAGIC
 		expect(await brightPixels(out)).toBeGreaterThan(0); // WHITE TEXT ON THE BLACK PAGE
@@ -250,7 +257,7 @@ describe('typesetPage', () => {
 
 	it('uses dark text on a light page (contrast flips with the background)', async () => {
 		const out = await typesetPage(blankPng(400, 300, 'white'), [
-			{ id: 'r0', box: { x: 50, y: 100, w: 300, h: 80 }, text: 'Hello world', category: 'dialogue' },
+			{ id: 'r0', box: { x: 50, y: 100, w: 300, h: 80 }, text: 'Hello world' },
 		]);
 		const img = await loadImage(out);
 		const probe = createCanvas(img.width, img.height);
@@ -266,14 +273,14 @@ describe('typesetPage', () => {
 
 	it('skips empty-text regions', async () => {
 		const out = await typesetPage(blankPng(100, 100, 'white'), [
-			{ id: 'r0', box: { x: 10, y: 10, w: 80, h: 40 }, text: '   ', category: 'dialogue' },
+			{ id: 'r0', box: { x: 10, y: 10, w: 80, h: 40 }, text: '   ' },
 		]);
 		expect(out.length).toBeGreaterThan(0); // STILL A VALID PNG, NOTHING CRASHED
 	});
 
 	it('renders an sfx region without crashing', async () => {
 		const out = await typesetPage(blankPng(300, 200, 'white'), [
-			{ id: 'r0', box: { x: 10, y: 10, w: 280, h: 100 }, text: 'BOOM!', category: 'sfx' },
+			{ id: 'r0', box: { x: 10, y: 10, w: 280, h: 100 }, text: 'BOOM!' },
 		]);
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 	});
@@ -281,7 +288,7 @@ describe('typesetPage', () => {
 	it('renders tiny action/emote badge with clean white circle backing and legible text', async () => {
 		// Small 20x20 action badge (e.g. "TURN" / "转") on a dark grass background
 		const out = await typesetPage(blankPng(200, 200, 'black'), [
-			{ id: 'r0', box: { x: 90, y: 90, w: 20, h: 20 }, text: 'TURN', category: 'sfx' },
+			{ id: 'r0', box: { x: 90, y: 90, w: 20, h: 20 }, text: 'TURN' },
 		]);
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 		const img = await loadImage(out);
@@ -303,7 +310,7 @@ describe('typesetPage', () => {
 
 	it('renders an angled/rotated region with rotation transform', async () => {
 		const out = await typesetPage(blankPng(400, 400, 'black'), [
-			{ id: 'r0', box: { x: 50, y: 50, w: 300, h: 100 }, text: 'SLASH!', category: 'sfx', angle: 35.5 },
+			{ id: 'r0', box: { x: 50, y: 50, w: 300, h: 100 }, text: 'SLASH!', angle: 35.5 },
 		]);
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 		expect(await brightPixels(out)).toBeGreaterThan(0);
@@ -315,7 +322,6 @@ describe('typesetPage', () => {
 				id: 'r0',
 				box: { x: 50, y: 50, w: 300, h: 150 },
 				text: '[TOP-TIER CHARACTERS: TEN.]\n(With a Top-tier Pet)',
-				category: 'dialogue',
 				angle: 9.26,
 			},
 		]);
@@ -331,7 +337,6 @@ describe('typesetPage', () => {
 				id: 'r2',
 				box: { x: 60, y: 737, w: 252, h: 164 },
 				text: longTranslation,
-				category: 'dialogue',
 			},
 		]);
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
@@ -352,31 +357,26 @@ describe('typesetPage', () => {
 				id: '3399',
 				box: { x: 21, y: 14, w: 392, h: 59 },
 				text: "The world beyond the Sacred Ancestor Mountain Range has been overrun by demon beasts. The people here haven't had contact with the outside world for centuries.",
-				category: 'dialogue',
 			},
 			{
 				id: '3400',
 				box: { x: 536, y: 736, w: 183, h: 108 },
 				text: 'Though often attacked by the snowstorm demon beasts from the mountains, this city has been repeatedly rebuilt after each devastating war.',
-				category: 'dialogue',
 			},
 			{
 				id: '3401',
 				box: { x: 60, y: 737, w: 252, h: 164 },
 				text: "No one knows what the outside world is like. Legend says that in their heyday, humans had vast empires, but now they've all turned to ash and ceased to exist. This city, hidden away, survived the Dark Age intact.",
-				category: 'dialogue',
 			},
 			{
 				id: '3402',
 				box: { x: 18, y: 1003, w: 356, h: 30 },
 				text: 'The mottled city walls stand as an immortal monument!!',
-				category: 'dialogue',
 			},
 			{
 				id: '3403',
 				box: { x: 353, y: 1003, w: 308, h: 73 },
 				text: 'And this city, the hope of humanity, is called...',
-				category: 'dialogue',
 			},
 		];
 
@@ -391,7 +391,6 @@ describe('typesetPage', () => {
 				id: '3470',
 				box: { x: 200, y: 387, w: 91, h: 163 },
 				text: 'I heard the new teacher is from the Sacred Clan, and a Silver Spirit Master too!',
-				category: 'dialogue',
 				angle: 0.0,
 			},
 		]);
@@ -413,8 +412,8 @@ describe('sampleBackground', () => {
 
 describe('decollideRegions', () => {
 	it('adjusts overlapping bounding boxes to eliminate collision gap', () => {
-		const r1 = { id: 'r0', box: { x: 50, y: 10, w: 100, h: 50 }, text: 'Daddy!', category: 'dialogue' as const };
-		const r2 = { id: 'r1', box: { x: 50, y: 40, w: 100, h: 50 }, text: 'Wake up!', category: 'dialogue' as const };
+		const r1 = { id: 'r0', box: { x: 50, y: 10, w: 100, h: 50 }, text: 'Daddy!' };
+		const r2 = { id: 'r1', box: { x: 50, y: 40, w: 100, h: 50 }, text: 'Wake up!' };
 
 		const result = decollideRegions([r1, r2]);
 		expect(result).toHaveLength(2);

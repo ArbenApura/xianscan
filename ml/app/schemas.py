@@ -9,9 +9,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-RegionCategory = Literal["dialogue", "sfx", "mono", "other"]
-
-
 class Box(BaseModel):
     x: int = Field(ge=0)
     y: int = Field(ge=0)
@@ -25,7 +22,6 @@ class Region(BaseModel):
     id: str
     box: Box
     polygon: list[list[int]] = Field(default_factory=list)
-    category: RegionCategory = "other"
     text: str = ""
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     vertical: bool = False

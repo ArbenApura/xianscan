@@ -75,7 +75,7 @@ describe('glossaryBlock', () => {
 	});
 
 	it('is injected as a separate system message between prompt and user content', () => {
-		const regions = [{ id: 'r0', text: '你好', category: 'dialogue' as const }];
+		const regions = [{ id: 'r0', text: '你好' }];
 		const messages = buildMessages(regions, [term({ source: '系统', target: 'System' })], PAIR);
 		expect(messages).toHaveLength(3);
 		expect(messages[0].role).toBe('system');
@@ -86,13 +86,12 @@ describe('glossaryBlock', () => {
 });
 
 describe('userPrompt', () => {
-	it('carries ids, text and category for every region', () => {
+	it('carries ids and text for every region', () => {
 		const p = userPrompt([
-			{ id: 'r0', text: '轰', category: 'sfx' },
-			{ id: 'r1', text: '你好', category: 'dialogue' },
+			{ id: 'r0', text: '轰' },
+			{ id: 'r1', text: '你好' },
 		]);
 		expect(p).toContain('"id": "r0"');
-		expect(p).toContain('"category": "sfx"');
 		expect(p).toContain('"text": "轰"');
 	});
 });
@@ -159,8 +158,8 @@ describe('looksDegenerate', () => {
 
 describe('translatePage', () => {
 	const regions = [
-		{ id: 'r0', text: '你好', category: 'dialogue' as const },
-		{ id: 'r1', text: '轰', category: 'sfx' as const },
+		{ id: 'r0', text: '你好' },
+		{ id: 'r1', text: '轰' },
 	];
 
 	it('returns a translation per region with accrued usage', async () => {
@@ -328,7 +327,7 @@ describe('parseExtractedTerms & extractTerms', () => {
 		} as unknown as OpenAI;
 
 		const res = await translatePage(
-			[{ id: 'r1', text: '你好！', category: 'dialogue' }],
+			[{ id: 'r1', text: '你好！' }],
 			[],
 			jaPair,
 			{ client: fakeClient },

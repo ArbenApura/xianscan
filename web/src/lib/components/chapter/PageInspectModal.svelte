@@ -46,7 +46,6 @@
 			regions: (page.regions || []).map((r: any) => ({
 				id: r.id,
 				seq: r.seq,
-				category: r.category,
 				confidence: r.conf,
 				box: getBox(r.box),
 				sourceOcr: r.textSource,
@@ -134,6 +133,8 @@
 							alt={`Page ${page.seq + 1} original`}
 							class="block h-auto w-full object-contain"
 							style="max-height: 60vh;"
+							loading="lazy"
+							decoding="async"
 						/>
 						{#if pw && ph}
 							<svg
@@ -148,14 +149,7 @@
 									{@const by = b?.y ?? 0}
 									{@const bw = b?.w ?? 0}
 									{@const bh = b?.h ?? 0}
-									{@const stroke =
-										region.category === 'sfx'
-											? '#f97316'
-											: region.category === 'mono'
-												? '#3b82f6'
-												: region.category === 'other'
-													? '#9ca3af'
-													: '#ef4444'}
+									{@const stroke = '#b23a2e'}
 									{@const active = hoveredRegionId === region.id}
 									<rect
 										x={bx}
@@ -178,16 +172,6 @@
 										stroke-width="4"
 										paint-order="stroke"
 									>#{region.seq + 1}</text>
-									<text
-										x={bx + 6}
-										y={by + 38}
-										font-size="13"
-										fill={stroke}
-										stroke="#000"
-										stroke-width="3"
-										paint-order="stroke"
-										opacity="0.9"
-									>{region.category}</text>
 								{/each}
 							</svg>
 						{:else}
@@ -205,6 +189,8 @@
 							alt={`Page ${page.seq + 1}`}
 							class="block h-auto w-full object-contain"
 							style="max-height: 60vh;"
+							loading="lazy"
+							decoding="async"
 						/>
 					</div>
 				{/if}
@@ -220,14 +206,6 @@
 					<h3 class="text-sm font-bold">
 						Detected Regions ({page.regions?.length ?? 0})
 					</h3>
-					{#if (page.regions?.length ?? 0) > 0}
-						<div class="flex flex-wrap items-center gap-1 text-[9px] font-bold">
-							<span class="rounded px-1.5 py-0.5 bg-red-500/10 text-red-600">● dialogue</span>
-							<span class="rounded px-1.5 py-0.5 bg-orange-500/10 text-orange-600">● sfx</span>
-							<span class="rounded px-1.5 py-0.5 bg-blue-500/10 text-blue-600">● mono</span>
-							<span class="rounded px-1.5 py-0.5 bg-gray-500/10 text-gray-500">● other</span>
-						</div>
-					{/if}
 				</div>
 
 				{#if !page.regions || page.regions.length === 0}
@@ -236,14 +214,6 @@
 					<div class="flex-1 min-h-[300px] max-h-[65vh] space-y-2 overflow-y-auto pr-1">
 						{#each page.regions as region (region.id)}
 							{@const b = getBox(region.box)}
-							{@const catCls =
-								region.category === 'sfx'
-									? 'text-orange-600 bg-orange-500/10'
-									: region.category === 'mono'
-										? 'text-blue-600 bg-blue-500/10'
-										: region.category === 'other'
-											? 'text-gray-500 bg-gray-500/10'
-											: 'text-[#b23a2e] bg-[#b23a2e]/10 dark:text-[#e08a63]'}
 							<!-- svelte-ignore a11y-no-static-element-interactions -->
 							<div
 								class={`rounded-lg border p-3 text-xs transition-all ${
@@ -257,10 +227,10 @@
 								}}
 								on:mouseleave={() => (hoveredRegionId = null)}
 							>
-								<!-- HEADER ROW: category badge + confidence + box size -->
+								<!-- HEADER ROW: sequence badge + confidence + box size -->
 								<div class="flex items-center justify-between">
-									<span class={`rounded px-1.5 py-0.5 text-[10px] font-bold ${catCls}`}>
-										#{region.seq + 1} {region.category}
+									<span class="rounded px-1.5 py-0.5 text-[10px] font-bold text-[#b23a2e] bg-[#b23a2e]/10 dark:text-[#e08a63]">
+										#{region.seq + 1}
 									</span>
 									<div class="flex items-center gap-2 font-mono text-[10px] opacity-50">
 										{#if region.conf !== null}

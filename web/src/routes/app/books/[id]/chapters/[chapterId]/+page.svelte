@@ -30,7 +30,6 @@
 		id: number;
 		seq: number;
 		box: unknown;
-		category: string;
 		textSource: string;
 		textTarget: string | null;
 		conf: number | null;
@@ -65,6 +64,7 @@
 	let uploading = false;
 	let isDraggingOver = false;
 	let reloadKey = Date.now();
+	let pageVersions: Record<number, number> = {};
 
 	$: {
 		chapter = data.chapter;
@@ -347,9 +347,10 @@
 			pg.outputPath = null;
 			pg.error = null;
 			pages = [...pages];
+			pageVersions[pg.id] = Date.now();
+			pageVersions = { ...pageVersions };
 			jobTracker.clearJob(chapterId);
 			toast.success(`Cleared progress on Page ${pg.seq + 1}.`);
-			reloadKey = Date.now();
 			await reload();
 		} catch {
 			toast.error('Could not clear page progress.');
@@ -496,7 +497,9 @@
 				throw new Error(err.message || 'Stitch failed');
 			}
 			toast.success(`Merged Page ${pg.seq + 1} and Page ${nextPg.seq + 1}.`);
-			reloadKey = Date.now();
+			pageVersions[pg.id] = Date.now();
+			if (nextPg) pageVersions[nextPg.id] = Date.now();
+			pageVersions = { ...pageVersions };
 			await reload();
 		} catch (e) {
 			toast.error((e as Error).message || 'Could not merge pages.');
@@ -670,6 +673,7 @@
 			{webtoonKind}
 			{webtoonWidth}
 			{reloadKey}
+			{pageVersions}
 			{draggedPageIndex}
 			{dragOverPageIndex}
 			on:inspect={(e) => openInspector(e.detail)}
@@ -685,6 +689,7 @@
 			pages={displayPages}
 			running={currentJobState.running}
 			{reloadKey}
+			{pageVersions}
 			{webtoonKind}
 			{draggedPageIndex}
 			{dragOverPageIndex}
@@ -700,6 +705,7 @@
 			pages={displayPages}
 			running={currentJobState.running}
 			{reloadKey}
+			{pageVersions}
 			{draggedPageIndex}
 			{dragOverPageIndex}
 			on:inspect={(e) => openInspector(e.detail)}

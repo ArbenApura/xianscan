@@ -5,7 +5,7 @@
 // PROMPT STRUCTURE (PINS THE FORMAT THE TESTS VERIFY):
 //   [system]   manhua-localization system prompt (tone, SFX rules, no annotations)
 //   [system]   glossary block (★source (also: a, b) = target [gender] — context) — ONLY WHEN TERMS EXIST
-//   [user]     JSON region list {id, text, category} + output contract (raw JSON object, no fences)
+//   [user]     JSON region list {id, text} + output contract (raw JSON object, no fences)
 //
 // ROBUSTNESS: SALVAGE JSON PARSING, MISSING/EMPTY/DEGENERATE REGIONS GET ONE REFILL CALL, USAGE FROM
 // THE API RESPONSE (computeUsage), ALL LLM CALLS GO THROUGH queued() + withRetry().
@@ -15,14 +15,9 @@ import { languageName } from '$lib/languages';
 // IMPORTED MODULES
 import { computeUsage, deepseek, queued, resolveModel, thinkingParam, withRetry } from './deepseek';
 
-// -- TYPES -- //
-
-export type RegionCategory = 'dialogue' | 'sfx' | 'mono' | 'other';
-
 export interface RegionSource {
 	id: string;
 	text: string;
-	category: RegionCategory;
 }
 
 export interface PageTranslationOptions {
@@ -142,14 +137,14 @@ ${lines.join('\n')}`;
 
 export function regionPayload(regions: RegionSource[]): string {
 	return JSON.stringify(
-		regions.map((r) => ({ id: r.id, text: r.text, category: r.category })),
+		regions.map((r) => ({ id: r.id, text: r.text })),
 		null,
 		1,
 	);
 }
 
 export function userPrompt(regions: RegionSource[]): string {
-	return `Translate the following regions of a manhua page. Each entry has an id, the source text, and its category (dialogue / sfx / mono / other).
+	return `Translate the following regions of a manhua page. Each entry has an id and the source text.
 
 ${regionPayload(regions)}
 

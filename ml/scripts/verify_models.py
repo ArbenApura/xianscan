@@ -35,7 +35,7 @@ def draw_overlay(img_bgr: np.ndarray, regions: list) -> np.ndarray:
 	for r in regions:
 		pts = np.array(r["polygon"], dtype=np.int32).reshape(-1, 1, 2)
 		cv2.polylines(out, [pts], True, (0, 0, 255), 3)
-		label = f"{r['id']}: {r['text']} ({r['category']})"
+		label = f"{r['id']}: {r['text']}"
 		x, y = r["box"]["x"], max(0, r["box"]["y"] - 8)
 		cv2.putText(out, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 	return out
@@ -57,7 +57,7 @@ def main() -> int:
 	result = pipeline.analyze_image(page)
 	print(f"analyze backend={result.backend} regions={len(result.regions)}")
 	for r in result.regions:
-		print(f"  {r.id}: box={r.box} text={r.text!r} conf={r.confidence:.2f} cat={r.category}")
+		print(f"  {r.id}: box={r.box} text={r.text!r} conf={r.confidence:.2f}")
 
 	(args.out / "analyze.json").write_text(json.dumps(result.model_dump(), indent=2, ensure_ascii=False), encoding="utf-8")
 	overlay = draw_overlay(page, [r.model_dump() for r in result.regions])

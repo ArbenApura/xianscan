@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 import numpy as np
 import pytest
+import cv2
 
 from app import detect, ocr, pipeline
 
@@ -635,6 +636,382 @@ def test_page_58623_ei_interjection_detection():
     r2 = next((r for r in resp.regions if "诶" in r.text or "！" in r.text and r.box.y > 1500), None)
     assert r2 is not None, f"'诶！' bubble at bottom must be detected. Found: {[r.text for r in resp.regions]}"
     assert "诶" in r2.text, f"'诶！' must contain '诶', got: {repr(r2.text)}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58650.png").exists(),
+    reason="Page 58650 sample fixture not found",
+)
+def test_page_58650_connected_bubble_exclamation_split():
+    """Page 58650 regression test:
+    1. The small top bubble '呼！' and the adjacent multi-line bubble '总算分完\\n最后一人\\n了。'
+       must be detected as two separate dialogue regions, NOT merged into one single bubble.
+    2. '多谢大人！\\n多谢大人！' inside the single bottom-left bubble must remain a unified 2-line region.
+    3. The entire page must produce exactly 5 dialogue regions.
+    """
+    img_path = FIXTURES_DIR / "page_58650.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 5, f"Expected exactly 5 dialogue regions on page 58650, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    # Region 1: Top crowd bubble
+    r0 = next((r for r in resp.regions if "听明白了" in r.text), None)
+    assert r0 is not None, f"Crowd bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "哦哦哦" in r0.text, f"'哦哦哦' missing in {repr(r0.text)}"
+
+    # Region 2: Standalone '呼！' bubble
+    r1 = next((r for r in resp.regions if r.text.strip() == "呼！"), None)
+    assert r1 is not None, f"Standalone '呼！' bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "分完" not in r1.text, f"'呼！' must not contain '分完': {repr(r1.text)}"
+
+    # Region 3: '总算分完\n最后一人\n了。' bubble
+    r2 = next((r for r in resp.regions if "总算分完" in r.text), None)
+    assert r2 is not None, f"'总算分完...' bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "呼" not in r2.text, f"'总算分完' bubble must not contain '呼': {repr(r2.text)}"
+    assert "最后一人" in r2.text, f"'最后一人' missing in {repr(r2.text)}"
+    assert "了" in r2.text, f"'了。' missing in {repr(r2.text)}"
+
+    # Region 4: '多谢大人！\n多谢大人！' bubble
+    r3 = next((r for r in resp.regions if "多谢大人" in r.text), None)
+    assert r3 is not None, f"'多谢大人！' bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert r3.text.count("多谢大人") == 2, f"'多谢大人' should appear twice in unified bubble: {repr(r3.text)}"
+
+    # Region 5: '最近好多流民\n加入啊！' bubble
+    r4 = next((r for r in resp.regions if "流民" in r.text), None)
+    assert r4 is not None, f"'最近好多流民...' bubble missing. Found: {[r.text for r in resp.regions]}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58876.png").exists(),
+    reason="Page 58876 sample fixture not found",
+)
+def test_page_58876_watermark_bypass_and_bubble_unification():
+    """Page 58876 regression test:
+    1. Top speech bubble ('是啊，是啊！国师的道号\\n就叫“天赐”，他可是真正\\n救苦救难的大好人啊！')
+       must be unified as exactly 1 dialogue region with 3 lines, NOT split mid-line or across lines.
+    2. Bottom speech bubble ('天赐……啧！\\n说详细情况\\n吧。')
+       must be unified as exactly 1 dialogue region with 3 lines.
+    3. Watermarks ('COLAMANGA.com', 'AcleudMerge.com') must be bypassed and not emitted as dialogue.
+    4. The page must produce exactly 2 dialogue regions.
+    """
+    img_path = FIXTURES_DIR / "page_58876.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 2, f"Expected exactly 2 dialogue regions on page 58876, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    # Bubble 1: Top speech bubble (3 lines)
+    b1 = next((r for r in resp.regions if "天赐" in r.text and "救苦救难" in r.text), None)
+    assert b1 is not None, f"Top speech bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "是啊，是啊！国师的道号" in b1.text, f"Line 1 missing or fragmented in: {repr(b1.text)}"
+    assert "就叫“天赐”，他可是真正" in b1.text, f"Line 2 missing in: {repr(b1.text)}"
+    assert "救苦救难的大好人啊！" in b1.text, f"Line 3 missing in: {repr(b1.text)}"
+    assert b1.text.count("\n") == 2, f"Expected exactly 3 lines (2 newlines) in top bubble, got {b1.text.count(chr(10))}: {repr(b1.text)}"
+
+    # Bubble 2: Bottom speech bubble (3 lines)
+    b2 = next((r for r in resp.regions if "详细情况" in r.text or "啧" in r.text), None)
+    assert b2 is not None, f"Bottom speech bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "天赐……啧！" in b2.text, f"Line 1 missing in: {repr(b2.text)}"
+    assert "说详细情况" in b2.text, f"Line 2 missing in: {repr(b2.text)}"
+    assert "吧。" in b2.text, f"Line 3 missing in: {repr(b2.text)}"
+
+    # Ensure no watermark dialogue regions
+    wm = next((r for r in resp.regions if "cola" in r.text.lower() or "merge" in r.text.lower()), None)
+    assert wm is None, f"Watermark detected as region: {wm}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58895.png").exists(),
+    reason="Page 58895 sample fixture not found",
+)
+def test_page_58895_vertical_dotted_scream_bubble_unification():
+    """Page 58895 regression test:
+    1. The tall vertical speech bubble ('呜\\n……\\n啊\\n……') must be unified as 1 single vertical dialogue region
+       covering the full vertical bubble span (h >= 600px), NOT split into two disconnected 1-character boxes ('呜', '啊').
+    2. The top horizontal dialogue bubble ('嘎啊……啊……\\n啊……嘎……') must remain intact.
+    3. The page must produce exactly 2 dialogue regions.
+    """
+    img_path = FIXTURES_DIR / "page_58895.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 2, f"Expected exactly 2 dialogue regions on page 58895, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    # Bubble 1: Top horizontal bubble
+    b0 = next((r for r in resp.regions if "嘎" in r.text), None)
+    assert b0 is not None, f"Top horizontal bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "嘎啊" in b0.text, f"Line 1 missing in: {repr(b0.text)}"
+
+    # Bubble 2: Tall vertical scream bubble
+    b1 = next((r for r in resp.regions if ("呜" in r.text or "鸣" in r.text) and "啊" in r.text), None)
+    assert b1 is not None, f"Tall vertical scream bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert b1.box.h >= 600, f"Vertical bubble height must span the full bubble (h >= 600), got {b1.box.h}"
+    assert b1.vertical is True, f"Vertical bubble must have vertical=True, got {b1.vertical}"
+    assert "……" in b1.text or "..." in b1.text, f"Interpolated vertical ellipsis dots missing from: {repr(b1.text)}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58896.png").exists(),
+    reason="Page 58896 sample fixture not found",
+)
+def test_page_58896_exclamation_mark_recovery():
+    """Page 58896 regression test:
+    1. The large exclamation scream bubble ('啊啊\\n啊啊\\n！啊\\n！啊\\n！') must completely scope
+       the bottom exclamation mark and recover '！' rather than misreading it as '1'.
+    2. Header watermarks ('COLAMANGA.com', 'AcloudMerge.com') must be bypassed.
+    3. The page must produce exactly 1 dialogue/sfx region.
+    """
+    img_path = FIXTURES_DIR / "page_58896.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 1, f"Expected exactly 1 dialogue region on page 58896, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    reg = resp.regions[0]
+    assert "1" not in reg.text, f"Misclassified '1' found in scream bubble: {repr(reg.text)}"
+    assert reg.text.endswith("！") or reg.text.endswith("!"), f"Scream bubble must end in exclamation mark: {repr(reg.text)}"
+    assert "啊啊" in reg.text, f"'啊啊' missing in: {repr(reg.text)}"
+    assert reg.box.h >= 450, f"Region box height should cover the full scream bubble (h >= 450), got {reg.box.h}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58961.png").exists(),
+    reason="Page 58961 sample fixture not found",
+)
+def test_page_58961_paragraph_angle_stability():
+    """Page 58961 regression test:
+    1. Standard horizontal speech bubbles ('呵呵，司马倩...') must maintain angle = 0.0,
+       not falsely inherit a rotation angle from minor subpixel line jitter on trailing lines.
+    2. Both dialogue bubbles must be horizontal (vertical=False, angle=0.0).
+    3. The page must produce exactly 2 dialogue regions.
+    """
+    img_path = FIXTURES_DIR / "page_58961.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 2, f"Expected exactly 2 dialogue regions on page 58961, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    b0 = next((r for r in resp.regions if "司马倩" in r.text), None)
+    assert b0 is not None, f"Top dialogue bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert b0.angle == 0.0, f"Top dialogue bubble must have angle 0.0, got {b0.angle}"
+    assert b0.vertical is False
+
+    b1 = next((r for r in resp.regions if "开心" in r.text and "司马倩" not in r.text), None)
+    assert b1 is not None, f"Bottom dialogue bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert b1.angle == 0.0, f"Bottom dialogue bubble must have angle 0.0, got {b1.angle}"
+    assert b1.vertical is False
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58966.png").exists(),
+    reason="Page 58966 sample fixture not found",
+)
+def test_page_58966_trailing_ellipsis_recovery():
+    """Page 58966 regression test:
+    1. The top speech bubble ('我比较特殊，仙人能\\n帮我消除部分影响，\\n而且她的位格更高……')
+       must recover the trailing horizontal ellipsis ('……') that was omitted by OCR text line recognizers.
+    2. The bottom speech bubble ('唔……') must remain intact.
+    3. The page must produce exactly 2 dialogue regions.
+    """
+    img_path = FIXTURES_DIR / "page_58966.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 2, f"Expected exactly 2 dialogue regions on page 58966, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    b0 = next((r for r in resp.regions if "位格" in r.text), None)
+    assert b0 is not None, f"Top dialogue bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert b0.text.endswith("……") or b0.text.endswith("..."), f"Trailing ellipsis missing from top bubble: {repr(b0.text)}"
+    assert "我比较特殊" in b0.text
+
+    b1 = next((r for r in resp.regions if "唔" in r.text), None)
+    assert b1 is not None, f"Bottom dialogue bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "唔……" in b1.text or "唔..." in b1.text
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58969.png").exists(),
+    reason="Page 58969 sample fixture not found",
+)
+def test_page_58969_bottom_ellipsis_line_recovery():
+    """Page 58969 regression test:
+    1. The top speech bubble ('你没杀过人，这很好，\\n那恨你的人应该比较少\\n……')
+       must recover the bottom standalone ellipsis line ('……') below line 2.
+    2. The bottom speech bubble ('嘿！这可不一定！\\n恨意和怒意大概\\n是有的！') must remain intact.
+    3. The page must produce exactly 2 dialogue regions.
+    """
+    img_path = FIXTURES_DIR / "page_58969.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 2, f"Expected exactly 2 dialogue regions on page 58969, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    b0 = next((r for r in resp.regions if "杀过人" in r.text), None)
+    assert b0 is not None, f"Top dialogue bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert b0.text.endswith("……") or b0.text.endswith("..."), f"Bottom ellipsis line missing from top bubble: {repr(b0.text)}"
+    assert b0.text.count("\n") == 2, f"Expected 3 lines (2 newlines) in top bubble, got {b0.text.count(chr(10))}: {repr(b0.text)}"
+    assert b0.box.h >= 130, f"Box height must cover the bottom ellipsis line (h >= 130), got {b0.box.h}"
+
+    b1 = next((r for r in resp.regions if "这可不一定" in r.text), None)
+    assert b1 is not None, f"Bottom dialogue bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "恨意和怒意" in b1.text
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58971.png").exists(),
+    reason="Page 58971 sample fixture not found",
+)
+def test_page_58971_dialogue_angle_and_line_fragment_grouping():
+    """Page 58971 regression test:
+    1. Top dialogue bubble ('还有那些侠女的\\n花边新闻，嘿嘿\\n嘿~～～') must maintain angle = 0.0,
+       and horizontal same-line fragments ('嘿' + '~～～') must group on the same line.
+    2. Book title ('金瓶梅') on the tilted book cover retains its vertical orientation.
+    3. The page must produce exactly 3 regions.
+    """
+    img_path = FIXTURES_DIR / "page_58971.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 3, f"Expected exactly 3 regions on page 58971, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    b0 = next((r for r in resp.regions if "侠女" in r.text), None)
+    assert b0 is not None, f"Top dialogue bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert b0.angle == 0.0, f"Top dialogue bubble must have angle 0.0, got {b0.angle}"
+    assert b0.vertical is False
+    assert "嘿~～～" in b0.text or "嘿~~~" in b0.text or "嘿～～～" in b0.text
+
+    b1 = next((r for r in resp.regions if "金瓶梅" in r.text), None)
+    assert b1 is not None, f"Book title missing. Found: {[r.text for r in resp.regions]}"
+    assert b1.vertical is True
+
+    b2 = next((r for r in resp.regions if "江湖上" in r.text), None)
+    assert b2 is not None, f"Bottom dialogue bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert b2.angle == 0.0
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58994.png").exists(),
+    reason="Page 58994 sample fixture not found",
+)
+def test_page_58994_short_trailing_line_angle_stability():
+    """Page 58994 regression test:
+    1. The dialogue bubble ('这是我第二次\\n来这里，上次\\n来还是在两年\\n前，') must maintain angle = 0.0,
+       not rotate due to subpixel baseline jitter on the 1-character trailing line ('前，').
+    2. The page must produce exactly 1 clean dialogue region.
+    """
+    img_path = FIXTURES_DIR / "page_58994.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 1, f"Expected exactly 1 dialogue region on page 58994, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    b0 = resp.regions[0]
+    assert b0.angle == 0.0, f"Dialogue bubble must have angle 0.0, got {b0.angle}"
+    assert b0.vertical is False
+    assert "这是我第二次" in b0.text
+    assert b0.text.endswith("前，") or b0.text.endswith("前,") or "前" in b0.text
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58966.png").exists(),
+    reason="Page 58966 sample fixture not found",
+)
+def test_page_58966_trailing_ellipsis_coverage():
+    """Page 58966 regression test:
+    Top dialogue bubble ('我比较特殊，仙人能\\n帮我消除部分影响，\\n而且她的位格更高……') has a trailing
+    ellipsis on line 3. The region polygon and box must expand rightward past x=830 to enclose all
+    dots of the ellipsis, so inpainting completely removes the dots without leaving residue.
+    """
+    img_path = FIXTURES_DIR / "page_58966.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 2, f"Expected 2 regions on page 58966, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    b0 = next((r for r in resp.regions if "仙人能" in r.text), None)
+    assert b0 is not None, f"Top dialogue bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "……" in b0.text or "..." in b0.text
+    # Region must extend to at least x=830 to fully enclose all ellipsis dots
+    assert b0.box.x + b0.box.w >= 830, f"Box width must cover the ellipsis (right >= 830): {b0.box}"
+    assert max(p[0] for p in b0.polygon) >= 830, f"Polygon must cover the ellipsis: {b0.polygon}"
+
+    # Verify inpainting leaves no dark residual dots on the white bubble background
+    cleaned = pipeline.clean_image(img, [pipeline.CleanRequestRegion(id=r.id, box=r.box, polygon=r.polygon) for r in resp.regions])
+    # The bubble interior at line 3 tail (x=750..830, y=290..360) must be pure white background
+    gray = cv2.cvtColor(cleaned[290:360, 750:830], cv2.COLOR_BGR2GRAY)
+    assert float(np.mean(gray)) > 250.0, f"Ellipsis dots not completely inpainted: mean={np.mean(gray)}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58976.png").exists(),
+    reason="Page 58976 sample fixture not found",
+)
+def test_page_58976_flashback_scene_bubbles():
+    """Page 58976 regression test:
+    1. Flashback bubble ('生死爱恨... / 啊！真的太美了！ / 乱世！乱世呐！ / 黑暗的时刻就 / 要到来了！')
+       must capture all 5 lines in Region 1 without dropping lines due to tight vertical spacing.
+    2. The two distinct bottom-left oval speech bubbles:
+       Top bubble ('不过……她\\n不重要。') and Bottom bubble ('我真正想找的人\\n……是你。')
+       must NOT merge into one region, and each bubble must preserve both lines.
+    """
+    img_path = FIXTURES_DIR / "page_58976.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    # 1. Check flashback 5-line bubble
+    flashback = next((r for r in resp.regions if "生死" in r.text or "生、死" in r.text or "乱世" in r.text), None)
+    assert flashback is not None, f"Flashback bubble missing. Found: {[r.text for r in resp.regions]}"
+    f_lines = [l.strip() for l in flashback.text.splitlines() if l.strip()]
+    assert len(f_lines) == 5, f"Expected 5 lines in flashback bubble, got {len(f_lines)}: {f_lines}"
+    assert "生、死、爱、恨" in f_lines[0] or "生死" in f_lines[0]
+    assert "太美了" in f_lines[1]
+    assert "乱世" in f_lines[2]
+    assert "黑暗" in f_lines[3]
+    assert "要到来了" in f_lines[4]
+
+    # 2. Check bottom-left separate bubbles
+    b_top = next((r for r in resp.regions if "不过" in r.text), None)
+    assert b_top is not None, f"Top bottom-left bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "不重要" in b_top.text, f"Top bubble must include '不重要。': {repr(b_top.text)}"
+    assert "我真正想找的人" not in b_top.text, f"Top bubble must NOT merge with bottom bubble: {repr(b_top.text)}"
+
+    b_bot = next((r for r in resp.regions if "我真正想找的人" in r.text), None)
+    assert b_bot is not None, f"Bottom bubble missing. Found: {[r.text for r in resp.regions]}"
+    assert "是你" in b_bot.text, f"Bottom bubble must include '……是你。': {repr(b_bot.text)}"
+    assert "不过" not in b_bot.text, f"Bottom bubble must NOT merge with top bubble: {repr(b_bot.text)}"
+
+
+
+
+
+
+
+
+
+
 
 
 

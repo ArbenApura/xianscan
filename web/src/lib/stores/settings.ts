@@ -47,8 +47,18 @@ export const DEFAULTS: AppSettings = {
 
 const KEY = 'xianscan:settings';
 
-// COOKIE LETS THE SERVER RENDER THE CORRECT THEME ON FIRST PAINT (NO FLICKER)
+// COOKIE CONSTANTS FOR SSR PRE-RENDERING (NO FLICKER)
 export const THEME_COOKIE = 'mt_theme';
+export const LIB_LAYOUT_COOKIE = 'mt_lib_layout';
+export const CH_LAYOUT_COOKIE = 'mt_ch_layout';
+export const READER_VIEW_COOKIE = 'mt_reader_view';
+export const WEBTOON_KIND_COOKIE = 'mt_webtoon_kind';
+export const WEBTOON_WIDTH_COOKIE = 'mt_webtoon_width';
+
+export function setCookie(name: string, value: string): void {
+	if (typeof document === 'undefined') return;
+	document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=31536000; samesite=lax`;
+}
 
 const DARK_THEMES: Theme[] = ['dark'];
 
@@ -184,8 +194,11 @@ function createSettings() {
 		store.subscribe((s) => {
 			try {
 				localStorage.setItem(KEY, JSON.stringify(s));
-				// MIRROR THE THEME TO A COOKIE SO SSR CAN PRE-RENDER IT
-				document.cookie = `${THEME_COOKIE}=${s.theme}; path=/; max-age=31536000; samesite=lax`;
+				// MIRROR THE THEME & READER PREFERENCES TO COOKIES SO SSR CAN PRE-RENDER THEM
+				setCookie(THEME_COOKIE, s.theme);
+				setCookie(READER_VIEW_COOKIE, s.readerViewMode);
+				setCookie(WEBTOON_KIND_COOKIE, s.webtoonKind);
+				setCookie(WEBTOON_WIDTH_COOKIE, s.webtoonWidth);
 			} catch {
 				// IGNORE STORAGE ERRORS (PRIVATE MODE / QUOTA)
 			}

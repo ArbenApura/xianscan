@@ -12,6 +12,7 @@
 	export let pages: any[] = [];
 	export let running = false;
 	export let reloadKey = Date.now();
+	export let pageVersions: Record<number, number> = {};
 	export let draggedPageIndex: number | null = null;
 	export let dragOverPageIndex: number | null = null;
 
@@ -107,6 +108,7 @@
 
 <div class="flex flex-col gap-6 w-full">
 	{#each pages as page, idx (page.id)}
+		{@const hasRatio = Boolean(page.width && page.height)}
 		<div
 			draggable="true"
 			on:dragstart={(e) => dispatch('dragStart', { event: e, index: idx })}
@@ -118,6 +120,7 @@
 					? 'border-[#b23a2e] ring-2 ring-[#b23a2e]/40 bg-[#b23a2e]/5 scale-[1.01] z-10'
 					: 'border-black/[0.08] bg-white/40 hover:border-[#b23a2e]/40 hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02]'
 			} ${draggedPageIndex === idx ? 'opacity-40 scale-95' : ''}`}
+			style="content-visibility: auto; contain-intrinsic-size: auto 600px;"
 		>
 			<div class="mb-3 flex items-center justify-between text-xs font-bold">
 				<div class="flex items-center gap-2">
@@ -154,17 +157,22 @@
 			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 				<!-- ORIGINAL PAGE COLUMN -->
 				<div class="flex flex-col">
-					<div class="group/img relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10">
+					<div
+						class="group/img relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10"
+						style={hasRatio ? `aspect-ratio: ${page.width} / ${page.height};` : 'aspect-ratio: 2 / 3;'}
+					>
 						<!-- svelte-ignore a11y-click-events-have-key-events -->
 						<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
 						<img
-							src={`/api/pages/${page.id}/file?kind=original&v=${reloadKey}`}
+							src={`/api/pages/${page.id}/file?kind=original&v=orig${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
 							alt={`Page ${page.seq + 1} Original`}
+							loading="lazy"
+							decoding="async"
 							draggable="false"
-							class="w-full h-auto block object-contain select-none cursor-pointer"
+							class="w-full h-full block object-contain select-none cursor-pointer"
 							on:click={() => dispatch('inspect', page)}
 						/>
-						<div class="absolute bottom-2 left-2 flex items-center gap-1.5">
+						<div class="absolute bottom-2 left-2 flex items-center gap-1.5 pointer-events-none">
 							<span class="rounded bg-black/80 px-2 py-0.5 text-[10px] font-bold text-white backdrop-blur">
 								Original
 							</span>
@@ -175,24 +183,32 @@
 				<!-- TRANSLATED / CLEANED OUTPUT COLUMN -->
 				<div class="flex flex-col">
 					{#if page.outputPath}
-						<div class="group/img relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10">
+						<div
+							class="group/img relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10"
+							style={hasRatio ? `aspect-ratio: ${page.width} / ${page.height};` : 'aspect-ratio: 2 / 3;'}
+						>
 							<!-- svelte-ignore a11y-click-events-have-key-events -->
 							<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
 							<img
-								src={`/api/pages/${page.id}/file?kind=output&v=${page.outputPath}_${reloadKey}`}
+								src={`/api/pages/${page.id}/file?kind=output&v=${page.outputPath}${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
 								alt={`Page ${page.seq + 1} Output`}
+								loading="lazy"
+								decoding="async"
 								draggable="false"
-								class="w-full h-auto block object-contain select-none cursor-pointer"
+								class="w-full h-full block object-contain select-none cursor-pointer"
 								on:click={() => dispatch('inspect', page)}
 							/>
-							<div class="absolute bottom-2 left-2 flex items-center gap-1.5">
+							<div class="absolute bottom-2 left-2 flex items-center gap-1.5 pointer-events-none">
 								<span class="rounded bg-black/80 px-2 py-0.5 text-[10px] font-bold text-white backdrop-blur">
 									Translated
 								</span>
 							</div>
 						</div>
 					{:else}
-						<div class="flex h-64 items-center justify-center rounded-lg border border-dashed border-black/20 text-xs opacity-50 dark:border-white/20">
+						<div
+							class="flex items-center justify-center rounded-lg border border-dashed border-black/20 text-xs opacity-50 dark:border-white/20"
+							style={hasRatio ? `aspect-ratio: ${page.width} / ${page.height};` : 'min-height: 240px;'}
+						>
 							Translation not completed yet
 						</div>
 					{/if}

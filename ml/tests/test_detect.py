@@ -9,7 +9,6 @@ import pytest
 from app.detect import (
 	box_score_fast,
 	box_to_xywh,
-	classify_region,
 	crop_padded,
 	get_mini_boxes,
 	group_paragraphs,
@@ -136,18 +135,6 @@ class TestBoxGeometry:
 		assert is_vertical_box(tall) is True
 		assert is_vertical_box(wide) is False
 
-	def test_classify_region(self):
-		# SFX: WIDE **AND** VERY TALL (h=260 > 0.2×1200, w=500 > 0.45×800)
-		sfx = np.array([[0, 0], [500, 0], [500, 260], [0, 260]], dtype=np.float64)
-		dialogue = np.array([[10, 10], [110, 10], [110, 60], [10, 60]], dtype=np.float64)
-		# A FULL-WIDTH LINE OF NORMAL HEIGHT (THE MERGED UNION OF ONE LONG LINE) IS DIALOGUE
-		wide_line = np.array([[0, 0], [500, 0], [500, 90], [0, 90]], dtype=np.float64)
-		# A 4-LINE PARAGRAPH IS TALL BUT ITS LINES ARE SMALL — DIALOGUE, NOT SFX
-		paragraph = np.array([[80, 500], [500, 500], [500, 700], [80, 700]], dtype=np.float64)
-		assert classify_region(sfx, page_w=800, page_h=1200) == "sfx"
-		assert classify_region(dialogue, page_w=800, page_h=1200) == "dialogue"
-		assert classify_region(wide_line, page_w=800, page_h=1200) == "dialogue"
-		assert classify_region(paragraph, page_w=800, page_h=1200) == "dialogue"
 
 
 class TestMergeTextLines:

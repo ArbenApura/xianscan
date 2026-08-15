@@ -351,7 +351,6 @@ export interface ChapterRegionData {
 	id: number;
 	seq: number;
 	box: unknown;
-	category: string;
 	textSource: string;
 	textTarget: string | null;
 	conf: number | null;
@@ -486,7 +485,7 @@ export async function getChapterReaderData(chapterId: number): Promise<ChapterRe
 				id: r.id,
 				seq: r.seq,
 				box: safeJson(r.box),
-				category: r.category,
+				category: (r as any).category ?? 'dialogue',
 				textSource: r.textSource,
 				textTarget: r.textTarget,
 				conf: r.conf,

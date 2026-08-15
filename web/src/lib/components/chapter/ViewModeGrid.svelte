@@ -13,6 +13,7 @@
 	export let pages: any[] = [];
 	export let running = false;
 	export let reloadKey = Date.now();
+	export let pageVersions: Record<number, number> = {};
 	export let webtoonKind: 'output' | 'original' = 'output';
 	export let draggedPageIndex: number | null = null;
 	export let dragOverPageIndex: number | null = null;
@@ -109,6 +110,8 @@
 
 <div class="grid w-full gap-4 sm:grid-cols-2 lg:grid-cols-3">
 	{#each pages as page, idx (page.id)}
+		{@const isOutput = webtoonKind === 'output' && Boolean(page.outputPath)}
+		{@const hasRatio = Boolean(page.width && page.height)}
 		<div
 			draggable="true"
 			on:dragstart={(e) => dispatch('dragStart', { event: e, index: idx })}
@@ -120,6 +123,7 @@
 					? 'border-[#b23a2e] ring-2 ring-[#b23a2e]/40 bg-[#b23a2e]/5 scale-[1.02] z-10'
 					: 'border-black/[0.08] bg-white/40 hover:border-[#b23a2e]/40 hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02]'
 			} ${draggedPageIndex === idx ? 'opacity-40 scale-95' : ''}`}
+			style="content-visibility: auto; contain-intrinsic-size: auto 380px;"
 		>
 			<div>
 				<div class="mb-2 flex items-center justify-between">
@@ -153,29 +157,22 @@
 					</div>
 				</div>
 
-				<!-- IMAGE CONTAINER -->
-				<div class="relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10">
-					{#if page.status === 'done' && page.outputPath && webtoonKind === 'output'}
-						<!-- svelte-ignore a11y-click-events-have-key-events -->
-						<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
-						<img
-							src={`/api/pages/${page.id}/file?kind=output&v=${page.outputPath || 'orig'}_${reloadKey}`}
-							alt={`Page ${page.seq + 1}`}
-							draggable="false"
-							class="w-full object-cover transition-opacity duration-200 select-none cursor-pointer"
-							on:click={() => dispatch('inspect', page)}
-						/>
-					{:else}
-						<!-- svelte-ignore a11y-click-events-have-key-events -->
-						<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
-						<img
-							src={`/api/pages/${page.id}/file?kind=original&v=${reloadKey}`}
-							alt={`Page ${page.seq + 1}`}
-							draggable="false"
-							class="w-full object-cover select-none cursor-pointer"
-							on:click={() => dispatch('inspect', page)}
-						/>
-					{/if}
+				<!-- IMAGE CONTAINER (USES FAST 480PX MEMOIZED THUMBNAIL CACHE) -->
+				<div
+					class="relative overflow-hidden rounded-lg border border-black/10 bg-black/5 dark:border-white/10"
+					style={hasRatio ? `aspect-ratio: ${page.width} / ${page.height};` : 'aspect-ratio: 2 / 3;'}
+				>
+					<!-- svelte-ignore a11y-click-events-have-key-events -->
+					<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+					<img
+						src={`/api/pages/${page.id}/file?kind=thumb&w=480&target=${isOutput ? 'output' : 'original'}&v=${page.outputPath || 'orig'}${pageVersions[page.id] ? `_${pageVersions[page.id]}` : ''}`}
+						alt={`Page ${page.seq + 1}`}
+						loading="lazy"
+						decoding="async"
+						draggable="false"
+						class="h-full w-full object-cover transition-opacity duration-200 select-none cursor-pointer"
+						on:click={() => dispatch('inspect', page)}
+					/>
 				</div>
 
 				{#if page.error}

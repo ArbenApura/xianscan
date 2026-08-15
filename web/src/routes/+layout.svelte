@@ -6,8 +6,20 @@
 	// IMPORTED MODULES
 	import '../app.css';
 	import { settings, THEME_CLASS, applyThemeClass } from '$lib/stores/settings';
+	import type { LayoutData } from './$types';
 
-	// -- REACTIVE STATEMENTS -- //
+	export let data: LayoutData;
+
+	// SYNC STORE FROM SSR PREFERENCES (RUNS ON SERVER DURING SSR AND ON HYDRATION)
+	$: if (data?.preferences) {
+		settings.update((s) => ({
+			...s,
+			theme: data.preferences.theme ?? s.theme,
+			readerViewMode: data.preferences.readerViewMode ?? s.readerViewMode,
+			webtoonKind: data.preferences.webtoonKind ?? s.webtoonKind,
+			webtoonWidth: data.preferences.webtoonWidth ?? s.webtoonWidth,
+		}));
+	}
 
 	// KEEP THE DOCUMENT ROOT (dark CLASS, color-scheme, BG) IN SYNC WITH THE ACTIVE THEME
 	$: if (browser) applyThemeClass($settings.theme);

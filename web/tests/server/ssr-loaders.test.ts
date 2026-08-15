@@ -138,7 +138,6 @@ describe('SSR Data Loaders and Services', () => {
 					pageId: 300,
 					seq: 0,
 					box: JSON.stringify([10, 10, 100, 50]),
-					category: 'dialogue',
 					textSource: '안녕하세요',
 					textTarget: 'Hello',
 					conf: 0.98,

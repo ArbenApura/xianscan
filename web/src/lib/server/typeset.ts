@@ -16,7 +16,6 @@ export interface TypesetRegion {
 	id: string;
 	box: TypesetBox;
 	text: string;
-	category: 'dialogue' | 'sfx' | 'mono' | 'other';
 	vertical?: boolean;
 	angle?: number;
 }
@@ -99,23 +98,20 @@ function registerFonts(): void {
 	}
 }
 
-const SPECIAL_FONT_CHARS = /[\[\]{}【】〔〕_|^~`<>]/;
 // Matches Japanese Hiragana, Katakana, Kanji, and Korean Hangul
 const CJK_REGEX = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
 
-export function fontFor(category: TypesetRegion['category'], text?: string): string {
-	if (text && (SPECIAL_FONT_CHARS.test(text) || CJK_REGEX.test(text))) {
+export function fontFor(text?: string): string {
+	if (text && CJK_REGEX.test(text)) {
 		return FONT_FALLBACK_NAME;
 	}
-	return category === 'sfx' ? FONT_SFX : FONT_DIALOGUE;
+	return FONT_DIALOGUE;
 }
 
-export function fontSpec(size: number, categoryOrFont?: TypesetRegion['category'] | string, text?: string): string {
-	const fontName = !categoryOrFont
-		? (text && CJK_REGEX.test(text) ? FONT_FALLBACK_NAME : FONT_DIALOGUE)
-		: categoryOrFont === 'sfx' || categoryOrFont === 'dialogue' || categoryOrFont === 'mono' || categoryOrFont === 'other'
-		? fontFor(categoryOrFont, text)
-		: categoryOrFont;
+export function fontSpec(size: number, fontNameOrText?: string, text?: string): string {
+	const fontName = fontNameOrText && fontNameOrText !== FONT_DIALOGUE && fontNameOrText !== FONT_FALLBACK_NAME
+		? fontNameOrText
+		: (text && CJK_REGEX.test(text) ? FONT_FALLBACK_NAME : FONT_DIALOGUE);
 	if (fontName === FONT_FALLBACK_NAME) {
 		return `bold ${size}px "${FONT_FALLBACK_NAME}", "Yu Gothic Bold", "Yu Gothic", "Microsoft YaHei Bold", "Microsoft YaHei", Arial, "Segoe UI", sans-serif`;
 	}
@@ -426,6 +422,7 @@ export function sanitizeForFont(text: string): string {
 		.replace(/[》」』]/g, '"')
 		.replace(/[“”„‟]/g, '"')
 		.replace(/[‘’‚‛]/g, "'")
+		.replace(/[〜～]/g, '~')
 		.replace(/\s*[—–]+\s*/g, ', ')
 		.replace(/,\s*,/g, ', ')
 		.replace(/\.\s*,/g, '. ')
@@ -491,7 +488,7 @@ export function typesetStatPanel(
 		let h2 = gapTotal;
 		for (const seg of segments) {
 			const sz = Math.max(MIN_FONT_SIZE, Math.round(base * SEG_SCALE[seg.kind]));
-			const segFont = fontFor(r.category, seg.text);
+			const segFont = fontFor(seg.text);
 			ctx.font = fontSpec(sz, segFont);
 			if (seg.kind === 'title') {
 				// Title stays on one line; brackets extend outward so only reserve gutter space
@@ -524,7 +521,7 @@ export function typesetStatPanel(
 
 	for (const seg of segments) {
 		const size = Math.max(MIN_FONT_SIZE, Math.round(baseSize * SEG_SCALE[seg.kind]));
-		const segFont = fontFor(r.category, seg.text);
+		const segFont = fontFor(seg.text);
 		ctx.font = fontSpec(size, segFont);
 		const lines = seg.kind === 'title' ? [seg.text] : balancedWrapText(ctx, seg.text, insetW);
 		totalH += lines.length * size * LINE_HEIGHT;
@@ -660,7 +657,7 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		// TINY ACTION/EMOTE BADGE (e.g. "转", "汗", "!", size <= 32px):
 		// When inpainting erases a circular emote sticker on dark artwork/grass,
 		// restore a clean pure white circular badge backing without border.
-		const isTinyBadge = Math.max(w, h) <= 32 && r.category !== 'mono';
+		const isTinyBadge = Math.max(w, h) <= 32;
 		if (isTinyBadge) {
 			const cx = x + w / 2;
 			const cy = y + h / 2;
@@ -678,13 +675,13 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		const angleDeg = r.angle ?? 0;
 		const hasRotation = Math.abs(angleDeg) >= 2.0 && Math.abs(angleDeg) <= 45.0;
 
-		const font = fontFor(r.category, text);
-		const startSize = Math.max(MIN_FONT_SIZE, Math.min(w, h) * (r.category === 'sfx' ? 0.6 : 0.45) * scale);
+		const font = fontFor(text);
+		const startSize = Math.max(MIN_FONT_SIZE, Math.min(w, h) * 0.45 * scale);
 
-		// CAP DIALOGUE MAX FONT SIZE SO IT SITS NATURALLY INSIDE THE BUBBLE CONTOUR
-		const rawMax = r.category === 'sfx' ? startSize : Math.max(startSize, Math.min(h * 0.6, startSize * 1.25));
-		const categoryCap = r.category === 'sfx' ? MAX_SFX_FONT_SIZE : MAX_DIALOGUE_FONT_SIZE * scale;
-		const maxSize = Math.min(rawMax, categoryCap);
+		// CAP MAX FONT SIZE SO IT SITS NATURALLY INSIDE THE BUBBLE CONTOUR
+		const rawMax = Math.max(startSize, Math.min(h * 0.6, startSize * 1.25));
+		const sizeCap = MAX_DIALOGUE_FONT_SIZE * scale;
+		const maxSize = Math.min(rawMax, sizeCap);
 		const size = fitFontSize(ctx, text, font, w, h, startSize, maxSize);
 		ctx.font = fontSpec(size, font, text);
 		const isSingleWord = !text.includes(' ') && !text.includes('\n');

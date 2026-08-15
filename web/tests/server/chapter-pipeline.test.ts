@@ -51,7 +51,6 @@ class FakePipeline implements PipelineClient {
 						[120, 70],
 						[20, 70],
 					],
-					category: 'dialogue',
 					text: '你好',
 					confidence: 0.95,
 					vertical: false,
@@ -307,8 +306,8 @@ describe('runChapterPipeline', () => {
 			height: 300,
 			backend: 'comic-ctd',
 			regions: [
-				{ id: 'r0', box: { x: 0, y: 0, w: 50, h: 20 }, polygon: [[0, 0]], category: 'dialogue', text: '甲', confidence: 0.9, vertical: false },
-				{ id: 'r1', box: { x: 0, y: 100, w: 50, h: 20 }, polygon: [[0, 100]], category: 'sfx', text: '轰', confidence: 0.9, vertical: false },
+				{ id: 'r0', box: { x: 0, y: 0, w: 50, h: 20 }, polygon: [[0, 0]], text: '甲', confidence: 0.9, vertical: false },
+				{ id: 'r1', box: { x: 0, y: 100, w: 50, h: 20 }, polygon: [[0, 100]], text: '轰', confidence: 0.9, vertical: false },
 			],
 		});
 		await chapterWork(chapter.id, { pipeline: multi, dataRoot, llm: fakeLlm({ r0: 'A', r1: 'BOOM' }) })(
@@ -331,8 +330,8 @@ describe('runChapterPipeline', () => {
 			height: 300,
 			backend: 'comic-ctd',
 			regions: [
-				{ id: 'r0', box: { x: 10, y: 10, w: 50, h: 20 }, polygon: [[10, 10]], category: 'dialogue', text: '你好', confidence: 0.9, vertical: false },
-				{ id: 'r1', box: { x: 100, y: 10, w: 90, h: 20 }, polygon: [[100, 10]], category: 'other', text: 'www.baozimh.com', confidence: 0.9, vertical: false },
+				{ id: 'r0', box: { x: 10, y: 10, w: 50, h: 20 }, polygon: [[10, 10]], text: '你好', confidence: 0.9, vertical: false },
+				{ id: 'r1', box: { x: 100, y: 10, w: 90, h: 20 }, polygon: [[100, 10]], text: 'www.baozimh.com', confidence: 0.9, vertical: false },
 			],
 		});
 		wmPipeline.clean = async (_image: Buffer, regionsPassed: unknown[]) => {

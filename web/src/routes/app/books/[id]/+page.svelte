@@ -7,7 +7,7 @@
 	import { Button, TextField, Badge, Modal, ConfirmDialog, ActionMenu, LanguagePicker, Toggle, LazyImage, Checkbox } from '$lib/components/ui';
 	import { ripple } from '$lib/actions/ripple';
 	import { apiJson } from '$lib/api';
-	import { settings, THEME_POPOVER, THEME_PANEL_BORDER } from '$lib/stores/settings';
+	import { settings, THEME_POPOVER, THEME_PANEL_BORDER, CH_LAYOUT_COOKIE, setCookie } from '$lib/stores/settings';
 	import { jobTracker } from '$lib/stores/job-tracker';
 	import { batchTracker, batchProgress } from '$lib/stores/batch-tracker';
 	import { cn } from '$lib/utils/cn';
@@ -89,7 +89,7 @@
 	}
 
 	// VIEW LAYOUT MODES: 'grid' (Comfortable Cards) | 'list' (Media List Rows) | 'compact' (Dense Table Rows)
-	let viewLayout: 'grid' | 'list' | 'compact' = 'grid';
+	let viewLayout: 'grid' | 'list' | 'compact' = (data as any)?.preferences?.chapterLayout || 'grid';
 
 	function handleGlobalKeydown(e: KeyboardEvent) {
 		if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
@@ -137,7 +137,10 @@
 		try {
 			const saved = localStorage.getItem('xianscan:chapterViewLayout') || localStorage.getItem('manhua:chapterViewLayout');
 			if (saved === 'grid' || saved === 'list' || saved === 'compact') {
-				viewLayout = saved;
+				if (!data.preferences?.chapterLayout) {
+					viewLayout = saved;
+				}
+				setCookie(CH_LAYOUT_COOKIE, viewLayout);
 			}
 		} catch {
 			// ignore
@@ -146,6 +149,7 @@
 
 	function setViewLayout(mode: 'grid' | 'list' | 'compact') {
 		viewLayout = mode;
+		setCookie(CH_LAYOUT_COOKIE, mode);
 		try {
 			localStorage.setItem('xianscan:chapterViewLayout', mode);
 		} catch {

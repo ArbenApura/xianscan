@@ -112,7 +112,6 @@ function regionRow(region: PipelineRegion, seq: number) {
 		seq,
 		box: JSON.stringify(region.box),
 		polygon: JSON.stringify(region.polygon),
-		category: region.category,
 		textSource: region.text,
 		conf: region.confidence,
 		status: 'pending' as const,
@@ -249,7 +248,7 @@ export async function runChapterPipeline(
 					if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
 
 					// PHASE 2: TRANSLATE
-					const sources = analyzed.regions.filter((r) => r.text.trim().length > 0).map((r) => ({ id: r.id, text: r.text, category: r.category }));
+					const sources = analyzed.regions.filter((r) => r.text.trim().length > 0).map((r) => ({ id: r.id, text: r.text }));
 					const byRegion = new Map<string, string>();
 					if (sources.length > 0) {
 						emit({ type: 'page-step-start', chapterId, page: injectIdx, pageId: injectRow.id, step: 'match_glossary' });
@@ -308,7 +307,7 @@ export async function runChapterPipeline(
 					// TYPESET
 					emit({ type: 'page-step-start', chapterId, page: injectIdx, pageId: injectRow.id, step: 'typeset' });
 					const tTy0 = performance.now();
-					const typesetRegions = analyzed.regions.filter((r) => Boolean(byRegion.get(r.id)?.trim())).map((r) => ({ id: r.id, box: r.box, text: byRegion.get(r.id)!, category: r.category, vertical: r.vertical, angle: r.angle }));
+					const typesetRegions = analyzed.regions.filter((r) => Boolean(byRegion.get(r.id)?.trim())).map((r) => ({ id: r.id, box: r.box, text: byRegion.get(r.id)!, vertical: r.vertical, angle: r.angle }));
 					const out = await typesetPage(cleaned, typesetRegions);
 					if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
 					const outputPath = `output/${chapterId}/${injectRow.seq}.png`;
@@ -497,7 +496,7 @@ export async function runChapterPipeline(
 				// 3) TRANSLATE — LLM SEMANTICALLY TRANSLATES VALID DIALOGUE & EMITS "" FOR WATERMARKS/STAMPS
 				const sources = analyzed.regions
 					.filter((r) => r.text.trim().length > 0)
-					.map((r) => ({ id: r.id, text: r.text, category: r.category }));
+					.map((r) => ({ id: r.id, text: r.text }));
 				const byRegion = new Map<string, string>();
 
 				if (sources.length > 0) {
@@ -639,7 +638,6 @@ export async function runChapterPipeline(
 						id: r.id,
 						box: r.box,
 						text: byRegion.get(r.id)!,
-						category: r.category,
 						vertical: r.vertical,
 						angle: r.angle,
 					}));

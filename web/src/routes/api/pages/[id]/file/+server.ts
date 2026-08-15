@@ -2,7 +2,8 @@
 // IMPORTED DEP-MODULES
 import { error } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFile, stat } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 // IMPORTED MODULES
@@ -22,7 +23,7 @@ const MIME_BY_EXT: Record<string, string> = {
 	'.avif': 'image/avif',
 };
 
-export const GET: RequestHandler = async ({ params, url }) => {
+export const GET: RequestHandler = async ({ params, url, request }) => {
 	const pageId = Number(params.id);
 	if (!Number.isInteger(pageId)) throw error(400, 'Invalid page id.');
 	const kind = url.searchParams.get('kind') ?? 'original';
@@ -34,18 +35,33 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	// THUMBNAIL SERVING & MEMOIZED DISK CACHING
 	if (kind === 'thumb') {
 		const targetWidth = Math.min(800, Math.max(80, parseInt(url.searchParams.get('w') || '280', 10)));
-		const rel = page.outputPath ?? page.filePath;
+		const target = url.searchParams.get('target') || (url.searchParams.get('output') === '0' ? 'original' : 'output');
+		const rel = (target === 'output' && page.outputPath) ? page.outputPath : page.filePath;
 		if (!rel) throw error(404, 'No image available for this page.');
 
+		const isOutput = rel === page.outputPath;
 		const thumbDir = join(DATA_ROOT, 'cache', 'thumbs');
-		const cacheKey = `${page.id}_${page.outputPath ? 'out' : 'orig'}_${targetWidth}.jpg`;
+		const cacheKey = `${page.id}_${isOutput ? 'out' : 'orig'}_${targetWidth}.jpg`;
 		const cachePath = join(thumbDir, cacheKey);
 
 		if (existsSync(cachePath)) {
-			const cachedBytes = readFileSync(cachePath);
+			const fileStat = await stat(cachePath);
+			const etag = `W/"${fileStat.size.toString(16)}-${Math.floor(fileStat.mtimeMs).toString(16)}"`;
+			if (request.headers.get('if-none-match') === etag) {
+				return new Response(null, {
+					status: 304,
+					headers: {
+						'etag': etag,
+						'cache-control': 'public, max-age=604800, stale-while-revalidate=86400',
+					},
+				});
+			}
+
+			const cachedBytes = await readFile(cachePath);
 			return new Response(cachedBytes, {
 				headers: {
 					'content-type': 'image/jpeg',
+					'etag': etag,
 					'cache-control': 'public, max-age=604800, stale-while-revalidate=86400',
 				},
 			});
@@ -72,9 +88,13 @@ export const GET: RequestHandler = async ({ params, url }) => {
 			});
 		} catch {
 			// FALLBACK TO FULL IMAGE IF THUMBNAIL RESIZING ENCOUNTERS AN UNEXPECTED IO ISSUE
-			const bytes = readFileSync(join(DATA_ROOT, rel));
+			const fullPath = join(DATA_ROOT, rel);
+			const bytes = await readFile(fullPath);
 			return new Response(bytes, {
-				headers: { 'content-type': MIME_BY_EXT[extname(rel).toLowerCase()] ?? 'image/jpeg' },
+				headers: {
+					'content-type': MIME_BY_EXT[extname(rel).toLowerCase()] ?? 'image/jpeg',
+					'cache-control': 'public, max-age=86400, stale-while-revalidate=86400',
+				},
 			});
 		}
 	}
@@ -86,10 +106,32 @@ export const GET: RequestHandler = async ({ params, url }) => {
 				? page.outputPath
 				: page.filePath;
 	if (!rel) throw error(404, `No ${kind} image for this page yet.`);
-	const bytes = readFileSync(join(DATA_ROOT, rel));
+
+	const fullPath = join(DATA_ROOT, rel);
+	if (!existsSync(fullPath)) {
+		throw error(404, `Image file not found on disk.`);
+	}
+
+	const fileStat = await stat(fullPath);
+	const etag = `W/"${fileStat.size.toString(16)}-${Math.floor(fileStat.mtimeMs).toString(16)}"`;
+	if (request.headers.get('if-none-match') === etag) {
+		return new Response(null, {
+			status: 304,
+			headers: {
+				'etag': etag,
+				'cache-control': 'public, max-age=86400, stale-while-revalidate=86400',
+			},
+		});
+	}
+
+	const bytes = await readFile(fullPath);
 	const mime = MIME_BY_EXT[extname(rel).toLowerCase()] ?? 'application/octet-stream';
 
 	return new Response(bytes, {
-		headers: { 'content-type': mime, 'cache-control': 'no-cache' },
+		headers: {
+			'content-type': mime,
+			'etag': etag,
+			'cache-control': 'public, max-age=86400, stale-while-revalidate=86400',
+		},
 	});
 };

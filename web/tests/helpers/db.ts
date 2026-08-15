@@ -104,7 +104,7 @@ export function seedPage(db: TestDb, input: { chapterId: number; seq: number; fi
 
 export function seedRegion(
 	db: TestDb,
-	input: { pageId: number; seq: number; box?: string; category?: 'dialogue' | 'sfx' | 'mono' | 'other'; textSource?: string },
+	input: { pageId: number; seq: number; box?: string; textSource?: string },
 ) {
 	return db
 		.insert(schema.regions)
@@ -112,7 +112,6 @@ export function seedRegion(
 			pageId: input.pageId,
 			seq: input.seq,
 			box: input.box ?? JSON.stringify({ x: 10, y: 10, w: 100, h: 50 }),
-			category: input.category ?? 'dialogue',
 			textSource: input.textSource ?? '',
 		})
 		.returning()

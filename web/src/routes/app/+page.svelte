@@ -5,7 +5,7 @@
 	import { toast } from 'svelte-sonner';
 	import { Button, TextField, Modal, ConfirmDialog, ActionMenu, LanguagePicker, Toggle, LazyImage, Badge } from '$lib/components/ui';
 	import { ripple } from '$lib/actions/ripple';
-	import { settings, THEME_POPOVER, THEME_PANEL_BORDER } from '$lib/stores/settings';
+	import { settings, THEME_POPOVER, THEME_PANEL_BORDER, LIB_LAYOUT_COOKIE, setCookie } from '$lib/stores/settings';
 	import { cn } from '$lib/utils/cn';
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
@@ -100,7 +100,7 @@
 	$: books = data.books;
 
 	// VIEW LAYOUT MODES: 'grid' (Comfortable Cards) | 'list' (Media List Rows) | 'compact' (Dense Table Rows)
-	let viewLayout: 'grid' | 'list' | 'compact' = 'grid';
+	let viewLayout: 'grid' | 'list' | 'compact' = (data as any)?.preferences?.libraryLayout || 'grid';
 
 	// EDIT BOOK STATES
 	let editModalOpen = false;
@@ -131,7 +131,10 @@
 		try {
 			const saved = localStorage.getItem('xianscan:libraryViewLayout') || localStorage.getItem('manhua:libraryViewLayout');
 			if (saved === 'grid' || saved === 'list' || saved === 'compact') {
-				viewLayout = saved;
+				if (!data.preferences?.libraryLayout) {
+					viewLayout = saved;
+				}
+				setCookie(LIB_LAYOUT_COOKIE, viewLayout);
 			}
 		} catch {
 			// ignore
@@ -140,6 +143,7 @@
 
 	function setViewLayout(mode: 'grid' | 'list' | 'compact') {
 		viewLayout = mode;
+		setCookie(LIB_LAYOUT_COOKIE, mode);
 		try {
 			localStorage.setItem('xianscan:libraryViewLayout', mode);
 		} catch {

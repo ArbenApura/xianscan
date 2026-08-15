@@ -212,6 +212,13 @@ def calculate_box_angle(box: np.ndarray | list[list[int | float]]) -> float:
 	while angle_deg < -90.0:
 		angle_deg += 180.0
 
+	# Short square-like boxes (w / h <= 1.6) have noisy baseline fits; snap angles < 5.0° to 0.0
+	if len(pts) == 4:
+		box_w = float(tr[0] - tl[0] + br[0] - bl[0]) / 2.0
+		box_h = float(bl[1] - tl[1] + br[1] - tr[1]) / 2.0
+		if box_w <= 1.6 * max(1.0, box_h) and abs(angle_deg) < 5.0:
+			return 0.0
+
 	# Slant angles > 45 degrees are vertical box aspect ratio artifacts, not text baseline slants.
 	# English typeset text is always horizontal; only moderate slants [-45°, 45°] (e.g. dynamic SFX) are rotated.
 	if abs(angle_deg) < 1.5 or abs(angle_deg) > 45.0:
@@ -220,21 +227,6 @@ def calculate_box_angle(box: np.ndarray | list[list[int | float]]) -> float:
 	return round(angle_deg, 2)
 
 
-def classify_region(box: np.ndarray, page_w: int, page_h: int) -> str:
-	"""CATEGORY HEURISTIC — SFX/IMPACT TEXT HAS BIG GLYPHS THAT DOMINATE A LARGE AREA.
-	A MULTI-LINE DIALOGUE PARAGRAPH CAN BE TALL BUT IS NARROW — IT MUST STAY 'dialogue'.
-
-	RULE: sfx ONLY WHEN THE BOX IS BOTH TALL AND WIDE:
-	  - h > 30% page_h  AND  w > 20% page_w  (large square-ish impact block), OR
-	  - w > 45% page_w  AND  h > 20% page_h  (wide banner SFX)
-	NARROW+TALL BOXES (multi-line bubbles) ARE ALWAYS 'dialogue'.
-
-	PURE + TESTED; THE WEB APP CAN OVERRIDE PER-REGION LATER.
-	"""
-	_x, _y, w, h = box_to_xywh(box)
-	if (h > page_h * 0.3 and w > page_w * 0.20) or (w > page_w * 0.45 and h > page_h * 0.2):
-		return "sfx"
-	return "dialogue"
 
 
 def box_iou(a: np.ndarray, b: np.ndarray) -> float:
@@ -496,7 +488,7 @@ def group_paragraphs(
 			is_parenthetical = bool(re.match(r"^[（\(\[【〔*]", txt.strip())) or bool(re.search(r"[）\)\]】〕]$", txt.strip()))
 			is_trailing_tail = (
 				(w <= max(80, int(lw * 0.65)) and h <= lh * 1.75)
-				or (len(txt.strip()) <= 4 and h <= lh * 1.80)
+				or (len(txt.strip()) > 0 and len(txt.strip()) <= 4 and h <= lh * 1.80)
 				or is_parenthetical
 			)
 			gap_multiplier = 2.8 if is_parenthetical else (1.4 if is_trailing_tail else 1.0)
@@ -504,11 +496,25 @@ def group_paragraphs(
 			if gap > max_allowed_gap or y < ly - 0.35 * min(h, lh):
 				continue
 
-			# A line ending with terminal full-stop '。' or colon ':：' is a completed sentence/command.
-			# If the previous line ended with terminal punctuation and there is a vertical gap, they are separate bubbles.
+			# HORIZONTAL CENTROID
+			new_cx = x + w / 2.0
+			para_mean_cx = sum(para_cx_lists[p_idx]) / len(para_cx_lists[p_idx])
+
+			# Terminal punctuation guard:
+			# 1. Full-stops '。' and semicolons ';；' signify complete statements.
+			# 2. Exclamation '！' and question marks '？' on short interjections/utterances (<= 5 chars)
+			#    or with large vertical gap / horizontal offset signify separate speech bubbles.
 			last_txt = para_texts[p_idx][-1] if para_texts[p_idx] else ""
-			if last_txt and bool(re.search(r"[。:：;；]$", last_txt.strip())) and gap >= 0.20 * min(h, lh):
-				continue
+			if last_txt:
+				last_strip = last_txt.strip()
+				if bool(re.search(r"[。;；]$", last_strip)) and (gap >= 0.15 * min(h, lh) or abs(new_cx - para_mean_cx) > 0.35 * min(w, lw)):
+					continue
+				if bool(re.search(r"[!！?？]$", last_strip)):
+					is_short_utterance = len(last_strip) <= 5
+					has_noticeable_gap = gap >= 0.30 * min(h, lh)
+					has_offset = abs(new_cx - para_mean_cx) > 0.45 * min(w, lw)
+					if (is_short_utterance and gap >= 0.20 * min(h, lh)) or has_noticeable_gap or has_offset:
+						continue
 
 			# FONT-SIZE GATE: ONLY LINES OF SIMILAR FONT SIZE GROUP (OR SHORT TRAILING LINE / ELLIPSIS / PARENTHETICAL).
 			height_ratio = max(h, lh) / max(1.0, float(min(h, lh)))
@@ -524,13 +530,14 @@ def group_paragraphs(
 				continue
 
 			# X-CENTROID DRIFT GUARD: REJECT IF THE NEW LINE'S X-CENTER DEVIATES TOO FAR
-			# FROM THE PARAGRAPH'S ESTABLISHED MEAN X-CENTER. TWO SIDE-BY-SIDE BUBBLES AT
-			# THE SAME HEIGHT CAN PASS ALL THREE CHECKS ABOVE THROUGH A LAST-LINE CHAIN
-			# (L4 OF LEFT BUBBLE BARELY X-OVERLAPS R1 OF RIGHT BUBBLE), BUT THEIR CENTERS
-			# DIFFER BY >60% OF MAX LINE WIDTH → THEY BELONG TO DIFFERENT SPEECH BUBBLES.
-			new_cx = x + w / 2.0
-			para_mean_cx = sum(para_cx_lists[p_idx]) / len(para_cx_lists[p_idx])
-			if abs(new_cx - para_mean_cx) > centroid_drift_max * max(w, lw):
+			# FROM THE PARAGRAPH'S ESTABLISHED MEAN X-CENTER.
+			# If lines share a common left or right margin (e.g. stat card / system box / narrative block), allow max(w, lw).
+			is_left_aligned = abs(x - lx) <= 0.25 * min(w, lw)
+			is_right_aligned = abs(x1 - lx1) <= 0.25 * min(w, lw)
+			if is_trailing_tail or is_parenthetical or is_left_aligned or is_right_aligned:
+				if abs(new_cx - para_mean_cx) > centroid_drift_max * max(w, lw):
+					continue
+			elif abs(new_cx - para_mean_cx) > centroid_drift_max * min(w, lw):
 				continue
 
 			para.append(box)

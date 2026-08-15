@@ -94,7 +94,7 @@ export const pages = sqliteTable(
 );
 
 // ONE DETECTED TEXT REGION ON A PAGE (SPEECH BUBBLE / FLOATING TEXT / SFX). box IS A JSON OBJECT
-// {x, y, w, h} IN IMAGE PIXELS. category DRIVES THE TYPESETTING FONT/STYLE CHOICE.
+// {x, y, w, h} IN IMAGE PIXELS.
 export const regions = sqliteTable(
 	'regions',
 	{
@@ -107,8 +107,6 @@ export const regions = sqliteTable(
 		box: text('box').notNull(),
 		// [[x,y],...] JSON — THE DETECTOR'S POLYGON (MORE PRECISE THAN THE BOX FOR INPAINT MASKS).
 		polygon: text('polygon'),
-		// 'dialogue' (SPEECH BUBBLE) | 'sfx' (SOUND EFFECT) | 'mono' (NARRATION/FLOATING) | 'other'.
-		category: text('category', { enum: ['dialogue', 'sfx', 'mono', 'other'] }).notNull().default('dialogue'),
 		// OCR TEXT IN THE SOURCE LANGUAGE AND THE LLM TRANSLATION INTO THE TARGET LANGUAGE.
 		textSource: text('text_source').notNull().default(''),
 		textTarget: text('text_target'),

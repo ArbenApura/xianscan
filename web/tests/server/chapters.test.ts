@@ -171,7 +171,6 @@ describe('nextPageSeq & reorderPages', () => {
 				pageId: page.id,
 				seq: 0,
 				box: JSON.stringify({ x: 0, y: 0, w: 10, h: 10 }),
-				category: 'dialogue',
 				textSource: '你好',
 				textTarget: 'Hello',
 				status: 'translated',

@@ -5,7 +5,7 @@
 # ENDPOINTS:
 #   GET  /health         → {status, detector, inpainter, ocr} (MODEL AVAILABILITY, NOT JUST ALIVE)
 #   POST /pages/analyze  → multipart image → {width, height, backend, regions:[{id,box,polygon,
-#                           category,text,confidence,vertical}]}
+#                           text,confidence,vertical}]}"}
 #   POST /pages/clean    → multipart image + `regions` JSON field → PNG WITH ORIGINAL TEXT ERASED
 from contextlib import asynccontextmanager
 import json
@@ -123,7 +123,6 @@ def analyze(image: UploadFile = File(...)) -> dict:
                             id=f"r{idx}",
                             box=pipeline.Box(x=x, y=y, w=w, h=h),
                             polygon=[[int(p[0]), int(p[1])] for p in pts],
-                            category=detect.classify_region(pts, page_w, page_h),
                             text=t.strip(),
                             confidence=float(score),
                             vertical=detect.is_vertical_box(pts),

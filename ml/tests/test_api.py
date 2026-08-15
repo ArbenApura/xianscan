@@ -74,9 +74,8 @@ class TestAnalyze:
 		assert body["height"] == PAGE_H
 		assert body["backend"] == "comic-ctd"
 		assert [r["id"] for r in body["regions"]] == ["r0", "r1"]
-		# READING ORDER: DIALOGUE (TOP) FIRST, SFX (BOTTOM) SECOND
+		# READING ORDER: FIRST REGION (TOP), SECOND REGION (BOTTOM)
 		assert body["regions"][0]["box"] == {"x": 100, "y": 150, "w": 320, "h": 80}
-		assert body["regions"][1]["category"] == "sfx"
 		assert body["regions"][0]["text"] == "系统"
 		assert body["regions"][0]["confidence"] == pytest.approx(0.99)
 		assert body["regions"][0]["vertical"] is False
@@ -126,7 +125,6 @@ class TestAnalyze:
 		r0 = regions[0]
 		assert r0["box"] == {"x": 60, "y": 148, "w": 380, "h": 84}  # THE UNION OF BOTH BOXES
 		assert r0["text"] == "你好，世界！"  # THE RAPIDOCR LINE'S OWN TEXT WINS (FULL-LINE CONTEXT)
-		assert regions[1]["category"] == "sfx"
 
 	def test_multi_line_bubble_becomes_one_paragraph_region(self, monkeypatch, page_png):
 		# THE USER-REPORTED CASE: A BUBBLE WITH TWO STACKED LINES MUST BE ONE REGION (ONE
@@ -154,7 +152,6 @@ class TestAnalyze:
 		r0 = regions[0]
 		assert r0["box"] == {"x": 150, "y": 300, "w": 300, "h": 110}  # THE UNION OF BOTH LINES
 		assert r0["text"] == "这是第一行\n这是第二行"  # JOINED IN READING ORDER
-		assert regions[1]["category"] == "sfx"
 
 	def test_garbage_upload_is_400(self):
 		resp = client.post("/pages/analyze", files={"image": ("bad.bin", b"not an image", "application/octet-stream")})
@@ -282,7 +279,6 @@ class TestEllipsisRecovery:
 		assert int(poly[:, 1].max()) >= 226  # GROWN DOWN TO COVER THE DOTS LINE
 		assert int(poly[:, 0].max()) >= 260  # AND ITS FULL WIDTH
 		assert r.box.y + r.box.h >= 226  # TYPESET BOX FOLLOWS — TEXT STAYS CENTERED
-		assert r.category == "dialogue"  # CATEGORY UNCHANGED BY THE GROWTH
 
 	def test_lone_dot_line_joins_the_last_word(self, monkeypatch):
 		# THE USER-REPORTED PATTERN: "Transmigration.." WITH A LONE "." ON ITS OWN LINE IN THE
@@ -628,7 +624,6 @@ class TestClean:
 		assert len(res.regions) == 3
 		# Region 0: top panel text
 		assert "一起穿行在荒芜的沙漠" in res.regions[0].text
-		assert res.regions[0].category == "dialogue"
 		assert res.regions[0].box.h < 100
 		# Region 1: middle-right panel text
 		assert "幸福是如此短暂" in res.regions[1].text
