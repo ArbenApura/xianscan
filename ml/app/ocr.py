@@ -191,13 +191,49 @@ def recognize_crop_lines(
 
 
 def recognize_full(img_bgr: np.ndarray) -> list[tuple[np.ndarray, str, float]]:
-	"""FULL-PAGE DET+REC (FALLBACK BACKEND): [(4-POINT BOX IN ORIGINAL PIXELS, TEXT, SCORE), ...]."""
+	"""FULL-PAGE DET+REC: [(4-POINT BOX IN ORIGINAL PIXELS, TEXT, SCORE), ...]."""
 	txts, scores, boxes = _run_engine(img_bgr)
 	out = []
 	for box, text, score in zip(boxes, txts, scores):
 		t = str(text).strip()
 		if t:
 			out.append((box, t, float(score)))
+
+	h, w = img_bgr.shape[:2]
+	# For tall comic strip pages (h >= 1000), run tiled horizontal slice passes
+	# to capture high-resolution sound effects / small text lost by global DBNet downsampling.
+	if h >= 1000:
+		def _iou(p1: np.ndarray, p2: np.ndarray) -> float:
+			xs1, ys1 = p1[:, 0], p1[:, 1]
+			xs2, ys2 = p2[:, 0], p2[:, 1]
+			x0 = max(float(xs1.min()), float(xs2.min()))
+			y0 = max(float(ys1.min()), float(ys2.min()))
+			x1 = min(float(xs1.max()), float(xs2.max()))
+			y1 = min(float(ys1.max()), float(ys2.max()))
+			inter = max(0.0, x1 - x0) * max(0.0, y1 - y0)
+			a1 = max(1.0, float((xs1.max() - xs1.min()) * (ys1.max() - ys1.min())))
+			a2 = max(1.0, float((xs2.max() - xs2.min()) * (ys2.max() - ys2.min())))
+			return inter / max(1.0, a1 + a2 - inter)
+
+		slice_h = 500
+		step = 350
+		y = 0
+		while y < h:
+			y_end = min(h, y + slice_h)
+			crop = img_bgr[y:y_end, 0:w]
+			c_txts, c_scores, c_boxes = _run_engine(crop)
+			for b, t, s in zip(c_boxes, c_txts, c_scores):
+				t_str = str(t).strip()
+				if not t_str:
+					continue
+				shifted = b.copy()
+				shifted[:, 1] += y
+				if not any(_iou(shifted, existing_b) >= 0.40 for existing_b, _, _ in out):
+					out.append((shifted, t_str, float(s)))
+			if y_end >= h:
+				break
+			y += step
+
 	return out
 
 

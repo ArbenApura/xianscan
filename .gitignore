@@ -20,3 +20,5 @@ ml/.pytest_cache/
 .DS_Store
 scraper
 pipeline_review.md
+ml/models_staging/
+left_pa.png

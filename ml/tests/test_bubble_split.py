@@ -1123,6 +1123,51 @@ def test_page_45360_bubble_separation_and_circle_tail_filtering():
     assert not detect._CHINESE_RE.search("000")
 
 
+def test_page_45449_left_aligned_bubble_terminal_punct_grouping():
+    """Page 45449 test case:
+    Line 1 ('你们能把我怎么样？') and Line 2 ('我才1级！')
+    are left-aligned text lines within the exact same speech bubble (x=176 vs x=174),
+    with tightly contiguous vertical positions (gap <= 0).
+    The terminal question mark ('？') at the end of Line 1 must NOT cause a false bubble separation.
+    """
+    b1 = np.array([[176, 5], [456, 5], [456, 42], [176, 42]], dtype=np.float64)
+    txt1 = "你们能把我怎么样？"
+    
+    b2 = np.array([[174, 39], [311, 39], [311, 80], [174, 80]], dtype=np.float64)
+    txt2 = "我才1级！"
+    
+    grouped, _ = detect.group_paragraphs([b1, b2], [0.998, 0.971], texts=[txt1, txt2])
+    assert len(grouped) == 1, f"Expected exactly 1 merged bubble, got {len(grouped)}"
+    gx, gy, gw, gh = detect.box_to_xywh(grouped[0])
+    assert gx <= 176 and gy <= 5, f"Merged box must enclose top line: ({gx}, {gy}, {gw}, {gh})"
+    assert gy + gh >= 80, f"Merged box must enclose bottom line: height={gh}, bottom={gy + gh}"
+
+
+def test_page_45452_three_sfx_and_tiled_detection():
+    """Page 45452 test case:
+    Action strip contains 3 '啪！' sound effects (left, middle, right).
+    Tiled high-resolution OCR pass must detect all 3 '啪！' occurrences across the action panel.
+    """
+    img_path = Path("web/data/uploads/575/362fd7e1-b652-4944-b2e9-292e3253b2c8.webp")
+    if not img_path.exists():
+        pytest.skip("Page 45452 sample image not found")
+    
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+        
+    resp = pipeline.analyze_image(img)
+    pa_regions = [r for r in resp.regions if "啪" in r.text]
+    assert len(pa_regions) == 3, f"Expected exactly 3 '啪！' sound effects, got {len(pa_regions)}: {[r.box for r in pa_regions]}"
+    
+    xs = sorted([r.box.x for r in pa_regions])
+    # Verify left (< 200), middle (400..500), right (> 600)
+    assert xs[0] < 200, f"Left '啪！' missing, smallest x is {xs[0]}"
+    assert 400 <= xs[1] <= 520, f"Middle '啪！' missing, middle x is {xs[1]}"
+    assert xs[2] > 600, f"Right '啪！' missing, largest x is {xs[2]}"
+
+
+
+
 
 
 

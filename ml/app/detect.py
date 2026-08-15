@@ -508,19 +508,28 @@ def group_paragraphs(
 			new_cx = x + w / 2.0
 			para_mean_cx = sum(para_cx_lists[p_idx]) / len(para_cx_lists[p_idx])
 
+			# HORIZONTAL ALIGNMENT: X-RANGES OVERLAP LIKE CENTERED BUBBLE LINES
+			overlap = min(x1, lx1) - max(x, lx)
+			if overlap < overlap_min * min(w, lw):
+				continue
+
+			# Alignment guards
+			is_left_aligned = abs(x - lx) <= 0.25 * min(w, lw)
+			is_right_aligned = abs(x1 - lx1) <= 0.25 * min(w, lw)
+
 			# Terminal punctuation guard:
 			# 1. Full-stops '。' and semicolons ';；' signify complete statements.
 			# 2. Exclamation '！' and question marks '？' on short interjections/utterances (<= 5 chars)
 			#    or with large vertical gap / horizontal offset signify separate speech bubbles.
 			if last_txt:
 				last_strip = last_txt.strip()
-				if bool(re.search(r"[。;；]$", last_strip)) and (gap >= 0.15 * min_eff_h or abs(new_cx - para_mean_cx) > 0.35 * min(w, lw)):
+				if bool(re.search(r"[。;；]$", last_strip)) and (gap >= 0.15 * min_eff_h or (abs(new_cx - para_mean_cx) > 0.35 * min(w, lw) and not (is_left_aligned or is_right_aligned))):
 					continue
 				if bool(re.search(r"[!！?？]$", last_strip)):
 					is_short_utterance = len(last_strip) <= 5
 					has_noticeable_gap = gap >= 0.30 * min_eff_h
-					has_offset = abs(new_cx - para_mean_cx) > 0.45 * min(w, lw)
-					if (is_short_utterance and gap >= 0.20 * min_eff_h) or has_noticeable_gap or has_offset:
+					has_offset = abs(new_cx - para_mean_cx) > 0.45 * min(w, lw) and not (is_left_aligned or is_right_aligned)
+					if (is_short_utterance and gap >= 0.20 * min_eff_h) or has_noticeable_gap or (has_offset and gap > 0.10 * min_eff_h):
 						continue
 
 			# FONT-SIZE GATE: ONLY LINES OF SIMILAR FONT SIZE GROUP (OR SHORT TRAILING LINE / ELLIPSIS / PARENTHETICAL).
@@ -533,16 +542,9 @@ def group_paragraphs(
 				if height_ratio > max_allowed_ratio:
 					continue
 
-			# HORIZONTAL ALIGNMENT: X-RANGES OVERLAP LIKE CENTERED BUBBLE LINES
-			overlap = min(x1, lx1) - max(x, lx)
-			if overlap < overlap_min * min(w, lw):
-				continue
-
 			# X-CENTROID DRIFT GUARD: REJECT IF THE NEW LINE'S X-CENTER DEVIATES TOO FAR
 			# FROM THE PARAGRAPH'S ESTABLISHED MEAN X-CENTER.
 			# If lines share a common left or right margin (e.g. stat card / system box / narrative block), allow max(w, lw).
-			is_left_aligned = abs(x - lx) <= 0.25 * min(w, lw)
-			is_right_aligned = abs(x1 - lx1) <= 0.25 * min(w, lw)
 			if is_trailing_tail or is_parenthetical or is_left_aligned or is_right_aligned:
 				if abs(new_cx - para_mean_cx) > centroid_drift_max * max(w, lw):
 					continue
