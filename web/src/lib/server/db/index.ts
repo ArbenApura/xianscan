@@ -16,8 +16,6 @@ declare global {
 	var __mtSqlite: Database.Database | undefined;
 }
 
-// -- FUNCTIONS -- //
-
 // CREATE A DRIZZLE INSTANCE OVER A FRESH better-sqlite3 CONNECTION. TESTS PASS ':memory:' — THE
 // FACTORY KEEPS THE APP AND THE TEST HARNESS ON THE EXACT SAME DRIVER/SETUP.
 export function createDb(path: string) {
@@ -57,6 +55,7 @@ if (!globalThis.__mtSqlite) {
 	// SELF-HOSTED FRIENDLINESS: RUN PENDING MIGRATIONS AT BOOT SO `npm run dev` / `npm run start` WORK ON
 	// A FRESH CLONE WITHOUT A MANUAL `npm run db:migrate` STEP (migrate RUNS ONLY PENDING ONES — THE
 	migrate(drizzle(sqlite, { schema }), { migrationsFolder: MIGRATIONS_DIR });
+
 	// AUTO-SYNC CHAPTER STATUSES FOR CHAPTERS WHOSE PAGES HAVE FINISHED TRANSLATING
 	try {
 		// Reset any orphan in-flight rows from prior server crashes/restarts

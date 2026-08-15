@@ -19,7 +19,6 @@
 	import ExternalLink from 'lucide-svelte/icons/external-link';
 	import Layers from 'lucide-svelte/icons/layers';
 	import Clock from 'lucide-svelte/icons/clock';
-	import Zap from 'lucide-svelte/icons/zap';
 	import BookOpen from 'lucide-svelte/icons/book-open';
 
 	let expanded = false;
@@ -167,6 +166,14 @@
 							<span class="text-[10px] font-mono rounded bg-black/5 dark:bg-white/10 px-1.5 py-0.2 font-bold">
 								{progress.completedChapters}/{progress.totalChapters} Chs ({progress.overallProgressPercent}%)
 							</span>
+							{#if elapsedMs > 0}
+								<span class="text-[10px] font-mono opacity-60 flex items-center gap-0.5">
+									<Clock size={10} /> {formatDuration(elapsedMs)}
+									{#if isRunning && estimatedRemainingMs !== null}
+										<span>• ~{formatDuration(estimatedRemainingMs)} left</span>
+									{/if}
+								</span>
+							{/if}
 						</div>
 						<div class="text-xs font-bold truncate leading-snug mt-0.5" title={$batchTracker.bookTitle || 'Book Translation'}>
 							{#if currentChapter && isRunning}
@@ -308,7 +315,12 @@
 									<div class="mt-2.5">
 										<div class="flex items-center justify-between text-[10px] opacity-70 mb-1">
 											<span>Page Pipeline Progress</span>
-											<span class="font-mono font-bold">{donePages}/{totalPgs} pgs ({pgPct}%)</span>
+											<span class="font-mono font-bold">
+												{donePages}/{totalPgs} pgs ({pgPct}%)
+												{#if isRunning && estimatedRemainingMs !== null}
+													• ~{formatDuration(estimatedRemainingMs)} left
+												{/if}
+											</span>
 										</div>
 										<div class="h-1.5 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
 											<div class="h-full rounded-full bg-[#b23a2e] dark:bg-[#e08a63] transition-all duration-300" style={`width: ${pgPct}%`}></div>
@@ -318,18 +330,6 @@
 							{/if}
 						</div>
 					{/if}
-
-					<!-- STATS STRIP: TIME, REMAINING -->
-					<div class="grid grid-cols-2 gap-2 rounded-xl bg-black/[0.03] p-2.5 dark:bg-white/[0.03] text-center text-xs">
-						<div class="flex flex-col items-center">
-							<span class="text-[10px] opacity-60 flex items-center gap-1"><Clock size={11} /> Elapsed</span>
-							<span class="font-mono font-bold text-xs mt-0.5">{formatDuration(elapsedMs)}</span>
-						</div>
-						<div class="flex flex-col items-center">
-							<span class="text-[10px] opacity-60 flex items-center gap-1"><Zap size={11} /> Remaining</span>
-							<span class="font-mono font-bold text-xs mt-0.5">{isRunning ? formatDuration(estimatedRemainingMs) : '-'}</span>
-						</div>
-					</div>
 
 					<!-- QUEUED CHAPTERS LIST -->
 					<div>

@@ -6,6 +6,7 @@
 	import { ConfirmDialog, Modal, TextField, Button } from '$lib/components/ui';
 	import { settings } from '$lib/stores/settings';
 	import { jobTracker } from '$lib/stores/job-tracker';
+	import { readingHistory } from '$lib/stores/reading-history';
 	import ChapterToolbar from '$lib/components/chapter/ChapterToolbar.svelte';
 	import PipelineProgressTracker from '$lib/components/chapter/PipelineProgressTracker.svelte';
 	import ViewModeWebtoon from '$lib/components/chapter/ViewModeWebtoon.svelte';
@@ -248,10 +249,28 @@
 		}
 	}
 
+	// PERSIST LAST READ CHAPTER PER BOOK (COOKIE + LOCAL CACHE)
+	$: if (browser && chapter && bookId) {
+		readingHistory.recordReading(bookId, {
+			id: chapter.id,
+			seq: chapter.seq,
+			title: chapter.title,
+			titleTarget: chapter.titleTarget,
+		});
+	}
+
 	onMount(() => {
 		lastLoadedChapterId = chapterId;
 		if (chapterId) {
 			void jobTracker.syncChapter(chapterId);
+		}
+		if (chapter && bookId) {
+			readingHistory.recordReading(bookId, {
+				id: chapter.id,
+				seq: chapter.seq,
+				title: chapter.title,
+				titleTarget: chapter.titleTarget,
+			});
 		}
 	});
 

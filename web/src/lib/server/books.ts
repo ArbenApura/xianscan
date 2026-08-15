@@ -25,6 +25,20 @@ export interface BookSummary {
 	translatedPageCount: number;
 	coverPageId: number | null;
 	coverHasOutput: boolean;
+	lastReadChapter?: {
+		id: number;
+		seq: number;
+		title: string | null;
+		titleTarget?: string | null;
+		status: string;
+	} | null;
+	firstChapter?: {
+		id: number;
+		seq: number;
+		title: string | null;
+		titleTarget?: string | null;
+		status: string;
+	} | null;
 	latestChapter: {
 		id: number;
 		seq: number;
@@ -72,7 +86,9 @@ export async function assertBookExists(bookId: string): Promise<void> {
 }
 
 // FETCH ALL BOOKS WITH RICH TELEMETRY & COVER ARTWORK (USED BY /app SSR & /api/books)
-export async function getBooksWithTelemetry(): Promise<BookSummary[]> {
+export async function getBooksWithTelemetry(
+	lastReadMap?: Record<string, { chapterId: number; seq?: number }> | null,
+): Promise<BookSummary[]> {
 	const rows = db.select().from(books).orderBy(desc(books.pinned), desc(books.updatedAt)).all();
 
 	const allChapters = db.select().from(chapters).orderBy(chapters.bookId, chapters.seq).all();
@@ -134,8 +150,17 @@ export async function getBooksWithTelemetry(): Promise<BookSummary[]> {
 			}
 		}
 
-		// LATEST CHAPTER (FOR QUICK "CONTINUE READING")
+		// FIRST CHAPTER (FOR BRAND NEW READERS)
+		const firstChapter = bookChapters[0] ?? null;
+
+		// LATEST CHAPTER
 		const lastChapter = bookChapters[bookChapters.length - 1] ?? null;
+
+		// LAST READ CHAPTER (RESOLVED FROM COOKIE MAP IF PRESENT)
+		const cookieTarget = lastReadMap ? lastReadMap[b.id] : null;
+		const lastReadCh = cookieTarget?.chapterId
+			? bookChapters.find((c) => c.id === cookieTarget.chapterId) ?? null
+			: null;
 
 		return {
 			id: b.id,
@@ -153,6 +178,24 @@ export async function getBooksWithTelemetry(): Promise<BookSummary[]> {
 			translatedPageCount,
 			coverPageId: coverPage?.id ?? null,
 			coverHasOutput: !!coverPage?.outputPath,
+			lastReadChapter: lastReadCh
+				? {
+						id: lastReadCh.id,
+						seq: lastReadCh.seq,
+						title: lastReadCh.title,
+						titleTarget: lastReadCh.titleTarget,
+						status: lastReadCh.status,
+					}
+				: null,
+			firstChapter: firstChapter
+				? {
+						id: firstChapter.id,
+						seq: firstChapter.seq,
+						title: firstChapter.title,
+						titleTarget: firstChapter.titleTarget,
+						status: firstChapter.status,
+					}
+				: null,
 			latestChapter: lastChapter
 				? {
 						id: lastChapter.id,

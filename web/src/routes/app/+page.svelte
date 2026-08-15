@@ -6,6 +6,7 @@
 	import { Button, TextField, Modal, ConfirmDialog, ActionMenu, LanguagePicker, Toggle, LazyImage, Badge } from '$lib/components/ui';
 	import { ripple } from '$lib/actions/ripple';
 	import { settings, THEME_POPOVER, THEME_PANEL_BORDER, LIB_LAYOUT_COOKIE, setCookie } from '$lib/stores/settings';
+	import { readingHistory } from '$lib/stores/reading-history';
 	import { cn } from '$lib/utils/cn';
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
@@ -59,6 +60,8 @@
 		translatedPageCount?: number;
 		coverPageId?: number | null;
 		coverHasOutput?: boolean;
+		lastReadChapter?: LatestChapter | null;
+		firstChapter?: LatestChapter | null;
 		latestChapter?: LatestChapter | null;
 		updatedAt?: number;
 		createdAt?: number;
@@ -479,6 +482,39 @@
 			return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 		});
 
+	function getBookReadTarget(b: Book): { url: string; label: string; isContinue: boolean } | null {
+		// 1. Local live store override (if updated in this tab)
+		const lastRead = $readingHistory[b.id];
+		if (lastRead) {
+			const label = lastRead.titleTarget || lastRead.title || `Ch. ${lastRead.seq + 1}`;
+			return {
+				url: `/app/books/${b.id}/chapters/${lastRead.chapterId}/`,
+				label,
+				isContinue: true,
+			};
+		}
+		// 2. SSR-loaded last read chapter from database
+		if (b.lastReadChapter) {
+			const label = b.lastReadChapter.titleTarget || b.lastReadChapter.title || `Ch. ${b.lastReadChapter.seq + 1}`;
+			return {
+				url: `/app/books/${b.id}/chapters/${b.lastReadChapter.id}/`,
+				label,
+				isContinue: true,
+			};
+		}
+		// 3. First chapter for brand new reads, or latestChapter fallback
+		const startChapter = b.firstChapter || b.latestChapter;
+		if (startChapter) {
+			const label = startChapter.titleTarget || startChapter.title || `Ch. ${startChapter.seq + 1}`;
+			return {
+				url: `/app/books/${b.id}/chapters/${startChapter.id}/`,
+				label,
+				isContinue: false,
+			};
+		}
+		return null;
+	}
+
 	$: pinnedCount = books.filter((b) => b.pinned && !b.archived).length;
 	$: archivedCount = books.filter((b) => b.archived).length;
 	$: popover = THEME_POPOVER[$settings.theme];
@@ -731,6 +767,7 @@
 		<ul class="grid w-full gap-3.5 sm:gap-5 grid-cols-1 sm:grid-cols-2">
 			{#each filteredBooks as book (book.id)}
 				{@const progress = getProgress(book)}
+				{@const readTarget = getBookReadTarget(book)}
 				<li class="group relative flex flex-col justify-between rounded-2xl border border-black/[0.08] bg-white/60 p-3.5 sm:p-4 transition-all duration-300 hover:border-[#b23a2e]/40 hover:shadow-xl dark:border-white/[0.06] dark:bg-white/[0.02]">
 					<!-- UPPER SECTION: COVER ARTWORK + METADATA -->
 					<div class="flex gap-3 sm:gap-4 items-start">
@@ -835,14 +872,15 @@
 
 					<!-- LOWER SECTION: ACTION FOOTER BAR -->
 					<div class="mt-3 sm:mt-4 flex items-center justify-between border-t border-black/[0.05] pt-2.5 sm:pt-3 text-xs dark:border-white/[0.05]">
-						{#if book.latestChapter}
+						{#if readTarget}
 							<a
-								href={`/app/books/${book.id}/chapters/${book.latestChapter.id}/`}
+								href={readTarget.url}
 								class="inline-flex items-center gap-1.5 rounded-lg bg-[#b23a2e]/10 px-2.5 py-1 text-xs font-semibold text-[#b23a2e] transition hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63] dark:hover:bg-[#e08a63] dark:hover:text-black truncate max-w-[65%]"
+								title={readTarget.isContinue ? `Continue reading ${readTarget.label}` : `Read ${readTarget.label}`}
 								use:ripple
 							>
 								<Play size={11} class="fill-current shrink-0" />
-								<span class="truncate">{book.latestChapter.titleTarget || book.latestChapter.title || `Ch. ${book.latestChapter.seq + 1}`}</span>
+								<span class="truncate">{readTarget.label}</span>
 							</a>
 						{:else}
 							<span class="text-[11px] opacity-40">No chapters yet</span>
@@ -863,6 +901,7 @@
 		<ul class="flex flex-col gap-2.5 w-full">
 			{#each filteredBooks as book (book.id)}
 				{@const progress = getProgress(book)}
+				{@const readTarget = getBookReadTarget(book)}
 				<li
 					id={`book-card-${book.id}`}
 					class="group relative flex items-center justify-between gap-3 sm:gap-4 rounded-xl border border-black/[0.07] bg-white/60 p-2.5 sm:p-3 transition-all hover:border-[#b23a2e]/40 hover:bg-white hover:shadow-md dark:border-white/[0.06] dark:bg-white/[0.02] dark:hover:bg-white/[0.04]"
@@ -922,14 +961,15 @@
 
 					<!-- ACTION BUTTONS -->
 					<div class="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
-						{#if book.latestChapter}
+						{#if readTarget}
 							<a
-								href={`/app/books/${book.id}/chapters/${book.latestChapter.id}/`}
+								href={readTarget.url}
 								class="hidden sm:inline-flex items-center gap-1 rounded-lg bg-[#b23a2e]/10 px-2.5 py-1 text-xs font-semibold text-[#b23a2e] transition hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63] dark:hover:bg-[#e08a63] dark:hover:text-black"
+								title={readTarget.isContinue ? `Continue reading ${readTarget.label}` : `Read ${readTarget.label}`}
 								use:ripple
 							>
 								<Play size={11} class="fill-current" />
-								<span>Read</span>
+								<span>{readTarget.isContinue ? 'Continue' : 'Read'}</span>
 							</a>
 						{/if}
 
@@ -968,6 +1008,7 @@
 		<div class="sm:hidden flex flex-col divide-y divide-black/[0.06] rounded-xl border border-black/[0.08] bg-white/60 dark:divide-white/[0.06] dark:border-white/[0.06] dark:bg-white/[0.02]">
 			{#each filteredBooks as book (book.id)}
 				{@const progress = getProgress(book)}
+				{@const readTarget = getBookReadTarget(book)}
 				<div class="flex items-center justify-between gap-2.5 p-2.5 transition hover:bg-black/[0.02] dark:hover:bg-white/[0.02]">
 					<div class="flex items-center gap-2 min-w-0 flex-1">
 						{#if book.pinned}
@@ -994,11 +1035,20 @@
 					</div>
 
 					<div class="flex items-center gap-1 shrink-0">
+						{#if readTarget}
+							<a
+								href={readTarget.url}
+								class="rounded-lg bg-[#b23a2e]/10 text-[#b23a2e] dark:text-[#e08a63] hover:bg-[#b23a2e] hover:text-white dark:hover:bg-[#e08a63] dark:hover:text-black px-2 py-1 text-[11px] font-semibold transition"
+								title={readTarget.isContinue ? `Continue reading ${readTarget.label}` : `Read ${readTarget.label}`}
+							>
+								{readTarget.isContinue ? 'Continue' : 'Read'}
+							</a>
+						{/if}
 						<a
 							href={`/app/books/${book.id}/`}
 							class="rounded-lg bg-black/5 dark:bg-white/5 px-2 py-1 text-[11px] font-medium opacity-80 transition hover:opacity-100"
 						>
-							Open
+							Manage
 						</a>
 						<ActionMenu
 							items={[
@@ -1040,6 +1090,7 @@
 				<tbody class="divide-y divide-black/[0.04] dark:divide-white/[0.04]">
 					{#each filteredBooks as book (book.id)}
 						{@const progress = getProgress(book)}
+						{@const readTarget = getBookReadTarget(book)}
 						<tr class="group transition hover:bg-black/[0.02] dark:hover:bg-white/[0.02]">
 							<td class="py-2.5 pl-4 pr-2">
 								{#if book.pinned}
@@ -1084,6 +1135,15 @@
 							</td>
 							<td class="py-2.5 pr-4 pl-3 text-right">
 								<div class="flex items-center justify-end gap-1.5">
+									{#if readTarget}
+										<a
+											href={readTarget.url}
+											class="p-1 rounded opacity-70 hover:opacity-100 hover:text-[#b23a2e] dark:hover:text-[#e08a63]"
+											title={readTarget.isContinue ? `Continue reading ${readTarget.label}` : `Read ${readTarget.label}`}
+										>
+											<Play size={13} class="fill-current" />
+										</a>
+									{/if}
 									<a
 										href={`/app/books/${book.id}/`}
 										class="p-1 rounded opacity-70 hover:opacity-100 hover:text-[#b23a2e]"
