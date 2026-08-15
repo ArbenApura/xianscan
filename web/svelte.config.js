@@ -7,6 +7,9 @@ const config = {
 	kit: {
 		// precompress: SERVE PRE-BUILT .gz / .br FOR CLIENT ASSETS + PRERENDERED PAGES. NATIVE TO adapter-node.
 		adapter: adapterNode({ precompress: true }),
+		csrf: {
+			checkOrigin: false,
+		},
 	},
 };
 

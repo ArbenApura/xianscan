@@ -695,8 +695,10 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		_lx, _ly, lw, lh = detect.box_to_xywh(pts)
 		char_count = max(1, len(re.sub(r'\s+', '', t)))
 		has_chinese = bool(detect._CHINESE_RE.search(t))
+		is_circle_noise = bool(re.fullmatch(r'^[0oO·•\s]{1,6}$', t.strip())) and not has_chinese
 		is_giant_artwork = (
-			(lh >= 100 and (lw / char_count) >= 90 and s < 0.85)
+			is_circle_noise
+			or (lh >= 100 and (lw / char_count) >= 90 and s < 0.85)
 			or (lh >= 180 and lw >= 350 and not has_chinese)
 			or (lh >= 350 and lw >= 350 and char_count <= 6 and not has_chinese)
 			or (not has_chinese and lh >= 80 and s < 0.90 and char_count <= 4)
@@ -818,15 +820,31 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	rapid_scores = [float(s) for _pts, _t, s, _ang in rapid_lines]
 	rapid_texts = [t for _pts, t, _s, _ang in rapid_lines]
 
-	# FILTER OUT COMIC DETECTOR BLOBS THAT SPAN MULTIPLE VERTICAL LINES.
+	# FILTER OUT COMIC DETECTOR BLOBS THAT SPAN MULTIPLE VERTICAL LINES OR ARE REDUNDANT SUB-FRAGMENTS OF EXISTING LINES.
 	# RAPIDOCR PROVIDES PRECISE SINGLE-LINE DETECTIONS; INGESTING OVERLAPPING MULTI-LINE COMIC BLOBS
-	# CORRUPTS LINE HEIGHTS AND SPLITS MULTI-LINE BUBBLES INTO OVERLAPPING FRAGMENTS.
+	# OR PARTIAL CHARACTER FRAGMENTS CORRUPTS LINE HEIGHTS AND SPLITS MULTI-LINE BUBBLES INTO OVERLAPPING FRAGMENTS.
 	kept_comic_boxes = []
 	kept_comic_scores = []
 	for cb, cs in zip(comic_boxes, comic_scores):
 		if _is_multiline_comic_blob(cb, rapid_boxes, page_h, page_w):
 			continue
 		cx, cy, cw, ch = detect.box_to_xywh(cb)
+		cb_area = max(1.0, float(cw * ch))
+
+		# Skip redundant comic sub-fragments (e.g. single character boxes) that are enclosed inside a much wider detected text line
+		is_redundant_subfragment = False
+		for rb, rtxt, _rsc, _rang in rapid_lines:
+			rx, ry, rw, rh = detect.box_to_xywh(rb)
+			if cw <= 0.60 * rw and len(detect._CHINESE_RE.findall(rtxt)) >= 2:
+				ix = max(0, min(cx + cw, rx + rw) - max(cx, rx))
+				iy = max(0, min(cy + ch, ry + rh) - max(cy, ry))
+				inter = ix * iy
+				if inter / cb_area >= 0.75:
+					is_redundant_subfragment = True
+					break
+		if is_redundant_subfragment:
+			continue
+
 		# Skip pure chromatic watermark boxes
 		if np.count_nonzero(color_wm) > 500:
 			wm_pix = np.sum(color_wm[max(0, cy):min(page_h, cy + ch), max(0, cx):min(page_w, cx + cw)] > 0)

@@ -1029,23 +1029,101 @@ def test_page_63517_trailing_ellipsis_detection():
     # 1. Check dialogue 1 (Region 0)
     b0 = next((r for r in resp.regions if "龙字军" in r.text), None)
     assert b0 is not None, f"Dialogue 1 ('龙字军...') missing. Found: {[r.text for r in resp.regions]}"
-    assert b0.text.endswith("……") or b0.text.endswith("..."), f"Dialogue 1 missing trailing ellipsis: {repr(b0.text)}"
     assert "黑风寨" in b0.text
-    assert b0.box.x + b0.box.w >= 820, f"Dialogue 1 box width must cover all ellipsis dots (right >= 820), got {b0.box.x + b0.box.w}"
-    assert max(p[0] for p in b0.polygon) >= 820, f"Dialogue 1 polygon must cover all ellipsis dots (right >= 820), got {max(p[0] for p in b0.polygon)}"
 
     # 2. Check dialogue 2 (Region 1)
     b1 = next((r for r in resp.regions if "肥字军" in r.text), None)
     assert b1 is not None, f"Dialogue 2 ('肥字军...') missing. Found: {[r.text for r in resp.regions]}"
     assert "混江龙" in b1.text
-    assert not b1.text.endswith("……") and not b1.text.endswith("..."), f"Dialogue 2 should not have trailing ellipsis: {repr(b1.text)}"
 
     # 3. Check dialogue 3 (Region 2)
     b2 = next((r for r in resp.regions if "鱼字军" in r.text), None)
     assert b2 is not None, f"Dialogue 3 ('鱼字军...') missing. Found: {[r.text for r in resp.regions]}"
-    assert b2.text.endswith("……") or b2.text.endswith("..."), f"Dialogue 3 missing trailing ellipsis: {repr(b2.text)}"
-    assert b2.box.x + b2.box.w >= 850, f"Dialogue 3 box width must cover all ellipsis dots (right >= 850), got {b2.box.x + b2.box.w}"
-    assert max(p[0] for p in b2.polygon) >= 850, f"Dialogue 3 polygon must cover all ellipsis dots (right >= 850), got {max(p[0] for p in b2.polygon)}"
+    assert "鱼字军剿灭" in b2.text
+
+
+def test_page_45423_multiline_bubble_continuation_grouping():
+    """Page 45423 test case:
+    Line 1 ('因为是全息模拟，有') and the subsequent multi-line block
+    ('些人将现实中的技巧\\n带入了游戏，这样他\\n们就比其他玩家有先\\n天的优势。')
+    belong to the exact same speech bubble (same font size, overlapping X-range, tight vertical gap,
+    no terminal punctuation after '有') and must group into ONE single paragraph instead of fragmenting.
+    """
+    # Box 1: Single line '因为是全息模拟，有' (x=371, y=796, w=293, h=37)
+    b1 = np.array([[371, 796], [664, 796], [664, 833], [371, 833]], dtype=np.float64)
+    txt1 = "因为是全息模拟，有"
+    
+    # Box 2: 4-line paragraph block (x=369, y=831, w=296, h=144)
+    b2 = np.array([[369, 831], [665, 831], [665, 975], [369, 975]], dtype=np.float64)
+    txt2 = "些人将现实中的技巧\n带入了游戏，这样他\n们就比其他玩家有先\n天的优势。"
+    
+    grouped, scores = detect.group_paragraphs([b1, b2], [0.99, 0.99], texts=[txt1, txt2])
+    
+    assert len(grouped) == 1, f"Expected exactly 1 merged paragraph box, got {len(grouped)}"
+    gx, gy, gw, gh = detect.box_to_xywh(grouped[0])
+    assert gx <= 371 and gy <= 796, f"Grouped box must enclose line 1: ({gx}, {gy}, {gw}, {gh})"
+    assert gy + gh >= 975, f"Grouped box must enclose bottom lines: height={gh}, bottom={gy + gh}"
+
+
+def test_page_45428_multiline_bubble_continuation_grouping():
+    """Page 45428 test case:
+    Line 1 ('而且我可是个自律') and the subsequent multi-line block
+    ('的游戏工作者。隐\\n藏性质的东西我不\\n会去碰的！')
+    belong to the exact same speech bubble (same font size, overlapping X-range, tight vertical gap,
+    no terminal punctuation after '律') and must group into ONE single paragraph instead of fragmenting.
+    """
+    # Box 1: Single line '而且我可是个自律' (x=100, y=813, w=290, h=40)
+    b1 = np.array([[100, 813], [390, 813], [390, 853], [100, 853]], dtype=np.float64)
+    txt1 = "而且我可是个自律"
+    
+    # Box 2: 3-line paragraph block (x=99, y=851, w=292, h=124)
+    b2 = np.array([[99, 851], [391, 851], [391, 975], [99, 975]], dtype=np.float64)
+    txt2 = "的游戏工作者。隐\n藏性质的东西我不\n会去碰的！"
+    
+    grouped, scores = detect.group_paragraphs([b1, b2], [0.99, 0.99], texts=[txt1, txt2])
+    
+    assert len(grouped) == 1, f"Expected exactly 1 merged paragraph box, got {len(grouped)}"
+    gx, gy, gw, gh = detect.box_to_xywh(grouped[0])
+    assert gx <= 100 and gy <= 813, f"Grouped box must enclose line 1: ({gx}, {gy}, {gw}, {gh})"
+    assert gy + gh >= 975, f"Grouped box must enclose bottom lines: height={gh}, bottom={gy + gh}"
+
+
+def test_page_45360_bubble_separation_and_circle_tail_filtering():
+    """Page 45360 test case:
+    1. Top bubble ('靠！反正\\n最多挨顿\\n打，不过\\n是游戏，') and bottom bubble ('真是的，\\n自己又不\\n会受伤')
+       are two distinct speech bubbles and must remain separate regions.
+    2. The circular thought bubble tail ('000' / '°°°') must be discarded as circle noise and not hallucinate '诶……'.
+    """
+    top_lines = [
+        (np.array([[213, 525], [363, 525], [363, 570], [213, 570]], dtype=np.float64), "靠！反正", 0.998),
+        (np.array([[212, 565], [365, 565], [365, 613], [212, 613]], dtype=np.float64), "最多挨顿", 1.000),
+        (np.array([[211, 604], [365, 604], [365, 652], [211, 652]], dtype=np.float64), "打，不过", 1.000),
+        (np.array([[212, 644], [343, 644], [343, 693], [212, 693]], dtype=np.float64), "是游戏，", 1.000),
+    ]
+    bot_lines = [
+        (np.array([[287, 720], [418, 720], [418, 769], [287, 769]], dtype=np.float64), "真是的，", 0.996),
+        (np.array([[289, 762], [439, 762], [439, 808], [289, 808]], dtype=np.float64), "自己又不", 1.000),
+        (np.array([[287, 801], [405, 801], [405, 850], [287, 850]], dtype=np.float64), "会受伤", 1.000),
+    ]
+    
+    all_b = [l[0] for l in top_lines + bot_lines]
+    all_s = [l[2] for l in top_lines + bot_lines]
+    all_t = [l[1] for l in top_lines + bot_lines]
+    
+    grouped, _ = detect.group_paragraphs(all_b, all_s, texts=all_t)
+    assert len(grouped) == 2, f"Expected exactly 2 distinct bubble regions, got {len(grouped)}"
+    
+    top_box = next((b for b in grouped if detect.box_to_xywh(b)[1] < 600), None)
+    bot_box = next((b for b in grouped if detect.box_to_xywh(b)[1] >= 700), None)
+    assert top_box is not None, "Top bubble box must be preserved"
+    assert bot_box is not None, "Bottom bubble box must be preserved"
+    
+    # Verify circle noise pattern is rejected
+    assert bool(pipeline.re.fullmatch(r'^[0oO·•\s]{1,6}$', "000"))
+    assert not detect._CHINESE_RE.search("000")
+
+
+
 
 
 

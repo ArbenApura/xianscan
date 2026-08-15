@@ -483,17 +483,25 @@ def group_paragraphs(
 			lx, ly, lw, lh = box_to_xywh(last)
 			lx1 = lx + lw
 
+			# Effective single-line heights for multi-line boxes (e.g. from crop OCR or merged blocks)
+			last_txt = para_texts[p_idx][-1] if para_texts[p_idx] else ""
+			cand_line_count = max(1, len([ln for ln in txt.strip().split('\n') if ln.strip()])) if txt else 1
+			last_line_count = max(1, len([ln for ln in last_txt.strip().split('\n') if ln.strip()])) if last_txt else 1
+			eff_h = h / float(cand_line_count)
+			eff_lh = lh / float(last_line_count)
+			min_eff_h = min(eff_h, eff_lh)
+
 			# VERTICAL CONTIGUITY: THE NEW LINE SITS AT OR BELOW THE PARAGRAPH'S BOTTOM LINE.
 			gap = y - (ly + lh)
 			is_parenthetical = bool(re.match(r"^[（\(\[【〔*]", txt.strip())) or bool(re.search(r"[）\)\]】〕]$", txt.strip()))
 			is_trailing_tail = (
-				(w <= max(80, int(lw * 0.65)) and h <= lh * 1.75)
-				or (len(txt.strip()) > 0 and len(txt.strip()) <= 4 and h <= lh * 1.80)
+				(w <= max(80, int(lw * 0.65)) and eff_h <= eff_lh * 1.75)
+				or (len(txt.strip()) > 0 and len(txt.strip()) <= 3 and not txt.strip().endswith(("，", ",", "、", ":", "：")) and eff_h <= eff_lh * 1.80)
 				or is_parenthetical
 			)
 			gap_multiplier = 2.8 if is_parenthetical else (1.4 if is_trailing_tail else 1.0)
-			max_allowed_gap = gap_factor * gap_multiplier * min(h, lh)
-			if gap > max_allowed_gap or y < ly - 0.35 * min(h, lh):
+			max_allowed_gap = gap_factor * gap_multiplier * min_eff_h
+			if gap > max_allowed_gap or y < ly - 0.35 * min_eff_h:
 				continue
 
 			# HORIZONTAL CENTROID
@@ -504,25 +512,26 @@ def group_paragraphs(
 			# 1. Full-stops '。' and semicolons ';；' signify complete statements.
 			# 2. Exclamation '！' and question marks '？' on short interjections/utterances (<= 5 chars)
 			#    or with large vertical gap / horizontal offset signify separate speech bubbles.
-			last_txt = para_texts[p_idx][-1] if para_texts[p_idx] else ""
 			if last_txt:
 				last_strip = last_txt.strip()
-				if bool(re.search(r"[。;；]$", last_strip)) and (gap >= 0.15 * min(h, lh) or abs(new_cx - para_mean_cx) > 0.35 * min(w, lw)):
+				if bool(re.search(r"[。;；]$", last_strip)) and (gap >= 0.15 * min_eff_h or abs(new_cx - para_mean_cx) > 0.35 * min(w, lw)):
 					continue
 				if bool(re.search(r"[!！?？]$", last_strip)):
 					is_short_utterance = len(last_strip) <= 5
-					has_noticeable_gap = gap >= 0.30 * min(h, lh)
+					has_noticeable_gap = gap >= 0.30 * min_eff_h
 					has_offset = abs(new_cx - para_mean_cx) > 0.45 * min(w, lw)
-					if (is_short_utterance and gap >= 0.20 * min(h, lh)) or has_noticeable_gap or has_offset:
+					if (is_short_utterance and gap >= 0.20 * min_eff_h) or has_noticeable_gap or has_offset:
 						continue
 
 			# FONT-SIZE GATE: ONLY LINES OF SIMILAR FONT SIZE GROUP (OR SHORT TRAILING LINE / ELLIPSIS / PARENTHETICAL).
-			height_ratio = max(h, lh) / max(1.0, float(min(h, lh)))
+			height_ratio = max(eff_h, eff_lh) / max(1.0, float(min_eff_h))
 			if is_trailing_tail or is_parenthetical:
 				if height_ratio > 2.5:
 					continue
-			elif height_ratio > height_sim_max:
-				continue
+			else:
+				max_allowed_ratio = 2.0 if (cand_line_count > 1 or last_line_count > 1) else height_sim_max
+				if height_ratio > max_allowed_ratio:
+					continue
 
 			# HORIZONTAL ALIGNMENT: X-RANGES OVERLAP LIKE CENTERED BUBBLE LINES
 			overlap = min(x1, lx1) - max(x, lx)
