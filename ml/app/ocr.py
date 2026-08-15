@@ -203,7 +203,7 @@ def recognize_full(img_bgr: np.ndarray) -> list[tuple[np.ndarray, str, float]]:
 	# For tall comic strip pages (h >= 1000), run tiled horizontal slice passes
 	# to capture high-resolution sound effects / small text lost by global DBNet downsampling.
 	if h >= 1000:
-		def _iou(p1: np.ndarray, p2: np.ndarray) -> float:
+		def _overlaps_existing(p1: np.ndarray, p2: np.ndarray) -> bool:
 			xs1, ys1 = p1[:, 0], p1[:, 1]
 			xs2, ys2 = p2[:, 0], p2[:, 1]
 			x0 = max(float(xs1.min()), float(xs2.min()))
@@ -213,7 +213,8 @@ def recognize_full(img_bgr: np.ndarray) -> list[tuple[np.ndarray, str, float]]:
 			inter = max(0.0, x1 - x0) * max(0.0, y1 - y0)
 			a1 = max(1.0, float((xs1.max() - xs1.min()) * (ys1.max() - ys1.min())))
 			a2 = max(1.0, float((xs2.max() - xs2.min()) * (ys2.max() - ys2.min())))
-			return inter / max(1.0, a1 + a2 - inter)
+			iou = inter / max(1.0, a1 + a2 - inter)
+			return iou >= 0.30 or (inter / a1 >= 0.40)
 
 		slice_h = 500
 		step = 350
@@ -224,11 +225,11 @@ def recognize_full(img_bgr: np.ndarray) -> list[tuple[np.ndarray, str, float]]:
 			c_txts, c_scores, c_boxes = _run_engine(crop)
 			for b, t, s in zip(c_boxes, c_txts, c_scores):
 				t_str = str(t).strip()
-				if not t_str:
+				if not t_str or float(s) < 0.65:
 					continue
 				shifted = b.copy()
 				shifted[:, 1] += y
-				if not any(_iou(shifted, existing_b) >= 0.40 for existing_b, _, _ in out):
+				if not any(_overlaps_existing(shifted, existing_b) for existing_b, _, _ in out):
 					out.append((shifted, t_str, float(s)))
 			if y_end >= h:
 				break

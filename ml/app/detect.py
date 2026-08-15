@@ -258,7 +258,7 @@ _WATERMARK_RE = re.compile(
 	r'acloudmerge|acloud|loudmer|udmer|merd|oamanhua|'
 	r'merge|cloud|manga|manhua|comic|'
 	r'yumanhua|mangabox|comick|腾讯|微信|公众号|qq群|企鹅群|群号|'
-	r'严禁转载|独家|扫图|录入|修图|嵌字|翻译|汉化组|'
+	r'严禁转载|独家|扫图|录入|修图|嵌字|翻译[:：]|翻译组|汉化组|'
 	r'免费漫画|最新免费|漫画网|看漫画|首发|独家首发|漫客[栈拌]|漫客|mkzhan|nga\.com)',
 	re.IGNORECASE,
 )
@@ -388,9 +388,12 @@ def merge_text_lines(
 					continue  # DIFFERENT SPEECH BUBBLES -- DO NOT HORIZONTALLY MERGE
 
 			# TERMINAL PUNCTUATION GUARD: IF THE PRECEDING BOX ENDS IN TERMINAL PUNCTUATION
-			# AND THERE IS A NON-NEGATIVE GAP, IT IS A FINISHED SENTENCE IN ANOTHER BUBBLE.
-			if l_txt and l_txt.rstrip().endswith(_TERMINAL_PUNCTUATION) and gap >= 0:
-				continue
+			# AND THEY ARE SEPARATE UTTERANCES (NOT A NEAR-IDENTICAL DUPLICATE DETECTION OF THE SAME LINE),
+			# IT IS A FINISHED SENTENCE IN ANOTHER BUBBLE.
+			if l_txt and l_txt.rstrip().endswith(_TERMINAL_PUNCTUATION) and gap >= -max(h, lh) * 0.40:
+				union_w = max(x1, lx1) - min(x, lx0)
+				if union_w > max(w, lx1 - lx0) * 1.20:
+					continue  # DIFFERENT SPEECH BUBBLES -- DO NOT HORIZONTALLY MERGE
 
 			ln[0] = min(lx0, x)
 			ln[1] = min(ly0, y)

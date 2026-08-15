@@ -1166,6 +1166,74 @@ def test_page_45452_three_sfx_and_tiled_detection():
     assert xs[2] > 600, f"Right '啪！' missing, largest x is {xs[2]}"
 
 
+def test_page_63562_side_by_side_bubbles_horizontal_separation():
+    """Page 63562 test case:
+    Two separate speech bubbles ('我买！' and '我也买！') sitting side-by-side on the same horizontal row.
+    Even with minor bounding box padding overlap (gap = -4px), the terminal exclamation mark
+    on '我买！' must prevent merge_text_lines from fusing them into a single dialogue bubble.
+    """
+    b1 = np.array([[429, 804], [550, 804], [550, 844], [429, 844]], dtype=np.float64)
+    txt1 = "我买！"
+    
+    b2 = np.array([[546, 812], [663, 812], [663, 852], [546, 852]], dtype=np.float64)
+    txt2 = "我也买！"
+    
+    merged_b, _ = detect.merge_text_lines([b1, b2], [0.968, 0.910], texts=[txt1, txt2])
+    assert len(merged_b) == 2, f"Expected exactly 2 separate dialogue boxes, got {len(merged_b)}"
+    
+    grouped, _ = detect.group_paragraphs(merged_b, [0.968, 0.910], texts=[txt1, txt2])
+    assert len(grouped) == 2, f"Expected exactly 2 separate dialogue paragraphs, got {len(grouped)}"
+
+
+def test_page_63567_dialogue_with_verb_fanyi_preservation():
+    """Page 63567 test case:
+    The conversational question ('啥意思？你给\\n翻译翻译？') contains the everyday verb '翻译'.
+    It must NOT be classified as scanlation watermark credit, and both lines must merge
+    into a single dialogue bubble region.
+    """
+    b1 = np.array([[353, 169], [629, 169], [629, 226], [353, 226]], dtype=np.float64)
+    txt1 = "啥意思？你给"
+    
+    b2 = np.array([[354, 224], [567, 224], [567, 277], [354, 277]], dtype=np.float64)
+    txt2 = "翻译翻译？"
+    
+    assert not detect._is_watermark_line(txt2)
+    assert not detect.is_pure_watermark_region(txt2)
+    
+    grouped, _ = detect.group_paragraphs([b1, b2], [0.999, 0.943], texts=[txt1, txt2])
+    assert len(grouped) == 1, f"Expected 1 unified dialogue bubble, got {len(grouped)}"
+    gx, gy, gw, gh = detect.box_to_xywh(grouped[0])
+    assert gx <= 354 and gy <= 169
+    assert gy + gh >= 277
+
+
+def test_page_63572_multiline_question_bubble_and_ghost_fragment_rejection():
+    """Page 63572 test case:
+    1. Speech bubble 2 ('为啥在十万山林\\n里能抽到了女巫？\\n还有这顶级宠物又\\n是啥？')
+       must be unified into a single 4-line paragraph without splitting after the mid-bubble question mark.
+    2. Overlapping ghost line fragments between lines must be rejected.
+    """
+    img_path = Path("web/data/uploads/1148/2c4425e0-bcbb-4a4d-ad17-3f7f0b1f9372.webp")
+    if not img_path.exists():
+        pytest.skip("Page 63572 sample image not found")
+        
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+        
+    resp = pipeline.analyze_image(img)
+    bubble2 = next((r for r in resp.regions if "十万山林" in r.text), None)
+    assert bubble2 is not None, f"Bubble 2 missing. Found: {[r.text for r in resp.regions]}"
+    
+    b2_lines = [l.strip() for l in bubble2.text.splitlines() if l.strip()]
+    assert len(b2_lines) == 4, f"Expected 4 lines in bubble 2, got {len(b2_lines)}: {b2_lines}"
+    assert "女巫？" in bubble2.text
+    assert "顶级宠物" in bubble2.text
+    assert "全能" not in bubble2.text, "Hallucinated ghost slice ('全能描到丁女巫') must be rejected"
+
+
+
+
+
 
 
 
