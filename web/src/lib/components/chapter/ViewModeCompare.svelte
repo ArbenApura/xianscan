@@ -111,8 +111,6 @@
 	{#each pages as page, idx (page.id)}
 		{@const hasRatio = Boolean(page.width && page.height)}
 		<div
-			draggable="true"
-			on:dragstart={(e) => dispatch('dragStart', { event: e, index: idx })}
 			on:dragover={(e) => dispatch('dragOver', { event: e, index: idx })}
 			on:drop={(e) => dispatch('drop', { event: e, index: idx })}
 			on:dragend={(e) => dispatch('dragEnd', e)}
@@ -126,7 +124,12 @@
 		>
 			<div class="mb-3 flex items-center justify-between text-xs font-bold">
 				<div class="flex items-center gap-2">
-					<span class="flex items-center gap-1 cursor-grab active:cursor-grabbing">
+					<span
+						draggable="true"
+						on:dragstart={(e) => dispatch('dragStart', { event: e, index: idx })}
+						on:dragend={(e) => dispatch('dragEnd', e)}
+						class="flex items-center gap-1 cursor-grab select-none rounded px-1.5 py-0.5 transition hover:bg-black/5 active:cursor-grabbing dark:hover:bg-white/5"
+					>
 						<GripVertical size={14} class="opacity-40" /> Page {page.seq + 1}
 					</span>
 					<Badge

@@ -13,7 +13,7 @@ import type { LangPair, TermDraft, TranslationUsage } from '$lib/types';
 import type OpenAI from 'openai';
 import { languageName } from '$lib/languages';
 // IMPORTED MODULES
-import { computeUsage, deepseek, queued, resolveModel, thinkingParam, withRetry } from './deepseek';
+import { computeUsage, createClient, queued, resolveModel, thinkingParam, withRetry } from './deepseek';
 
 export interface RegionSource {
 	id: string;
@@ -145,8 +145,12 @@ export function glossaryBlock(terms: TermDraft[], src: string, tgt: string): str
 	const srcName = languageName(src);
 	const tgtName = languageName(tgt);
 	const lines = [...terms]
-		// NaN-PROOF: A MISSING pinned (undefined) MUST SORT AS false — NEVER NaN (V8 TREATS NaN AS "EQUAL")
-		.sort((a, b) => Number(b.pinned ?? false) - Number(a.pinned ?? false))
+		// PINNED FIRST, THEN DETERMINISTIC ALPHABETICAL ORDER BY SOURCE FOR DEEPSEEK KV PROMPT CACHE OPTIMIZATION
+		.sort((a, b) => {
+			const pinDiff = Number(b.pinned ?? false) - Number(a.pinned ?? false);
+			if (pinDiff !== 0) return pinDiff;
+			return (a.source || '').localeCompare(b.source || '');
+		})
 		.map((t) => {
 			const aliases = t.aliases && t.aliases.length > 0 ? ` (also: ${t.aliases.join(', ')})` : '';
 			const gender = t.gender === 'masculine' ? ' [masculine]' : t.gender === 'feminine' ? ' [feminine]' : '';
@@ -348,7 +352,7 @@ async function callTranslate(
 	pair: LangPair,
 	opts: PageTranslationOptions,
 ): Promise<{ raw: string; usage: TranslationUsage }> {
-	const client = opts.client ?? deepseek;
+	const client = opts.client ?? createClient();
 	const model = resolveModel(opts.model);
 	const messages = buildMessages(regions, terms, pair);
 	// ~2 TOKENS PER SOURCE CHAR + ROOM FOR THE JSON ENVELOPE — THE SOURCE TEXT DRIVES THE BUDGET
@@ -362,7 +366,7 @@ async function callTranslate(
 					messages,
 					temperature: 0.3,
 					max_tokens: maxTokens,
-					...thinkingParam(),
+					...thinkingParam(model),
 				},
 				{ signal: opts.signal },
 			);
@@ -574,7 +578,7 @@ export async function extractTerms(
 	pair: LangPair,
 	opts: PageTranslationOptions & { knownTerms?: TermDraft[] } = {},
 ): Promise<{ terms: TermDraft[]; usage: TranslationUsage }> {
-	const client = opts.client ?? deepseek;
+	const client = opts.client ?? createClient();
 	const model = resolveModel(opts.model);
 	const usage = { model, promptTokens: 0, cachedTokens: 0, completionTokens: 0, costUsd: 0 } as TranslationUsage;
 
@@ -629,7 +633,7 @@ export async function extractTerms(
 							messages,
 							temperature: 0,
 							max_tokens: 4096,
-							...thinkingParam(),
+							...thinkingParam(model),
 						},
 						{ signal: opts.signal },
 					);
@@ -674,7 +678,7 @@ export async function translateSingleText(
 		return { text: '', usage };
 	}
 
-	const client = opts.client ?? deepseek;
+	const client = opts.client ?? createClient();
 	const srcName = languageName(pair.sourceLang);
 	const tgtName = languageName(pair.targetLang);
 
@@ -713,7 +717,7 @@ Output ONLY the translated text without commentary, quotes, or markdown fences.`
 								{ role: 'user', content: trimmed },
 							],
 							temperature: 0.2,
-							...thinkingParam(),
+							...thinkingParam(model),
 						},
 						{ signal: opts.signal },
 					),

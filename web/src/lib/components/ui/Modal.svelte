@@ -23,6 +23,7 @@
 	export let title = '';
 	export let size: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl' | 'full' = 'md';
 	export let closable = true;
+	export let placement: 'top' | 'center' = 'center';
 	// PADDING OF THE SCROLLABLE BODY. OVERRIDE (E.G. DROP THE TOP PAD) WHEN THE SLOT HAS ITS OWN STICKY HEADER.
 	export let bodyClass = 'p-4 sm:p-5';
 
@@ -61,29 +62,32 @@
 <svelte:window on:keydown={(e) => open && closable && e.key === 'Escape' && close()} />
 
 {#if open}
-	<!-- DIALOG: BOTTOM SHEET ON MOBILE, CENTERED CARD ON DESKTOP. use:scrollLock FREEZES THE PAGE BEHIND. -->
+	<!-- DIALOG: BOTTOM SHEET ON MOBILE, TOP-ANCHORED OR CENTERED CARD ON DESKTOP. use:scrollLock FREEZES THE PAGE BEHIND. -->
 	<div
 		use:scrollLock
-		class="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-0 sm:p-4"
+		class={cn(
+			'fixed inset-0 z-50 flex items-end justify-center p-0 sm:p-4 overflow-y-auto overflow-x-hidden',
+			placement === 'top' ? 'sm:items-start sm:pt-14 sm:pb-8' : 'sm:items-center'
+		)}
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby={title ? titleId : undefined}
 	>
 		<!-- BACKDROP OVERLAY — NO RIPPLE (A FULL-SCREEN DISMISS SHOULDN'T FLASH A RIPPLE ON CLICK) -->
 		<button
-			class="absolute inset-0 bg-black/40 backdrop-blur-sm"
+			class="fixed inset-0 bg-black/40 backdrop-blur-sm"
 			on:click={() => closable && close()}
 			aria-label="Close dialog"
 			tabindex="-1"
 			transition:fade={{ duration: 150 }}
 		></button>
-		<!-- MODAL CARD -->
+		<!-- MODAL CARD (mx-auto ensures strict horizontal centering during scroll and wrap) -->
 		<div
 			use:focusTrap
 			tabindex="-1"
 			transition:fly={{ y: 24, duration: 220, easing: cubicOut }}
 			class={cn(
-				'relative z-10 flex w-full flex-col overflow-hidden rounded-t-2xl shadow-2xl outline-none sm:rounded-2xl',
+				'relative z-10 mx-auto flex w-full flex-col overflow-hidden rounded-t-2xl shadow-2xl outline-none text-left sm:rounded-2xl',
 				// THEME-AWARE OPAQUE PANEL (WAS A HARDCODED white / slate-900 PLANE THAT IGNORED sepia/oled/contrast)
 				panel,
 				// MOBILE: A BOTTOM-SHEET DRAWER THAT STOPS WELL SHORT OF FULL HEIGHT (A STRIP OF THE PAGE STAYS

@@ -531,6 +531,40 @@ describe('runChapterPipeline', () => {
 		const finalPages = db.select().from(pages).where(eq(pages.chapterId, chapter.id)).all();
 		expect(finalPages.every((p) => p.status === 'done')).toBe(true);
 	});
+
+	it('streams pages through translation without waiting for all pages to finish analyze', async () => {
+		seedBook(db, { id: 'b_stream' });
+		const chapter = seedChapter(db, { bookId: 'b_stream', seq: 0 });
+		const p0 = seedPage(db, { chapterId: chapter.id, seq: 0, filePath: 'uploads/stream_0.png' });
+		const p1 = seedPage(db, { chapterId: chapter.id, seq: 1, filePath: 'uploads/stream_1.png' });
+		mkdirSync(join(dataRoot, 'uploads'), { recursive: true });
+		writeFileSync(join(dataRoot, 'uploads', 'stream_0.png'), PAGE_PNG);
+		writeFileSync(join(dataRoot, 'uploads', 'stream_1.png'), PAGE_PNG);
+
+		const stepEvents: Array<{ pageId: number; step: string; type: string }> = [];
+
+		await chapterWork(chapter.id, {
+			pipeline,
+			dataRoot,
+			llm: fakeLlm(),
+			pageConcurrency: 1,
+		})(new AbortController().signal, (e) => {
+			if (e.pageId && e.step) {
+				stepEvents.push({ pageId: e.pageId, step: e.step, type: e.type });
+			}
+		});
+
+		const p0Translate = stepEvents.findIndex(
+			(e) => e.pageId === p0.id && e.step === 'translate' && e.type === 'page-step-start',
+		);
+		const p1Analyze = stepEvents.findIndex(
+			(e) => e.pageId === p1.id && e.step === 'analyze' && e.type === 'page-step-start',
+		);
+
+		expect(p0Translate).toBeGreaterThanOrEqual(0);
+		expect(p1Analyze).toBeGreaterThanOrEqual(0);
+		expect(p0Translate).toBeLessThan(p1Analyze);
+	});
 });
 
 

@@ -78,6 +78,24 @@ describe('glossaryBlock', () => {
 		expect(block!.indexOf('★系统')).toBeLessThan(block!.indexOf('★主角'));
 	});
 
+	it('sorts pinned terms first, then deterministically by source alphabetically for KV prompt caching', () => {
+		const block = glossaryBlock(
+			[
+				term({ source: '李元', target: 'Li Yuan', pinned: false }),
+				term({ source: '宗门', target: 'Sect', pinned: true }),
+				term({ source: '阿青', target: 'A Qing', pinned: false }),
+				term({ source: '掌门', target: 'Sect Leader', pinned: true }),
+			],
+			'zh-Hans',
+			'en',
+		);
+		// Pinned terms come first
+		expect(block!.indexOf('★宗门')).toBeLessThan(block!.indexOf('★李元'));
+		expect(block!.indexOf('★掌门')).toBeLessThan(block!.indexOf('★李元'));
+		// Unpinned terms are sorted deterministically (李 precedes 阿 in code point order)
+		expect(block!.indexOf('★李元')).toBeLessThan(block!.indexOf('★阿青'));
+	});
+
 	it('is injected as a separate system message between prompt and user content', () => {
 		const regions = [{ id: 'r0', text: '你好' }];
 		const messages = buildMessages(regions, [term({ source: '系统', target: 'System' })], PAIR);

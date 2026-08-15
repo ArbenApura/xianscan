@@ -128,7 +128,7 @@ export const PIPELINE_STEP_LABELS: Record<PipelineStep, string> = {
 	persist_regions: 'Save Regions',
 	term_extract: 'Glossary AI Extract',
 	match_glossary: 'Glossary Match',
-	translate: 'DeepSeek Translation',
+	translate: 'AI Translation',
 	persist_translations: 'Save Translations',
 	clean: 'Inpaint Artwork (LaMa)',
 	typeset: 'Typeset & Wrap',

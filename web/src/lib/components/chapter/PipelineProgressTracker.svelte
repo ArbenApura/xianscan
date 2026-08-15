@@ -99,24 +99,6 @@
 		}
 		return p.totalDurationMs;
 	}
-
-	const PHASES: { id: PipelinePhase; label: string; icon: string }[] = [
-		{ id: 'phase1_analyze', label: '1. Detect & OCR', icon: '🔍' },
-		{ id: 'phase2_extract', label: '2. Term Discovery', icon: '📚' },
-		{ id: 'phase3_typeset', label: '3. Translate & Render', icon: '🎨' },
-		{ id: 'completed', label: '4. Done', icon: '✨' },
-	];
-
-	function getPhaseIndex(phase: PipelinePhase | undefined): number {
-		if (!phase) return 0;
-		if (phase === 'phase1_analyze') return 0;
-		if (phase === 'phase2_extract') return 1;
-		if (phase === 'phase3_typeset') return 2;
-		if (phase === 'completed') return 3;
-		return 0;
-	}
-
-	$: activePhaseIndex = getPhaseIndex(snapshot?.currentPhase);
 </script>
 
 {#if snapshot || running}
@@ -201,11 +183,6 @@
 			<div class="flex items-center gap-3">
 				<!-- METRICS PILLS -->
 				<div class="hidden sm:flex items-center gap-2">
-					{#if snapshot?.phase2Stats?.durationMs}
-						<div class="flex items-center gap-1 rounded-lg border border-purple-500/20 bg-purple-500/5 px-2.5 py-1 text-xs font-semibold text-purple-600 dark:text-purple-400" title="Glossary term extraction duration">
-							<span>📚 Discovery: {formatDuration(snapshot.phase2Stats.durationMs)}</span>
-						</div>
-					{/if}
 
 					{#if (snapshot?.cacheHitCount || 0) > 0}
 						<div class="flex items-center gap-1 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-2.5 py-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
@@ -256,33 +233,6 @@
 				}`}
 				style={`width: ${progressPercent}%`}
 			></div>
-		</div>
-
-		<!-- STAGE STEPPER -->
-		<div class="grid grid-cols-2 border-b border-black/[0.06] bg-black/[0.01] p-3 sm:grid-cols-4 dark:border-white/[0.06] dark:bg-white/[0.01]">
-			{#each PHASES as phase, idx}
-				{@const isCurrent = activePhaseIndex === idx && running}
-				{@const isPast = activePhaseIndex > idx || (activePhaseIndex === 3 && !running)}
-				<div
-					class={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition ${
-						isCurrent
-							? 'bg-[#b23a2e]/10 text-[#b23a2e] dark:text-[#e08a63] font-bold'
-							: isPast
-								? 'opacity-80 font-medium'
-								: 'opacity-40'
-					}`}
-				>
-					<span class="text-sm">{phase.icon}</span>
-					<div class="text-xs truncate">
-						<div>{phase.label}</div>
-						{#if phase.id === 'phase2_extract' && snapshot?.phase2Stats?.durationMs}
-							<div class="text-[10px] opacity-70">
-								{snapshot.phase2Stats.termCount ?? 0} terms ({formatDuration(snapshot.phase2Stats.durationMs)})
-							</div>
-						{/if}
-					</div>
-				</div>
-			{/each}
 		</div>
 
 		<!-- EXPANDABLE PER-PAGE STATUS MATRIX & DIAGNOSTICS -->

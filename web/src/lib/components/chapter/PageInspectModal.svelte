@@ -242,7 +242,10 @@
 								}`}
 								on:mouseenter={() => (hoveredRegionId = region.id)}
 								on:mouseleave={() => (hoveredRegionId = null)}
-								on:click={() => scrollToRegion(region)}
+								on:click={() => {
+									hoveredRegionId = hoveredRegionId === region.id ? null : region.id;
+									scrollToRegion(region);
+								}}
 							>
 								<!-- HEADER ROW: sequence badge + confidence + box size -->
 								<div class="flex items-center justify-between">
@@ -283,11 +286,11 @@
 									</div>
 								</div>
 
-								<!-- DEEPSEEK TARGET -->
+								<!-- AI TARGET -->
 								{#if region.textTarget}
 									<div class="mt-2 border-t border-black/[0.05] pt-1.5 dark:border-white/[0.05]">
 										<div class="mb-0.5 text-[10px] font-semibold text-[#b23a2e] dark:text-[#e08a63]">
-											DeepSeek Translation
+											AI Translation
 										</div>
 										<div class="flex items-start gap-1">
 											<span class="flex-1 break-words leading-snug">{region.textTarget}</span>

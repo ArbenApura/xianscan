@@ -272,10 +272,16 @@
 				titleTarget: chapter.titleTarget,
 			});
 		}
+
+		window.addEventListener('dragend', handleDragEnd);
+		window.addEventListener('pointerup', handleDragEnd);
 	});
 
 	onDestroy(() => {
-		// Do not disconnect global jobTracker on reader exit so background batch HUD & alerts continue streaming
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('dragend', handleDragEnd);
+			window.removeEventListener('pointerup', handleDragEnd);
+		}
 	});
 
 	// RELOAD CHAPTER DATA WHEN PROGRESS COMPLETES
@@ -702,20 +708,10 @@
 	{:else if activeViewMode === 'reader'}
 		<ViewModeWebtoon
 			pages={displayPages}
-			running={currentJobState.running}
 			{webtoonKind}
 			{webtoonWidth}
 			{reloadKey}
 			{pageVersions}
-			{draggedPageIndex}
-			{dragOverPageIndex}
-			on:inspect={(e) => openInspector(e.detail)}
-			on:menuAction={(e) => handleMenuAction(e.detail.action, e.detail.page)}
-			on:dragStart={(e) => handleDragStart(e.detail.event, e.detail.index)}
-			on:dragOver={(e) => handleDragOver(e.detail.event, e.detail.index)}
-			on:drop={(e) => handleDrop(e.detail.event, e.detail.index)}
-			on:dragEnd={handleDragEnd}
-			on:toggleKind={() => settings.update((s) => ({ ...s, webtoonKind: s.webtoonKind === 'output' ? 'original' : 'output' }))}
 		/>
 	{:else if activeViewMode === 'grid'}
 		<ViewModeGrid

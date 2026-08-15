@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join, extname } from 'node:path';
 // IMPORTED DEP-MODULES
 import { error } from '@sveltejs/kit';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 
 // IMPORTED MODULES
 import { db } from './db';
@@ -97,6 +97,7 @@ export async function uploadPages(chapterId: number, files: File[]): Promise<num
 		seq++;
 		count++;
 	}
+	compactChapterPageSeqs(chapterId);
 	return count;
 }
 
@@ -112,22 +113,115 @@ export function nextPageSeq(chapterId: number): number {
 	return (max?.seq ?? -1) + 1;
 }
 
-// RE-ORDER A CHAPTER'S PAGES (PRESERVES (chapterId, seq) UNIQUE INDEX VIA TEMP SEQUENCES).
+// ENSURE CHAPTER PAGE SEQUENCES ARE STRICTLY CONTIGUOUS (0, 1, 2, ... N-1) WITH NO GAPS OR DUPLICATES.
+export function compactChapterPageSeqs(chapterId: number): void {
+	const currentRows = db
+		.select({ id: pages.id, seq: pages.seq })
+		.from(pages)
+		.where(eq(pages.chapterId, chapterId))
+		.orderBy(asc(pages.seq), asc(pages.id))
+		.all();
+
+	let needsReindex = false;
+	for (let i = 0; i < currentRows.length; i++) {
+		if (currentRows[i].seq !== i) {
+			needsReindex = true;
+			break;
+		}
+	}
+
+	if (needsReindex) {
+		const pageIds = currentRows.map((r) => r.id);
+		db.transaction(() => {
+			for (let i = 0; i < pageIds.length; i++) {
+				db.update(pages)
+					.set({ seq: -(i + 1000) })
+					.where(eq(pages.id, pageIds[i]))
+					.run();
+			}
+			for (let i = 0; i < pageIds.length; i++) {
+				db.update(pages)
+					.set({ seq: i })
+					.where(eq(pages.id, pageIds[i]))
+					.run();
+			}
+		});
+	}
+}
+
+// RE-ORDER A CHAPTER'S PAGES (PRESERVES (chapterId, seq) UNIQUE INDEX VIA TEMP SEQUENCES, HANDLES SUBSETS SAFELY).
 export function reorderPages(chapterId: number, pageIds: number[]): void {
+	const existing = db
+		.select({ id: pages.id })
+		.from(pages)
+		.where(eq(pages.chapterId, chapterId))
+		.orderBy(asc(pages.seq), asc(pages.id))
+		.all();
+
+	const existingIdSet = new Set(existing.map((p) => p.id));
+	const orderedIds: number[] = [];
+	const seen = new Set<number>();
+
+	for (const id of pageIds) {
+		if (existingIdSet.has(id) && !seen.has(id)) {
+			orderedIds.push(id);
+			seen.add(id);
+		}
+	}
+
+	// APPEND ANY OMITTED EXISTING PAGES AT THE END IN ORIGINAL ORDER
+	for (const p of existing) {
+		if (!seen.has(p.id)) {
+			orderedIds.push(p.id);
+			seen.add(p.id);
+		}
+	}
+
 	db.transaction(() => {
-		for (let i = 0; i < pageIds.length; i++) {
+		for (let i = 0; i < orderedIds.length; i++) {
 			db.update(pages)
 				.set({ seq: -(i + 1000) })
-				.where(eq(pages.id, pageIds[i]))
+				.where(eq(pages.id, orderedIds[i]))
 				.run();
 		}
-		for (let i = 0; i < pageIds.length; i++) {
+		for (let i = 0; i < orderedIds.length; i++) {
 			db.update(pages)
 				.set({ seq: i })
-				.where(eq(pages.id, pageIds[i]))
+				.where(eq(pages.id, orderedIds[i]))
 				.run();
 		}
 	});
+}
+
+// DELETE A SINGLE PAGE, ITS REGIONS, DISK ASSETS, AND RE-INDEX REMAINING PAGES TO PREVENT GAPS.
+export function deletePage(pageId: number, dataRoot: string = DATA_ROOT): { chapterId: number; seq: number } {
+	const [p] = db.select().from(pages).where(eq(pages.id, pageId)).all();
+	if (!p) throw error(404, 'Page not found.');
+
+	const chapterId = p.chapterId;
+	const deletedSeq = p.seq;
+
+	// 1. DELETE DEPENDENT DB RECORDS
+	db.delete(translations).where(eq(translations.pageId, pageId)).run();
+	db.delete(regions).where(eq(regions.pageId, pageId)).run();
+
+	// 2. DELETE DISK FILES IF THEY EXIST
+	const pathsToUnlink = [p.filePath, p.cleanedPath, p.outputPath].filter(Boolean) as string[];
+	for (const rel of pathsToUnlink) {
+		try {
+			unlinkSync(join(dataRoot, rel));
+		} catch {
+			// ignore if missing
+		}
+	}
+
+	// 3. DELETE PAGE ROW
+	db.delete(pages).where(eq(pages.id, pageId)).run();
+
+	// 4. ATOMICALLY RE-INDEX REMAINING PAGES IN THE CHAPTER
+	compactChapterPageSeqs(chapterId);
+
+	return { chapterId, seq: deletedSeq };
 }
 
 // MANUALLY STITCH A PAGE WITH THE NEXT PAGE IN THE CHAPTER SEQUENCE.
@@ -436,6 +530,13 @@ function safeJson(raw: string): unknown {
 // FETCH COMPLETE CHAPTER READER DATA (USED BY /app/books/[id]/chapters/[chapterId] SSR & API)
 export async function getChapterReaderData(chapterId: number): Promise<ChapterReaderResult> {
 	await assertChapterExists(chapterId);
+
+	// AUTO-HEAL ANY GAPS OR INCONSISTENT SEQUENCES IN DB
+	try {
+		compactChapterPageSeqs(chapterId);
+	} catch {
+		// Non-blocking
+	}
 
 	const pageRows = db
 		.select()

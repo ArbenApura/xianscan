@@ -60,7 +60,7 @@ function createTestState(): TestState {
 // FRESH AUTOINCREMENT COUNTERS, EXACTLY WHAT `npm run db:migrate` PRODUCES.
 export function resetDb(): void {
 	const state = globalThis.__mtTestDb ?? (globalThis.__mtTestDb = createTestState());
-	const tables = ['ai_usage', 'translations', 'regions', 'pages', 'glossary', 'chapters', 'books'];
+	const tables = ['ai_providers', 'ai_usage', 'translations', 'regions', 'pages', 'glossary', 'chapters', 'books'];
 	state.raw.exec(`DROP TABLE IF EXISTS __drizzle_migrations; ${tables.map((t) => `DROP TABLE IF EXISTS \`${t}\`;`).join(' ')}`);
 	migrate(state.db, { migrationsFolder: MIGRATIONS_DIR });
 }

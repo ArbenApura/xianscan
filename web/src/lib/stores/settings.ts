@@ -8,7 +8,7 @@ import { DEFAULT_SOURCE_LANG, DEFAULT_TARGET_LANG } from '$lib/languages';
 // -- TYPES -- //
 
 export type Theme = 'light' | 'sepia' | 'dark';
-export type AppFont = 'comic' | 'poppins' | 'proxima' | 'nunito' | 'montserrat' | 'lexend';
+export type AppFont = 'comic' | 'clash' | 'general' | 'poppins' | 'proxima' | 'nunito' | 'montserrat' | 'lexend';
 export type InpaintMode = 'patch' | 'scaled' | 'full';
 export type ExecutionDevice = 'auto' | 'cuda' | 'dml' | 'cpu';
 
@@ -48,23 +48,23 @@ export const INPAINT_MODES: { id: InpaintMode; label: string; tag: string; badge
 	{
 		id: 'patch',
 		label: 'Patch Crop',
-		tag: 'Recommended (10–14× Faster)',
+		tag: 'Fastest · Recommended',
 		badgeColor: 'text-emerald-700 bg-emerald-500/10 border-emerald-500/30 dark:text-emerald-300',
-		blurb: 'Inpaints localized text bubbles at full native pixel resolution. Preserves pristine line art with minimum CPU latency.',
+		blurb: 'Fastest with native 1:1 sharpness. Inpaints localized dialogue bubble patches at full resolution, keeping the rest of the page pristine with minimal latency.',
 	},
 	{
 		id: 'scaled',
 		label: 'Balanced (512×512)',
-		tag: '8× Faster',
+		tag: 'Fast · Standard',
 		badgeColor: 'text-amber-700 bg-amber-500/10 border-amber-500/30 dark:text-amber-300',
-		blurb: 'Resizes the canvas to 512×512 before inpainting and upscales. Fast single pass, suited for low-memory devices.',
+		blurb: 'Standard quality for low-end hardware. Downsamples canvas to 512×512 before inpainting and upscales; fast and memory-efficient.',
 	},
 	{
 		id: 'full',
 		label: 'Full Dynamic',
-		tag: 'High Memory',
+		tag: 'Slowest · Full Canvas',
 		badgeColor: 'text-sky-700 bg-sky-500/10 border-sky-500/30 dark:text-sky-300',
-		blurb: 'Processes the entire full-resolution canvas in one dynamic pass. Highest CPU/VRAM usage and slowest latency.',
+		blurb: 'Highest global context quality. Inpaints the entire uncut image in one pass for seamless full-page texture blending; requires high VRAM and compute.',
 	},
 ];
 
@@ -82,6 +82,20 @@ export const APP_FONTS: { id: AppFont; label: string; sample: string; blurb: str
 		sample: 'COMIC SCANLATION',
 		blurb: 'Iconic all-caps scanlation typography for authentic comic feel',
 		stack: "'CC Wild Words', 'WildWorld', 'Montserrat', sans-serif",
+	},
+	{
+		id: 'clash',
+		label: 'Clash Grotesk',
+		sample: 'Contemporary Display',
+		blurb: 'Striking contemporary sans with dramatic personality and geometric precision',
+		stack: "'Clash Grotesk', 'Cabinet Grotesk', sans-serif",
+	},
+	{
+		id: 'general',
+		label: 'General Sans',
+		sample: 'Rational Neutral Sans',
+		blurb: 'Crisp, rational Swiss-inspired grotesque designed for clear UI hierarchy',
+		stack: "'General Sans', sans-serif",
 	},
 	{
 		id: 'poppins',
@@ -122,6 +136,8 @@ export const APP_FONTS: { id: AppFont; label: string; sample: string; blurb: str
 
 export const FONT_STACKS: Record<AppFont, string> = {
 	comic: "'CC Wild Words', 'WildWorld', 'Montserrat', sans-serif",
+	clash: "'Clash Grotesk', 'Cabinet Grotesk', sans-serif",
+	general: "'General Sans', sans-serif",
 	poppins: "'Poppins', sans-serif",
 	proxima: "'Proxima Nova', 'Montserrat', sans-serif",
 	nunito: "'Nunito Sans', sans-serif",
@@ -245,7 +261,7 @@ export function isDarkTheme(theme: Theme): boolean {
 
 // APPLY THE THEME AT THE DOCUMENT ROOT: dark CLASS, color-scheme, AND ROOT BACKGROUND
 export function applyThemeClass(theme: Theme): void {
-	if (!browser) return;
+	if (!browser || typeof document === 'undefined') return;
 	const isDark = DARK_THEMES.includes(theme);
 	const root = document.documentElement;
 	root.classList.toggle('dark', isDark);
@@ -258,7 +274,7 @@ export function applyThemeClass(theme: Theme): void {
 
 // APPLY THE APP-WIDE INTERFACE FONT FAMILY
 export function applyFontFamily(font: AppFont): void {
-	if (!browser) return;
+	if (!browser || typeof document === 'undefined') return;
 	const stack = FONT_STACKS[font] || FONT_STACKS.comic;
 	document.documentElement.style.setProperty('--app-font-family', stack);
 	document.documentElement.style.fontFamily = stack;

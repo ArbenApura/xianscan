@@ -23,7 +23,7 @@ import { env } from '$env/dynamic/private';
 import PQueue from 'p-queue';
 import { and, asc, eq } from 'drizzle-orm';
 // IMPORTED TYPES
-import type { TranslationUsage, PipelineStep, LangPair } from '$lib/types';
+import type { TranslationUsage, PipelineStep, PipelinePhase, LangPair } from '$lib/types';
 // IMPORTED MODULES
 import { addNewTerms, bookPair, getEffectiveGlossary } from './glossary';
 import { matchTerms } from './glossary-match';
@@ -330,107 +330,20 @@ export async function runChapterPipeline(
 		});
 	}
 
-	// -- PHASE 1 (PARALLEL): READ IMAGE + DETECT + OCR -- //
+	// -- PIPELINED EXECUTION: PROCESS PAGES CONCURRENTLY AS A STREAM -- //
 	emit({ type: 'phase-change', chapterId, phase: 'phase1_analyze' });
 
-	await pool.addAll(
-		pageRows.map((page, i) => async () => {
-			const slot = slots[i];
-			if (slot.outcome !== undefined || deps.isPageCancelled?.(page.id)) return; // SKIPPED — ALREADY 'done' UP FRONT
-			try {
-				signal.throwIfAborted();
-				if (deps.isPageCancelled?.(page.id)) return;
-				// 'processing' MAKES THE CRASH-RESUME RESET ABOVE REAL (A CRASH NOW LEAVES A MARKER).
-				db.update(pages)
-					.set({ status: 'processing', error: null })
-					.where(eq(pages.id, page.id))
-					.run();
+	// Shared accumulator for background chapter term extraction
+	const accumulatedTexts: string[] = [];
+	let termExtractionTriggered = false;
+	let activePhase: PipelinePhase = 'phase1_analyze';
 
-				// 1) ANALYZE — DETECT + OCR VIA THE SIDECAR
-				emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'analyze' });
-				const tAnalyze0 = performance.now();
-				const image = readFileSync(join(deps.dataRoot, page.filePath));
-				const analyzed = await deps.pipeline.analyze(image, signal);
-				if (deps.isPageCancelled?.(page.id)) return;
-				const tAnalyze = performance.now() - tAnalyze0;
+	const maybeTriggerTermExtraction = async () => {
+		if (termExtractionTriggered || signal.aborted) return;
+		termExtractionTriggered = true;
+		const chapterText = accumulatedTexts.join('\n');
+		if (!chapterText.trim()) return;
 
-				emit({
-					type: 'page-step-end',
-					chapterId,
-					page: i,
-					pageId: page.id,
-					step: 'analyze',
-					stepStatus: 'completed',
-					durationMs: tAnalyze,
-					stepDetails: { regionsCount: analyzed.regions.length },
-				});
-
-				if (deps.isPageCancelled?.(page.id)) return;
-
-				// 2) PERSIST REGIONS (REPLACE THE PREVIOUS RUN'S)
-				emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'persist_regions' });
-				db.transaction((tx) => {
-					tx.delete(regions).where(eq(regions.pageId, page.id)).run();
-					if (analyzed.regions.length > 0) {
-						tx.insert(regions)
-							.values(analyzed.regions.map((r, idx) => ({ ...regionRow(r, idx), pageId: page.id })))
-							.run();
-					}
-				});
-				emit({
-					type: 'page-step-end',
-					chapterId,
-					page: i,
-					pageId: page.id,
-					step: 'persist_regions',
-					stepStatus: 'completed',
-				});
-
-				if (deps.isPageCancelled?.(page.id)) return;
-
-				slot.image = image;
-				slot.analyzed = analyzed;
-				slot.outcome = 'analyzed';
-			} catch (e) {
-				// AN ABORT STOPS THE WHOLE JOB — THE NEXT SUPERSEDING RUN TAKES OVER. NEVER MARK THE PAGE.
-				if (signal.aborted || deps.isPageCancelled?.(page.id)) return;
-				// PER-PAGE ERROR ISOLATION — THE JOB CONTINUES WITH THE OTHER PAGES
-				const message = e instanceof Error ? e.message : String(e);
-				emit({
-					type: 'page-step-end',
-					chapterId,
-					page: i,
-					pageId: page.id,
-					step: 'analyze',
-					stepStatus: 'failed',
-					stepDetails: { error: message },
-				});
-				db.update(pages).set({ status: 'error', error: message }).where(eq(pages.id, page.id)).run();
-				slot.outcome = 'error';
-				slot.failedStep = 'analyze';
-				slot.message = message;
-				emit({
-					type: 'error',
-					chapterId,
-					page: i,
-					pageId: page.id,
-					failedStep: 'analyze',
-					message,
-				});
-			}
-		}),
-	);
-
-	// -- PHASE 2: ONE CHAPTER-LEVEL TERM-EXTRACTION CALL (NON-BLOCKING) -- //
-	signal.throwIfAborted();
-	emit({ type: 'phase-change', chapterId, phase: 'phase2_extract' });
-
-	const chapterText = slots
-		.filter((s) => s.outcome === 'analyzed')
-		.flatMap((s) => (s.analyzed?.regions ?? []).filter((r) => r.text.trim().length > 0).map((r) => r.text))
-		.join('\n');
-
-	if (chapterText.trim().length > 0) {
 		if (book?.sourceLang === 'auto') {
 			const detected = detectSourceLanguage(chapterText, pair.sourceLang);
 			if (detected !== pair.sourceLang) {
@@ -438,6 +351,7 @@ export async function runChapterPipeline(
 				db.update(books).set({ sourceLang: detected }).where(eq(books.id, chapter.bookId)).run();
 			}
 		}
+
 		const tExtract0 = performance.now();
 		emit({ type: 'term-extract-step', chapterId, stepStatus: 'running' });
 		try {
@@ -461,7 +375,7 @@ export async function runChapterPipeline(
 			});
 			if (extUsage && deps.onUsage) deps.onUsage(extUsage);
 		} catch (err) {
-			if (signal.aborted) throw err;
+			if (signal.aborted) return;
 			const tExtract = performance.now() - tExtract0;
 			emit({
 				type: 'term-extract-step',
@@ -470,238 +384,324 @@ export async function runChapterPipeline(
 				durationMs: tExtract,
 				stepDetails: { error: err instanceof Error ? err.message : String(err) },
 			});
-			// AUTO-EXTRACTION IS NON-BLOCKING FOR TRANSLATION
 		}
-	}
+	};
 
-	// -- PHASE 3 (PARALLEL): TRANSLATE → CLEAN → TYPESET → MARK DONE -- //
-	signal.throwIfAborted();
-	emit({ type: 'phase-change', chapterId, phase: 'phase3_typeset' });
+	const processPagePipeline = async (page: Page, i: number) => {
+		const slot = slots[i];
+		if (slot.outcome !== undefined || deps.isPageCancelled?.(page.id)) return;
+		let activeStep: PipelineStep = 'analyze';
+		const pageT0 = performance.now();
 
-	await pool.addAll(
-		pageRows.map((page, i) => async () => {
-			const slot = slots[i];
-			if (slot.outcome !== 'analyzed' || deps.isPageCancelled?.(page.id)) return; // PHASE-1 FAILURES SKIP THE REST
-			const image = slot.image!;
-			const analyzed = slot.analyzed!;
-			let activeStep: PipelineStep = 'match_glossary';
-			const pageT0 = performance.now();
+		try {
+			signal.throwIfAborted();
+			if (deps.isPageCancelled?.(page.id)) return;
 
-			try {
+			db.update(pages)
+				.set({ status: 'processing', error: null })
+				.where(eq(pages.id, page.id))
+				.run();
+
+			// 1) ANALYZE — DETECT + OCR VIA THE SIDECAR
+			emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'analyze' });
+			const tAnalyze0 = performance.now();
+			const image = readFileSync(join(deps.dataRoot, page.filePath));
+			const analyzed = await deps.pipeline.analyze(image, signal);
+			signal.throwIfAborted();
+			if (deps.isPageCancelled?.(page.id)) return;
+			const tAnalyze = performance.now() - tAnalyze0;
+
+			emit({
+				type: 'page-step-end',
+				chapterId,
+				page: i,
+				pageId: page.id,
+				step: 'analyze',
+				stepStatus: 'completed',
+				durationMs: tAnalyze,
+				stepDetails: { regionsCount: analyzed.regions.length },
+			});
+
+			signal.throwIfAborted();
+			if (deps.isPageCancelled?.(page.id)) return;
+
+			// 2) PERSIST REGIONS
+			activeStep = 'persist_regions';
+			emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'persist_regions' });
+			db.transaction((tx) => {
+				tx.delete(regions).where(eq(regions.pageId, page.id)).run();
+				if (analyzed.regions.length > 0) {
+					tx.insert(regions)
+						.values(analyzed.regions.map((r, idx) => ({ ...regionRow(r, idx), pageId: page.id })))
+						.run();
+				}
+			});
+			emit({
+				type: 'page-step-end',
+				chapterId,
+				page: i,
+				pageId: page.id,
+				step: 'persist_regions',
+				stepStatus: 'completed',
+			});
+
+			signal.throwIfAborted();
+			if (deps.isPageCancelled?.(page.id)) return;
+
+			slot.image = image;
+			slot.analyzed = analyzed;
+			slot.outcome = 'analyzed';
+
+			// Accumulate text for background chapter term discovery
+			const pageNonEmptyText = analyzed.regions
+				.filter((r) => r.text.trim().length > 0)
+				.map((r) => r.text)
+				.join('\n');
+			if (pageNonEmptyText) {
+				accumulatedTexts.push(pageNonEmptyText);
+			}
+
+			// Update phase badge to translation when pages begin translating
+			if (activePhase !== 'phase3_typeset') {
+				activePhase = 'phase3_typeset';
+				emit({ type: 'phase-change', chapterId, phase: 'phase3_typeset' });
+			}
+
+			// Trigger background term discovery if text is ready
+			if (accumulatedTexts.length >= 1 && !termExtractionTriggered) {
+				void maybeTriggerTermExtraction();
+			}
+
+			// 3) TRANSLATE — LLM SEMANTICALLY TRANSLATES VALID DIALOGUE
+			const sources = analyzed.regions
+				.filter((r) => r.text.trim().length > 0)
+				.map((r) => ({ id: r.id, text: r.text }));
+			const byRegion = new Map<string, string>();
+
+			if (sources.length > 0) {
+				activeStep = 'match_glossary';
+				emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'match_glossary' });
+				const pageText = sources.map((s) => s.text).join('\n');
+
+				// AHO-CORASICK TERM MATCHING
+				const matched = await matchTerms(chapter.bookId, pageText);
+				const matchedSources = new Set(matched.map((m) => m.source));
+				const currentEffective = await getEffectiveGlossary(chapter.bookId);
+				const pageTerms = currentEffective.filter((t) => t.pinned || matchedSources.has(t.source));
+
+				emit({
+					type: 'page-step-end',
+					chapterId,
+					page: i,
+					pageId: page.id,
+					step: 'match_glossary',
+					stepStatus: 'completed',
+				});
+
 				signal.throwIfAborted();
 				if (deps.isPageCancelled?.(page.id)) return;
 
-				// 3) TRANSLATE — LLM SEMANTICALLY TRANSLATES VALID DIALOGUE & EMITS "" FOR WATERMARKS/STAMPS
-				const sources = analyzed.regions
-					.filter((r) => r.text.trim().length > 0)
-					.map((r) => ({ id: r.id, text: r.text }));
-				const byRegion = new Map<string, string>();
+				activeStep = 'translate';
+				emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'translate' });
+				const tTrans0 = performance.now();
 
-				if (sources.length > 0) {
-					emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'match_glossary' });
-					const pageText = sources.map((s) => s.text).join('\n');
-
-					// 3b) AHO-CORASICK TERM MATCHING — FILTER TO TERMS PRESENT ON THIS PAGE (+ PINNED)
-					const matched = await matchTerms(chapter.bookId, pageText);
-					const matchedSources = new Set(matched.map((m) => m.source));
-					const currentEffective = await getEffectiveGlossary(chapter.bookId);
-					const pageTerms = currentEffective.filter((t) => t.pinned || matchedSources.has(t.source));
-
-					emit({
-						type: 'page-step-end',
-						chapterId,
-						page: i,
-						pageId: page.id,
-						step: 'match_glossary',
-						stepStatus: 'completed',
-					});
-
-					if (deps.isPageCancelled?.(page.id)) return;
-
-					activeStep = 'translate';
-					emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'translate' });
-					const tTrans0 = performance.now();
-
-					const translated = await translatePage(sources, pageTerms, pair, {
-						client: deps.llm,
-						model,
-						signal,
-					});
-					if (deps.isPageCancelled?.(page.id)) return;
-					for (const [id, text] of translated.byRegion) byRegion.set(id, text);
-					const tTrans = performance.now() - tTrans0;
-					emit({
-						type: 'page-step-end',
-						chapterId,
-						page: i,
-						pageId: page.id,
-						step: 'translate',
-						stepStatus: 'completed',
-						durationMs: tTrans,
-						stepDetails: {
-							cacheHit: false,
-							model: translated.usage.model,
-							tokens: (translated.usage.promptTokens ?? 0) + (translated.usage.completionTokens ?? 0),
-							costUsd: translated.usage.costUsd,
-						},
-					});
-					if (translated.usage && deps.onUsage) deps.onUsage(translated.usage);
-				}
-
-				if (deps.isPageCancelled?.(page.id)) return;
-
-				// 4) WRITE THE TRANSLATIONS BACK TO THE REGION ROWS
-				activeStep = 'persist_translations';
-				emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'persist_translations' });
-				const seqById = new Map(analyzed.regions.map((r, idx) => [r.id, idx]));
-				db.transaction((tx) => {
-					for (const region of analyzed.regions) {
-						let target = byRegion.get(region.id)?.trim() ?? '';
-						if (!target) {
-							const punct = resolveDialoguePunctuation(region.text);
-							if (punct) {
-								target = punct;
-								byRegion.set(region.id, target);
-							}
-						}
-						tx.update(regions)
-							.set({ textTarget: target || null, status: target ? 'translated' : 'failed' })
-							.where(and(eq(regions.pageId, page.id), eq(regions.seq, seqById.get(region.id) ?? -1)))
-							.run();
-					}
+				const translated = await translatePage(sources, pageTerms, pair, {
+					client: deps.llm,
+					model,
+					signal,
 				});
+				signal.throwIfAborted();
+				if (deps.isPageCancelled?.(page.id)) return;
+				for (const [id, text] of translated.byRegion) byRegion.set(id, text);
+				const tTrans = performance.now() - tTrans0;
 				emit({
 					type: 'page-step-end',
 					chapterId,
 					page: i,
 					pageId: page.id,
-					step: 'persist_translations',
+					step: 'translate',
 					stepStatus: 'completed',
+					durationMs: tTrans,
+					stepDetails: {
+						cacheHit: false,
+						model: translated.usage.model,
+						tokens: (translated.usage.promptTokens ?? 0) + (translated.usage.completionTokens ?? 0),
+						costUsd: translated.usage.costUsd,
+					},
 				});
-
-				if (deps.isPageCancelled?.(page.id)) return;
-
-				// 5) CLEAN — ONLY INPAINT REGIONS WITH TRANSLATIONS TO TYPESET (PRESERVE WATERMARKS UNTOUCHED IN ARTWORK)
-				activeStep = 'clean';
-				emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'clean' });
-				const tClean0 = performance.now();
-				const cleanRegions = analyzed.regions
-					.filter((r) => Boolean(byRegion.get(r.id)?.trim()))
-					.map((r) => ({ id: r.id, box: r.box, polygon: r.polygon }));
-				const cleaned =
-					cleanRegions.length > 0 ? await deps.pipeline.clean(image, cleanRegions, deps.inpaintMode ?? 'patch', signal) : image;
-				if (deps.isPageCancelled?.(page.id)) return;
-				const cleanPath = `clean/${chapterId}/${page.seq}.png`;
-				const cleanAbs = join(deps.dataRoot, cleanPath);
-				cleanDir(join(deps.dataRoot, 'clean', String(chapterId)));
-				writeFileSync(cleanAbs, cleaned);
-				const tClean = performance.now() - tClean0;
-				emit({
-					type: 'page-step-end',
-					chapterId,
-					page: i,
-					pageId: page.id,
-					step: 'clean',
-					stepStatus: 'completed',
-					durationMs: tClean,
-				});
-
-				if (deps.isPageCancelled?.(page.id)) return;
-
-				// 6) TYPESET — RENDER TRANSLATIONS ONLY FOR REGIONS WITH NON-EMPTY DIALOGUE
-				activeStep = 'typeset';
-				emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'typeset' });
-				const tType0 = performance.now();
-				const typesetRegions = analyzed.regions
-					.filter((r) => Boolean(byRegion.get(r.id)?.trim()))
-					.map((r) => ({
-						id: r.id,
-						box: r.box,
-						text: byRegion.get(r.id)!,
-						vertical: r.vertical,
-						angle: r.angle,
-					}));
-				const out = await typesetPage(cleaned, typesetRegions);
-				if (deps.isPageCancelled?.(page.id)) return;
-				const outputPath = `output/${chapterId}/${page.seq}.png`;
-				cleanDir(join(deps.dataRoot, 'output', String(chapterId)));
-				writeFileSync(join(deps.dataRoot, outputPath), out);
-				const tType = performance.now() - tType0;
-				emit({
-					type: 'page-step-end',
-					chapterId,
-					page: i,
-					pageId: page.id,
-					step: 'typeset',
-					stepStatus: 'completed',
-					durationMs: tType,
-				});
-
-				if (deps.isPageCancelled?.(page.id)) return;
-
-				// 7) MARK DONE
-				activeStep = 'save_output';
-				emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'save_output' });
-				db.update(pages)
-					.set({
-						status: 'done',
-						cleanedPath: cleanPath,
-						outputPath,
-						width: analyzed.width,
-						height: analyzed.height,
-					})
-					.where(eq(pages.id, page.id))
-					.run();
-				emit({
-					type: 'page-step-end',
-					chapterId,
-					page: i,
-					pageId: page.id,
-					step: 'save_output',
-					stepStatus: 'completed',
-				});
-
-				slot.page.outputPath = outputPath;
-				slot.totalDurationMs = performance.now() - pageT0;
-				slot.outcome = 'done';
-				emit({
-					type: 'page-done',
-					chapterId,
-					page: i,
-					pageId: page.id,
-					pageCount: slots.length,
-					outputPath,
-					durationMs: slot.totalDurationMs,
-				});
-			} catch (e) {
-				// AN ABORT STOPS THE WHOLE JOB — THE NEXT SUPERSEDING RUN TAKES OVER. NEVER MARK THE PAGE.
-				if (signal.aborted || deps.isPageCancelled?.(page.id)) return;
-				// PER-PAGE ERROR ISOLATION — THE JOB CONTINUES WITH THE OTHER PAGES
-				const message = e instanceof Error ? e.message : String(e);
-				emit({
-					type: 'page-step-end',
-					chapterId,
-					page: i,
-					pageId: page.id,
-					step: activeStep,
-					stepStatus: 'failed',
-					stepDetails: { error: message },
-				});
-				db.update(pages).set({ status: 'error', error: message }).where(eq(pages.id, page.id)).run();
-				slot.outcome = 'error';
-				slot.failedStep = activeStep;
-				slot.message = message;
-				emit({
-					type: 'error',
-					chapterId,
-					page: i,
-					pageId: page.id,
-					failedStep: activeStep,
-					message,
-				});
+				if (translated.usage && deps.onUsage) deps.onUsage(translated.usage);
 			}
-		}),
-	);
+
+			signal.throwIfAborted();
+			if (deps.isPageCancelled?.(page.id)) return;
+
+			// 4) WRITE TRANSLATIONS BACK TO REGION ROWS
+			activeStep = 'persist_translations';
+			emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'persist_translations' });
+			const seqById = new Map(analyzed.regions.map((r, idx) => [r.id, idx]));
+			db.transaction((tx) => {
+				for (const region of analyzed.regions) {
+					let target = byRegion.get(region.id)?.trim() ?? '';
+					if (!target) {
+						const punct = resolveDialoguePunctuation(region.text);
+						if (punct) {
+							target = punct;
+							byRegion.set(region.id, target);
+						}
+					}
+					tx.update(regions)
+						.set({ textTarget: target || null, status: target ? 'translated' : 'failed' })
+						.where(and(eq(regions.pageId, page.id), eq(regions.seq, seqById.get(region.id) ?? -1)))
+						.run();
+				}
+			});
+			emit({
+				type: 'page-step-end',
+				chapterId,
+				page: i,
+				pageId: page.id,
+				step: 'persist_translations',
+				stepStatus: 'completed',
+			});
+
+			signal.throwIfAborted();
+			if (deps.isPageCancelled?.(page.id)) return;
+
+			// 5) CLEAN — INPAINT REMOVED TEXT REGIONS
+			activeStep = 'clean';
+			emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'clean' });
+			const tClean0 = performance.now();
+			const cleanRegions = analyzed.regions
+				.filter((r) => Boolean(byRegion.get(r.id)?.trim()))
+				.map((r) => ({ id: r.id, box: r.box, polygon: r.polygon }));
+			const cleaned =
+				cleanRegions.length > 0 ? await deps.pipeline.clean(image, cleanRegions, deps.inpaintMode ?? 'patch', signal) : image;
+			signal.throwIfAborted();
+			if (deps.isPageCancelled?.(page.id)) return;
+			const cleanPath = `clean/${chapterId}/${page.seq}.png`;
+			const cleanAbs = join(deps.dataRoot, cleanPath);
+			cleanDir(join(deps.dataRoot, 'clean', String(chapterId)));
+			writeFileSync(cleanAbs, cleaned);
+			const tClean = performance.now() - tClean0;
+			emit({
+				type: 'page-step-end',
+				chapterId,
+				page: i,
+				pageId: page.id,
+				step: 'clean',
+				stepStatus: 'completed',
+				durationMs: tClean,
+			});
+
+			signal.throwIfAborted();
+			if (deps.isPageCancelled?.(page.id)) return;
+
+			// 6) TYPESET — RENDER TRANSLATIONS ONTO CANVAS
+			activeStep = 'typeset';
+			emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'typeset' });
+			const tType0 = performance.now();
+			const typesetRegions = analyzed.regions
+				.filter((r) => Boolean(byRegion.get(r.id)?.trim()))
+				.map((r) => ({
+					id: r.id,
+					box: r.box,
+					text: byRegion.get(r.id)!,
+					vertical: r.vertical,
+					angle: r.angle,
+				}));
+			const out = await typesetPage(cleaned, typesetRegions);
+			signal.throwIfAborted();
+			if (deps.isPageCancelled?.(page.id)) return;
+			const outputPath = `output/${chapterId}/${page.seq}.png`;
+			cleanDir(join(deps.dataRoot, 'output', String(chapterId)));
+			writeFileSync(join(deps.dataRoot, outputPath), out);
+			const tType = performance.now() - tType0;
+			emit({
+				type: 'page-step-end',
+				chapterId,
+				page: i,
+				pageId: page.id,
+				step: 'typeset',
+				stepStatus: 'completed',
+				durationMs: tType,
+			});
+
+			signal.throwIfAborted();
+			if (deps.isPageCancelled?.(page.id)) return;
+
+			// 7) MARK DONE
+			activeStep = 'save_output';
+			emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'save_output' });
+			db.update(pages)
+				.set({
+					status: 'done',
+					cleanedPath: cleanPath,
+					outputPath,
+					width: analyzed.width,
+					height: analyzed.height,
+				})
+				.where(eq(pages.id, page.id))
+				.run();
+			emit({
+				type: 'page-step-end',
+				chapterId,
+				page: i,
+				pageId: page.id,
+				step: 'save_output',
+				stepStatus: 'completed',
+			});
+
+			slot.page.outputPath = outputPath;
+			slot.totalDurationMs = performance.now() - pageT0;
+			slot.outcome = 'done';
+			emit({
+				type: 'page-done',
+				chapterId,
+				page: i,
+				pageId: page.id,
+				pageCount: slots.length,
+				outputPath,
+				durationMs: slot.totalDurationMs,
+			});
+		} catch (e) {
+			if (signal.aborted) {
+				const abortErr = new Error('The operation was aborted');
+				abortErr.name = 'AbortError';
+				throw abortErr;
+			}
+			if (deps.isPageCancelled?.(page.id)) return;
+			const message = e instanceof Error ? e.message : String(e);
+			emit({
+				type: 'page-step-end',
+				chapterId,
+				page: i,
+				pageId: page.id,
+				step: activeStep,
+				stepStatus: 'failed',
+				stepDetails: { error: message },
+			});
+			db.update(pages).set({ status: 'error', error: message }).where(eq(pages.id, page.id)).run();
+			slot.outcome = 'error';
+			slot.failedStep = activeStep;
+			slot.message = message;
+			emit({
+				type: 'error',
+				chapterId,
+				page: i,
+				pageId: page.id,
+				failedStep: activeStep,
+				message,
+			});
+		}
+	};
+
+	// Start all pages processing concurrently via PQueue
+	await pool.addAll(pageRows.map((page, i) => () => processPagePipeline(page, i)));
+
+	// If term extraction has not been triggered yet (e.g. all empty text), try once
+	if (!termExtractionTriggered && accumulatedTexts.length > 0 && !signal.aborted) {
+		await maybeTriggerTermExtraction();
+	}
 
 	// WAIT FOR ANY DYNAMICALLY INJECTED PAGES IN THE QUEUE TO ALSO COMPLETE
 	await pool.onIdle();

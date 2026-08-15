@@ -3,12 +3,31 @@
 	import { browser } from '$app/environment';
 	// IMPORTED DEP-MODULES
 	import { Toaster } from 'svelte-sonner';
+	import { onMount } from 'svelte';
 	// IMPORTED MODULES
 	import '../app.css';
 	import { settings, THEME_CLASS, applyThemeClass, applyFontFamily } from '$lib/stores/settings';
 	import type { LayoutData } from './$types';
 
 	export let data: LayoutData;
+
+	// UNREGISTER ANY ROGUE SERVICE WORKER / EVAPORATE ACCUMULATED LOCALHOST CACHESTORAGE
+	onMount(() => {
+		if (browser && 'serviceWorker' in navigator) {
+			navigator.serviceWorker.getRegistrations().then((registrations) => {
+				for (const reg of registrations) {
+					reg.unregister();
+				}
+			});
+		}
+		if (browser && 'caches' in window) {
+			caches.keys().then((names) => {
+				for (const name of names) {
+					caches.delete(name);
+				}
+			});
+		}
+	});
 
 	// SYNC STORE FROM SSR PREFERENCES (RUNS ON SERVER DURING SSR AND ON HYDRATION)
 	$: if (data?.preferences) {

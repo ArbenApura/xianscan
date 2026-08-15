@@ -1,6 +1,6 @@
 // GLOBAL BATCH TRANSLATION TRACKER STORE
-// Orchestrates sequential chapter execution with mandatory pre-translation smart re-slicing,
-// staged parallel page processing, SSE streaming, localStorage persistence, and self-healing error recovery.
+// Orchestrates multi-chapter concurrent execution with lookahead background smart re-slicing,
+// staged streaming page processing, SSE monitoring, localStorage persistence, and self-healing error recovery.
 
 import { writable, derived, get } from 'svelte/store';
 import { browser } from '$app/environment';
@@ -62,11 +62,17 @@ function saveState(state: BatchTranslationState): void {
 function createBatchTrackerStore() {
 	const { subscribe, set, update } = writable<BatchTranslationState>(loadStoredState());
 
-	let isProcessingQueue = false;
 	let unsubscribeJobTracker: (() => void) | null = null;
-	let lastWatchedChapterId: number | null = null;
-	let lastWatchedStatus: string | null = null;
-	let currentResliceController: AbortController | null = null;
+	const activeResliceControllers = new Map<number, AbortController>();
+	const preReslicedChapterIds = new Set<number>();
+	const preReslicingChapterIds = new Set<number>();
+	const completedChapterIds = new Set<number>();
+	const failedChapterIds = new Set<number>();
+
+	function getMaxParallelChapters(): number {
+		const configured = get(settings)?.parallelChapters;
+		return Math.max(1, Math.min(4, Number(configured) || 1));
+	}
 
 	// Helper to run smart reslice via SSE stream
 	async function resliceChapter(
@@ -103,6 +109,57 @@ function createBatchTrackerStore() {
 		}
 	}
 
+	// Lookahead background pre-reslicing: pre-slices upcoming chapters while current ones translate
+	async function lookaheadPreReslice() {
+		if (!browser) return;
+		const shouldReslice = get(settings).resliceBeforeBatch ?? true;
+		if (!shouldReslice) return;
+
+		const state = get({ subscribe });
+		if (!state.active || state.status !== 'running') return;
+
+		// Find upcoming queued chapters that have not yet been pre-resliced
+		const candidates = state.queue.filter(
+			(c) =>
+				c.status === 'queued' &&
+				c.pageCount > 0 &&
+				!preReslicedChapterIds.has(c.id) &&
+				!preReslicingChapterIds.has(c.id),
+		);
+
+		// Pre-reslice up to 2 upcoming chapters in the background
+		for (const nextCandidate of candidates.slice(0, 2)) {
+			preReslicingChapterIds.add(nextCandidate.id);
+			const ctrl = new AbortController();
+			activeResliceControllers.set(nextCandidate.id, ctrl);
+
+			void (async () => {
+				try {
+					const res = await resliceChapter(nextCandidate.id, undefined, ctrl.signal);
+					activeResliceControllers.delete(nextCandidate.id);
+					preReslicingChapterIds.delete(nextCandidate.id);
+
+					if (res && res.newCount > 0) {
+						preReslicedChapterIds.add(nextCandidate.id);
+						update((s) => {
+							const q = s.queue.map((item) =>
+								item.id === nextCandidate.id
+									? { ...item, pageCount: res.newCount, totalPages: res.newCount }
+									: item,
+							);
+							const next = { ...s, queue: q };
+							saveState(next);
+							return next;
+						});
+					}
+				} catch {
+					activeResliceControllers.delete(nextCandidate.id);
+					preReslicingChapterIds.delete(nextCandidate.id);
+				}
+			})();
+		}
+	}
+
 	let livenessTimer: ReturnType<typeof setInterval> | null = null;
 
 	function startLivenessWatchdog() {
@@ -113,11 +170,11 @@ function createBatchTrackerStore() {
 				stopLivenessWatchdog();
 				return;
 			}
-			const currentChapter = currentState.queue[currentState.currentIndex];
-			if (currentChapter && currentChapter.status === 'processing') {
-				const jtState = get(jobTracker);
+			const processingChapters = currentState.queue.filter((c) => c.status === 'processing');
+			const jtState = get(jobTracker);
+
+			for (const currentChapter of processingChapters) {
 				const job = jtState.jobs[currentChapter.id];
-				// If not connected or connection lost while supposed to be processing, auto-sync from server
 				if (!job || job.connectionState === 'idle' || !job.running) {
 					await jobTracker.syncChapter(currentChapter.id);
 				}
@@ -138,11 +195,9 @@ function createBatchTrackerStore() {
 			unsubscribeJobTracker();
 			unsubscribeJobTracker = null;
 		}
-		lastWatchedChapterId = null;
-		lastWatchedStatus = null;
 	}
 
-	// Watch jobTracker to advance the queue automatically
+	// Watch jobTracker to update live status and advance queue on completions
 	function attachJobWatcher() {
 		startLivenessWatchdog();
 		if (unsubscribeJobTracker) return;
@@ -151,206 +206,209 @@ function createBatchTrackerStore() {
 			const currentState = get({ subscribe });
 			if (!currentState.active || currentState.status !== 'running') return;
 
-			const currentChapter = currentState.queue[currentState.currentIndex];
-			if (!currentChapter) {
-				finishBatch();
-				return;
-			}
+			const processingChapters = currentState.queue.filter((c) => c.status === 'processing');
 
-			// Only watch if in 'processing' translation stage
-			if (currentChapter.status !== 'processing') return;
+			for (const ch of processingChapters) {
+				const jobState = trackerState.jobs[ch.id];
+				if (!jobState) continue;
 
-			const jobState = trackerState.jobs[currentChapter.id];
-			if (!jobState) return;
+				// Update page progress in queue item
+				if (jobState.snapshot) {
+					const snap = jobState.snapshot;
+					update((s) => {
+						const q = s.queue.map((item) =>
+							item.id === ch.id
+								? {
+										...item,
+										translatedPages: snap.completedPages,
+										totalPages: snap.totalPages || snap.pages.length,
+									}
+								: item,
+						);
+						const next = { ...s, queue: q };
+						saveState(next);
+						return next;
+					});
+				}
 
-			// Update live progress in queue item
-			if (jobState.snapshot) {
-				const snap = jobState.snapshot;
-				update((s) => {
-					const q = [...s.queue];
-					if (q[s.currentIndex] && q[s.currentIndex].id === currentChapter.id) {
-						q[s.currentIndex] = {
-							...q[s.currentIndex],
-							translatedPages: snap.completedPages,
-							totalPages: snap.totalPages || snap.pages.length,
-						};
-					}
-					const next = { ...s, queue: q };
-					saveState(next);
-					return next;
-				});
-			}
+				const isDone =
+					jobState.snapshot?.status === 'done' ||
+					(!jobState.running &&
+						jobState.snapshot?.completedPages === jobState.snapshot?.totalPages &&
+						(jobState.snapshot?.totalPages ?? 0) > 0);
 
-			const isDone =
-				jobState.snapshot?.status === 'done' ||
-				(!jobState.running &&
-					jobState.snapshot?.completedPages === jobState.snapshot?.totalPages &&
-					(jobState.snapshot?.totalPages ?? 0) > 0);
-			const isFailed =
-				jobState.snapshot?.status === 'failed' ||
-				(!jobState.running && jobState.connectionState === 'error' && (jobState.snapshot?.completedPages || 0) === 0);
+				const isFailed =
+					jobState.snapshot?.status === 'failed' ||
+					(!jobState.running &&
+						jobState.connectionState === 'error' &&
+						(jobState.snapshot?.completedPages || 0) === 0);
 
-			if (isDone && lastWatchedStatus !== 'done') {
-				lastWatchedStatus = 'done';
-				onChapterCompleted(currentChapter, jobState.snapshot);
-			} else if (isFailed && lastWatchedStatus !== 'failed') {
-				lastWatchedStatus = 'failed';
-				onChapterFailed(currentChapter, jobState.lastError || 'Translation failed');
+				if (isDone && !completedChapterIds.has(ch.id)) {
+					completedChapterIds.add(ch.id);
+					onChapterCompleted(ch, jobState.snapshot);
+				} else if (isFailed && !failedChapterIds.has(ch.id)) {
+					failedChapterIds.add(ch.id);
+					onChapterFailed(ch, jobState.lastError || 'Translation failed');
+				}
 			}
 		});
 	}
 
-	async function runNextInQueue() {
-		if (isProcessingQueue) return;
-		isProcessingQueue = true;
+	async function startChapterExecution(chapter: BatchChapterItem) {
+		const state = get({ subscribe });
+		if (!state.active || state.status !== 'running') return;
 
-		try {
-			const state = get({ subscribe });
-			if (!state.active || state.status !== 'running') {
-				isProcessingQueue = false;
-				return;
-			}
+		const shouldReslice =
+			(get(settings).resliceBeforeBatch ?? true) &&
+			chapter.pageCount > 0 &&
+			!preReslicedChapterIds.has(chapter.id);
 
-			if (state.currentIndex >= state.queue.length) {
-				finishBatch();
-				isProcessingQueue = false;
-				return;
-			}
-
-			const expectedIndex = state.currentIndex;
-			const currentChapter = state.queue[expectedIndex];
-			if (!currentChapter) {
-				finishBatch();
-				isProcessingQueue = false;
-				return;
-			}
-
-			// ----------------------------------------------------
-			// STEP 1: SMART RE-SLICE CHAPTER PAGES (GATED BY USER PREFERENCE)
-			// ----------------------------------------------------
-			const shouldReslice = (get(settings).resliceBeforeBatch ?? true) && currentChapter.pageCount > 0;
-			if (shouldReslice) {
-				update((s) => {
-					const q = [...s.queue];
-					if (q[expectedIndex]) {
-						q[expectedIndex] = {
-							...q[expectedIndex],
-							status: 'reslicing',
-							resliceMessage: 'Analyzing canvas & finding optimal speech gutters...',
-							error: null,
-						};
-					}
-					const next: BatchTranslationState = {
-						...s,
-						queue: q,
-						currentPhase: 'reslice',
-					};
-					saveState(next);
-					return next;
-				});
-
-				currentResliceController = new AbortController();
-				const resliceResult = await resliceChapter(
-					currentChapter.id,
-					(msg) => {
-						update((s) => {
-							const q = [...s.queue];
-							if (q[expectedIndex] && q[expectedIndex].status === 'reslicing') {
-								q[expectedIndex] = {
-									...q[expectedIndex],
-									resliceMessage: msg,
-								};
-							}
-							return { ...s, queue: q };
-						});
-					},
-					currentResliceController.signal,
-				);
-				currentResliceController = null;
-
-				// Check if batch paused, skipped, or cancelled during reslice
-				const stateAfterReslice = get({ subscribe });
-				if (!stateAfterReslice.active || stateAfterReslice.status !== 'running' || stateAfterReslice.currentIndex !== expectedIndex) {
-					return;
-				}
-
-				// Update page count from reslice result if available
-				if (resliceResult && resliceResult.newCount > 0) {
-					update((s) => {
-						const q = [...s.queue];
-						if (q[expectedIndex]) {
-							q[expectedIndex] = {
-								...q[expectedIndex],
-								pageCount: resliceResult.newCount,
-								totalPages: resliceResult.newCount,
-							};
-						}
-						return { ...s, queue: q };
-					});
-				}
-			}
-
-			// ----------------------------------------------------
-			// STEP 2: START PARALLEL CHAPTER TRANSLATION PIPELINE
-			// ----------------------------------------------------
+		// STEP 1: RESLICE (IF NOT ALREADY PRE-RESLICED)
+		if (shouldReslice) {
 			update((s) => {
-				const q = [...s.queue];
-				if (q[expectedIndex]) {
-					q[expectedIndex] = {
-						...q[expectedIndex],
-						status: 'processing',
-						resliceMessage: null,
-						error: null,
-					};
-				}
-				const next: BatchTranslationState = {
-					...s,
-					queue: q,
-					currentPhase: 'translate',
-				};
+				const q = s.queue.map((item) =>
+					item.id === chapter.id
+						? {
+								...item,
+								status: 'reslicing' as const,
+								resliceMessage: 'Analyzing canvas & finding optimal speech gutters...',
+								error: null,
+							}
+						: item,
+				);
+				const next: BatchTranslationState = { ...s, queue: q, currentPhase: 'reslice' };
 				saveState(next);
 				return next;
 			});
 
-			lastWatchedChapterId = currentChapter.id;
-			lastWatchedStatus = 'processing';
+			const ctrl = new AbortController();
+			activeResliceControllers.set(chapter.id, ctrl);
 
-			// Launch chapter translation (non-blocking so queue lock is freed while job executes)
-			void jobTracker.startTranslation(currentChapter.id, { force: state.force }).catch((err: any) => {
-				onChapterFailed(currentChapter, err?.message || 'Failed to start translation');
-			});
-		} finally {
-			isProcessingQueue = false;
+			const resliceResult = await resliceChapter(
+				chapter.id,
+				(msg) => {
+					update((s) => {
+						const q = s.queue.map((item) =>
+							item.id === chapter.id && item.status === 'reslicing'
+								? { ...item, resliceMessage: msg }
+								: item,
+						);
+						return { ...s, queue: q };
+					});
+				},
+				ctrl.signal,
+			);
+			activeResliceControllers.delete(chapter.id);
+
+			const cur = get({ subscribe });
+			if (!cur.active || cur.status !== 'running') return;
+			const targetItem = cur.queue.find((q) => q.id === chapter.id);
+			if (!targetItem || targetItem.status !== 'reslicing') return;
+
+			if (resliceResult && resliceResult.newCount > 0) {
+				preReslicedChapterIds.add(chapter.id);
+				update((s) => {
+					const q = s.queue.map((item) =>
+						item.id === chapter.id
+							? { ...item, pageCount: resliceResult.newCount, totalPages: resliceResult.newCount }
+							: item,
+					);
+					return { ...s, queue: q };
+				});
+			}
 		}
+
+		// STEP 2: START PIPELINED TRANSLATION
+		update((s) => {
+			const q = s.queue.map((item) =>
+				item.id === chapter.id
+					? {
+							...item,
+							status: 'processing' as const,
+							resliceMessage: null,
+							error: null,
+						}
+					: item,
+			);
+			const next: BatchTranslationState = { ...s, queue: q, currentPhase: 'translate' };
+			saveState(next);
+			return next;
+		});
+
+		void jobTracker.startTranslation(chapter.id, { force: state.force }).catch((err: any) => {
+			onChapterFailed(chapter, err?.message || 'Failed to start translation');
+		});
+	}
+
+	function dispatchNextBatchItems() {
+		const state = get({ subscribe });
+		if (!state.active || state.status !== 'running') return;
+
+		const maxParallel = getMaxParallelChapters();
+		const activeItems = state.queue.filter((c) => c.status === 'processing' || c.status === 'reslicing');
+		const availableSlots = maxParallel - activeItems.length;
+
+		if (availableSlots <= 0) {
+			void lookaheadPreReslice();
+			return;
+		}
+
+		const queuedItems = state.queue.filter((c) => c.status === 'queued').slice(0, availableSlots);
+
+		if (queuedItems.length === 0) {
+			if (activeItems.length === 0) {
+				finishBatch();
+			}
+			return;
+		}
+
+		// Advance currentIndex pointer to the first active/unfinished chapter for UI focus
+		const firstUnfinishedIdx = state.queue.findIndex(
+			(c) => c.status === 'queued' || c.status === 'processing' || c.status === 'reslicing',
+		);
+		if (firstUnfinishedIdx >= 0 && firstUnfinishedIdx !== state.currentIndex) {
+			update((s) => {
+				const next = { ...s, currentIndex: firstUnfinishedIdx };
+				saveState(next);
+				return next;
+			});
+		}
+
+		for (const item of queuedItems) {
+			void startChapterExecution(item);
+		}
+
+		void lookaheadPreReslice();
 	}
 
 	function onChapterCompleted(chapter: BatchChapterItem, snapshot: ChapterJobSnapshot | null) {
 		const title = chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`;
 		toast.success(`✓ ${title} translated successfully!`);
 
-		lastWatchedChapterId = null;
-		lastWatchedStatus = null;
-
 		update((s) => {
-			const q = [...s.queue];
-			if (q[s.currentIndex]) {
-				q[s.currentIndex] = {
-					...q[s.currentIndex],
-					status: 'done',
-					translatedPages: snapshot?.completedPages || q[s.currentIndex].pageCount,
-					totalPages: snapshot?.totalPages || q[s.currentIndex].pageCount,
-				};
-			}
+			const q = s.queue.map((item) =>
+				item.id === chapter.id
+					? {
+							...item,
+							status: 'done' as const,
+							translatedPages: snapshot?.completedPages || item.pageCount,
+							totalPages: snapshot?.totalPages || item.pageCount,
+						}
+					: item,
+			);
 
 			const totalCostUsd = s.totalCostUsd + (snapshot?.totalCostUsd || 0);
 			const totalPromptTokens = s.totalPromptTokens + (snapshot?.totalPromptTokens || 0);
 			const totalCompletionTokens = s.totalCompletionTokens + (snapshot?.totalCompletionTokens || 0);
 
+			const firstUnfinishedIdx = q.findIndex(
+				(c) => c.status === 'queued' || c.status === 'processing' || c.status === 'reslicing',
+			);
+
 			const next: BatchTranslationState = {
 				...s,
 				queue: q,
-				currentIndex: s.currentIndex + 1,
-				currentPhase: undefined,
+				currentIndex: firstUnfinishedIdx >= 0 ? firstUnfinishedIdx : s.queue.length,
 				totalCostUsd,
 				totalPromptTokens,
 				totalCompletionTokens,
@@ -359,47 +417,38 @@ function createBatchTrackerStore() {
 			return next;
 		});
 
-		const nextState = get({ subscribe });
-		if (nextState.currentIndex < nextState.queue.length && nextState.status === 'running') {
-			void runNextInQueue();
-		} else {
-			finishBatch();
-		}
+		dispatchNextBatchItems();
 	}
 
 	function onChapterFailed(chapter: BatchChapterItem, errorMsg: string) {
 		const title = chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`;
 		toast.error(`Chapter ${chapter.seq + 1} translation failed: ${errorMsg}`);
 
-		lastWatchedChapterId = null;
-		lastWatchedStatus = null;
-
 		update((s) => {
-			const q = [...s.queue];
-			if (q[s.currentIndex]) {
-				q[s.currentIndex] = {
-					...q[s.currentIndex],
-					status: 'error',
-					error: errorMsg,
-				};
-			}
+			const q = s.queue.map((item) =>
+				item.id === chapter.id
+					? {
+							...item,
+							status: 'error' as const,
+							error: errorMsg,
+						}
+					: item,
+			);
+
+			const firstUnfinishedIdx = q.findIndex(
+				(c) => c.status === 'queued' || c.status === 'processing' || c.status === 'reslicing',
+			);
 
 			const next: BatchTranslationState = {
 				...s,
 				queue: q,
-				currentIndex: s.currentIndex + 1,
-				currentPhase: undefined,
+				currentIndex: firstUnfinishedIdx >= 0 ? firstUnfinishedIdx : s.queue.length,
 			};
 			saveState(next);
 			return next;
 		});
 
-		const nextState = get({ subscribe });
-		if (nextState.currentIndex < nextState.queue.length && nextState.status === 'running') {
-			void runNextInQueue();
-		} else {
-			finishBatch();
-		}
+		dispatchNextBatchItems();
 	}
 
 	function finishBatch() {
@@ -421,21 +470,19 @@ function createBatchTrackerStore() {
 		toast.success(`Batch Translation Finished: ${doneCount} of ${finalState.queue.length} chapters complete.`);
 	}
 
-	// Initialize and check for auto-resume if page reloads during an active batch
+	// Initialize and check for auto-resume if page reloads during active batch
 	if (browser) {
 		setTimeout(() => {
 			const current = get({ subscribe });
 			if (current.active && current.status === 'running') {
 				attachJobWatcher();
-				const currentChapter = current.queue[current.currentIndex];
-				if (currentChapter) {
-					// Re-attach or continue
-					void jobTracker.syncChapter(currentChapter.id).then(() => {
-						const jobState = get(jobTracker).jobs[currentChapter.id];
-						if (!jobState?.running) {
-							void runNextInQueue();
-						}
-					});
+				const activeChapters = current.queue.filter((c) => c.status === 'processing');
+				if (activeChapters.length > 0) {
+					for (const ch of activeChapters) {
+						void jobTracker.syncChapter(ch.id);
+					}
+				} else {
+					dispatchNextBatchItems();
 				}
 			}
 		}, 100);
@@ -453,7 +500,7 @@ function createBatchTrackerStore() {
 		) {
 			if (chapters.length === 0) return;
 
-			// GUARD: PREVENT RUNNING BATCH ON ANOTHER BOOK WHILE A BATCH IS ALREADY ACTIVE
+			// GUARD: PREVENT RUNNING BATCH ON ANOTHER BOOK WHILE ACTIVE
 			const currentState = get({ subscribe });
 			if (
 				currentState.active &&
@@ -468,6 +515,14 @@ function createBatchTrackerStore() {
 				);
 				return;
 			}
+
+			// Clear previous execution tracker sets
+			activeResliceControllers.forEach((c) => c.abort());
+			activeResliceControllers.clear();
+			preReslicedChapterIds.clear();
+			preReslicingChapterIds.clear();
+			completedChapterIds.clear();
+			failedChapterIds.clear();
 
 			attachJobWatcher();
 
@@ -501,11 +556,14 @@ function createBatchTrackerStore() {
 			set(newState);
 			saveState(newState);
 
-			toast.info(`Starting batch translation for ${chapters.length} chapter${chapters.length === 1 ? '' : 's'} (with smart re-slicing)...`);
-			void runNextInQueue();
+			const parallelCount = getMaxParallelChapters();
+			const parallelMsg = parallelCount > 1 ? ` (${parallelCount} parallel workers)` : '';
+			toast.info(`Starting batch translation for ${chapters.length} chapter${chapters.length === 1 ? '' : 's'}${parallelMsg}...`);
+
+			dispatchNextBatchItems();
 		},
 
-		// Pause batch (stops triggering next chapter after current finishes)
+		// Pause batch
 		pauseBatch() {
 			update((s) => {
 				const next: BatchTranslationState = { ...s, status: 'paused' };
@@ -524,82 +582,83 @@ function createBatchTrackerStore() {
 				return next;
 			});
 			toast.info('Resuming batch translation...');
-			void runNextInQueue();
+			dispatchNextBatchItems();
 		},
 
-		// Skip currently processing chapter and move to next
-		async skipCurrentChapter() {
-			if (currentResliceController) {
-				currentResliceController.abort();
-				currentResliceController = null;
+		// Skip currently processing or specified chapter
+		async skipCurrentChapter(chapterId?: number) {
+			const state = get({ subscribe });
+			const target = chapterId
+				? state.queue.find((q) => q.id === chapterId)
+				: state.queue.find((q) => q.status === 'processing' || q.status === 'reslicing') ||
+					state.queue[state.currentIndex];
+
+			if (!target) return;
+
+			const ctrl = activeResliceControllers.get(target.id);
+			if (ctrl) {
+				ctrl.abort();
+				activeResliceControllers.delete(target.id);
 			}
 
-			const state = get({ subscribe });
-			const current = state.queue[state.currentIndex];
-			if (!current) return;
-
 			try {
-				await jobTracker.cancelTranslation(current.id);
+				await jobTracker.cancelTranslation(target.id);
 			} catch {
 				// Ignore
 			}
 
-			lastWatchedChapterId = null;
-			lastWatchedStatus = null;
-
 			update((s) => {
-				const q = [...s.queue];
-				if (q[s.currentIndex]) {
-					q[s.currentIndex] = {
-						...q[s.currentIndex],
-						status: 'skipped',
-						error: 'Skipped by user',
-					};
-				}
+				const q = s.queue.map((item) =>
+					item.id === target.id
+						? {
+								...item,
+								status: 'skipped' as const,
+								error: 'Skipped by user',
+							}
+						: item,
+				);
+				const firstUnfinishedIdx = q.findIndex(
+					(c) => c.status === 'queued' || c.status === 'processing' || c.status === 'reslicing',
+				);
 				const next: BatchTranslationState = {
 					...s,
 					queue: q,
-					currentIndex: s.currentIndex + 1,
-					currentPhase: undefined,
+					currentIndex: firstUnfinishedIdx >= 0 ? firstUnfinishedIdx : s.queue.length,
 				};
 				saveState(next);
 				return next;
 			});
 
-			toast.info(`Skipped Chapter ${current.seq + 1}.`);
-			void runNextInQueue();
+			toast.info(`Skipped Chapter ${target.seq + 1}.`);
+			dispatchNextBatchItems();
 		},
 
-		// Cancel the entire batch translation
+		// Cancel entire batch translation
 		async cancelBatch() {
-			if (currentResliceController) {
-				currentResliceController.abort();
-				currentResliceController = null;
-			}
+			activeResliceControllers.forEach((c) => c.abort());
+			activeResliceControllers.clear();
+			preReslicingChapterIds.clear();
 
 			detachJobWatcher();
 
 			const state = get({ subscribe });
-			const current = state.queue[state.currentIndex];
-			if (current && (current.status === 'processing' || current.status === 'reslicing')) {
-				try {
-					await jobTracker.cancelTranslation(current.id);
-				} catch {
-					// Ignore
+			const activeOrQueued = state.queue.filter(
+				(c) => c.status === 'processing' || c.status === 'reslicing' || c.status === 'queued',
+			);
+
+			for (const ch of activeOrQueued) {
+				if (ch.status === 'processing') {
+					try {
+						await jobTracker.cancelTranslation(ch.id);
+					} catch {
+						// Ignore
+					}
 				}
 			}
 
 			update((s) => {
-				const updatedQueue = s.queue.map((item, idx) => {
-					if (idx === s.currentIndex && (item.status === 'processing' || item.status === 'reslicing')) {
-						return {
-							...item,
-							status: 'cancelled' as const,
-							error: 'Cancelled by user',
-							resliceMessage: null,
-						};
-					}
-					if (item.status === 'queued') {
+				const updatedQueue = s.queue.map((item) => {
+					if (item.status === 'processing' || item.status === 'reslicing' || item.status === 'queued') {
 						return {
 							...item,
 							status: 'cancelled' as const,
@@ -627,6 +686,13 @@ function createBatchTrackerStore() {
 		// Dismiss / Clear finished or cancelled batch from view
 		clearBatch() {
 			detachJobWatcher();
+			activeResliceControllers.forEach((c) => c.abort());
+			activeResliceControllers.clear();
+			preReslicedChapterIds.clear();
+			preReslicingChapterIds.clear();
+			completedChapterIds.clear();
+			failedChapterIds.clear();
+
 			const next: BatchTranslationState = {
 				...initialBatchState,
 			};
@@ -639,10 +705,11 @@ function createBatchTrackerStore() {
 			const state = get({ subscribe });
 			if (state.active && state.status === 'running') {
 				attachJobWatcher();
-				const current = state.queue[state.currentIndex];
-				if (current) {
-					void jobTracker.syncChapter(current.id);
+				const processing = state.queue.filter((c) => c.status === 'processing');
+				for (const ch of processing) {
+					void jobTracker.syncChapter(ch.id);
 				}
+				dispatchNextBatchItems();
 			}
 		},
 	};
@@ -665,13 +732,16 @@ export const batchProgress = derived(
 				overallProgressPercent: 0,
 				currentChapter: null,
 				currentJobState: null,
+				activeChapters: [],
 			};
 		}
 
 		const totalChapters = $bt.queue.length;
 		const completedChapters = $bt.queue.filter((c) => c.status === 'done').length;
 		const failedChapters = $bt.queue.filter((c) => c.status === 'error').length;
-		const processedChapters = $bt.queue.filter((c) => c.status === 'done' || c.status === 'skipped' || c.status === 'error').length;
+		const processedChapters = $bt.queue.filter(
+			(c) => c.status === 'done' || c.status === 'skipped' || c.status === 'error',
+		).length;
 
 		let totalAllPages = 0;
 		let completedAllPages = 0;
@@ -697,7 +767,8 @@ export const batchProgress = derived(
 					? Math.min(100, Math.round((completedAllPages / totalAllPages) * 100))
 					: Math.min(100, Math.round((processedChapters / totalChapters) * 100));
 
-		const currentChapter = $bt.queue[$bt.currentIndex] || null;
+		const activeChapters = $bt.queue.filter((c) => c.status === 'processing' || c.status === 'reslicing');
+		const currentChapter = activeChapters[0] || $bt.queue[$bt.currentIndex] || null;
 		const currentJobState = currentChapter ? $jt.jobs[currentChapter.id] || null : null;
 
 		return {
@@ -712,6 +783,7 @@ export const batchProgress = derived(
 			overallProgressPercent,
 			currentChapter,
 			currentJobState,
+			activeChapters,
 		};
 	},
 );

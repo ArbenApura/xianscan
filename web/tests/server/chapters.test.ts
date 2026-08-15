@@ -1,10 +1,10 @@
-// CHAPTER HELPERS TESTS — THE UPLOAD SEQ-CONTINUATION REGRESSION (A SECOND UPLOAD USED TO 500 ON
-// THE (chapterId, seq) UNIQUE INDEX).
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { getTestDb, resetDb, seedBook, seedChapter, seedPage, type TestDb } from '../helpers/db';
-import { nextPageSeq, reorderPages } from '$lib/server/chapters';
+import { nextPageSeq, reorderPages, deletePage, compactChapterPageSeqs } from '$lib/server/chapters';
 import { pages, regions, translations } from '$lib/server/db/schema';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 vi.mock('$lib/server/db', async () => ({ db: (await import('../helpers/db')).getTestDb() }));
 
@@ -79,9 +79,67 @@ describe('nextPageSeq & reorderPages', () => {
 		expect(rows[2].seq).toBe(2);
 	});
 
+	it('reorderPages safely handles partial ID arrays by appending omitted pages', () => {
+		seedBook(db, { id: 'b_partial' });
+		const chapter = seedChapter(db, { bookId: 'b_partial', seq: 0 });
+		const p0 = seedPage(db, { chapterId: chapter.id, seq: 0 });
+		const p1 = seedPage(db, { chapterId: chapter.id, seq: 1 });
+		const p2 = seedPage(db, { chapterId: chapter.id, seq: 2 });
+
+		// ONLY PASS p2
+		reorderPages(chapter.id, [p2.id]);
+
+		const rows = db.select().from(pages).where(eq(pages.chapterId, chapter.id)).orderBy(pages.seq).all();
+		expect(rows).toHaveLength(3);
+		expect(rows[0].id).toBe(p2.id);
+		expect(rows[0].seq).toBe(0);
+		expect(rows[1].id).toBe(p0.id);
+		expect(rows[1].seq).toBe(1);
+		expect(rows[2].id).toBe(p1.id);
+		expect(rows[2].seq).toBe(2);
+	});
+
+	it('deletePage removes disk records and renumbers remaining pages contiguously (no gaps)', () => {
+		seedBook(db, { id: 'b_del' });
+		const chapter = seedChapter(db, { bookId: 'b_del', seq: 0 });
+		const p0 = seedPage(db, { chapterId: chapter.id, seq: 0 });
+		const p1 = seedPage(db, { chapterId: chapter.id, seq: 1 });
+		const p2 = seedPage(db, { chapterId: chapter.id, seq: 2 });
+		const p3 = seedPage(db, { chapterId: chapter.id, seq: 3 });
+
+		// DELETE p1
+		deletePage(p1.id);
+
+		const rows = db.select().from(pages).where(eq(pages.chapterId, chapter.id)).orderBy(pages.seq).all();
+		expect(rows).toHaveLength(3);
+		expect(rows[0].id).toBe(p0.id);
+		expect(rows[0].seq).toBe(0);
+		expect(rows[1].id).toBe(p2.id);
+		expect(rows[1].seq).toBe(1); // Renumbered from 2 to 1!
+		expect(rows[2].id).toBe(p3.id);
+		expect(rows[2].seq).toBe(2); // Renumbered from 3 to 2!
+	});
+
+	it('compactChapterPageSeqs heals arbitrary historical gaps in page sequences', () => {
+		seedBook(db, { id: 'b_compact' });
+		const chapter = seedChapter(db, { bookId: 'b_compact', seq: 0 });
+		const p0 = seedPage(db, { chapterId: chapter.id, seq: 0 });
+		const p1 = seedPage(db, { chapterId: chapter.id, seq: 5 }); // GAP
+		const p2 = seedPage(db, { chapterId: chapter.id, seq: 12 }); // GAP
+
+		compactChapterPageSeqs(chapter.id);
+
+		const rows = db.select().from(pages).where(eq(pages.chapterId, chapter.id)).orderBy(pages.seq).all();
+		expect(rows).toHaveLength(3);
+		expect(rows[0].id).toBe(p0.id);
+		expect(rows[0].seq).toBe(0);
+		expect(rows[1].id).toBe(p1.id);
+		expect(rows[1].seq).toBe(1);
+		expect(rows[2].id).toBe(p2.id);
+		expect(rows[2].seq).toBe(2);
+	});
+
 	it('stitchPageWithNext manually merges a page with the next page', async () => {
-		const fs = await import('node:fs');
-		const path = await import('node:path');
 		const os = await import('node:os');
 		const { stitchPageWithNext } = await import('$lib/server/chapters');
 

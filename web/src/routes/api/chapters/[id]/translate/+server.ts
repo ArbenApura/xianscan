@@ -8,12 +8,11 @@
 // IMPORTED DEP-MODULES
 import { error } from '@sveltejs/kit';
 import { z } from 'zod';
-// IMPORTED ENVS ($env/...)
-import { env } from '$env/dynamic/private';
 // IMPORTED MODULES
 import { assertChapterExists } from '$lib/server/chapters';
 import { chapterWork } from '$lib/server/chapter-pipeline';
 import { createPipelineClient } from '$lib/server/pipeline-client';
+import { getActiveProvider } from '$lib/server/providers';
 import { DATA_ROOT } from '$lib/server/paths';
 import { aiUsage } from '$lib/server/db/schema';
 import { db } from '$lib/server/db';
@@ -110,7 +109,7 @@ export const POST: RequestHandler = async ({ params, request, cookies }) => {
 		pageConcurrency,
 		dataRoot: DATA_ROOT,
 		// THE CACHE MUST NEVER MIX PROVIDERS: MOCK ↔ REAL SWITCHES PRODUCE A FRESH KEY
-		cacheSalt: env.DEEPSEEK_BASE_URL ?? '',
+		cacheSalt: getActiveProvider().baseUrl,
 		isPageCancelled: (pageId: number) => isChapterPageCancelled(chapterId, pageId),
 		onUsage: (u: { model: string; promptTokens: number; cachedTokens: number; completionTokens: number; costUsd: number }) => {
 			try {

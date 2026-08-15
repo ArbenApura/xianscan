@@ -1,7 +1,7 @@
 // DEEPSEEK CLIENT TESTS (PORTED FROM xianslate + EXTENDED) — COST MATH, MODEL ALLOWLIST, RETRY
 // SEMANTICS. NO REAL API CALLS — WITH_RETRY USES FAKE ERRORS + FAKE TIMERS.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { computeUsage, resolveModel, withRetry } from '$lib/server/deepseek';
+import { computeUsage, resolveModel, thinkingParam, withRetry } from '$lib/server/deepseek';
 
 // -- LIFECYCLES -- //
 
@@ -82,9 +82,9 @@ describe('computeUsage', () => {
 });
 
 describe('resolveModel', () => {
-	it('passes through allowlisted models', () => {
+	it('passes through requested models', () => {
 		expect(resolveModel('deepseek-v4-flash')).toBe('deepseek-v4-flash');
-		expect(resolveModel('deepseek-v4-pro')).toBe('deepseek-v4-pro');
+		expect(resolveModel('gemini-3.7-flash')).toBe('gemini-3.7-flash');
 	});
 
 	it('falls back to the default for unknown/empty/null models — never lets arbitrary strings through', () => {
@@ -96,9 +96,15 @@ describe('resolveModel', () => {
 });
 
 describe('thinkingParam', () => {
-	it('disables reasoning/thinking mode by default', async () => {
-		const { thinkingParam } = await import('$lib/server/deepseek');
+	it('disables reasoning/thinking mode for DeepSeek', () => {
+		expect(thinkingParam('deepseek-v4-flash')).toEqual({ thinking: { type: 'disabled' } });
+		expect(thinkingParam('deepseek-v4-pro')).toEqual({ thinking: { type: 'disabled' } });
 		expect(thinkingParam()).toEqual({ thinking: { type: 'disabled' } });
+	});
+
+	it('disables reasoning/thinking mode for Google Gemini', () => {
+		expect(thinkingParam('gemini-3.7-flash')).toEqual({ reasoning_effort: 'none' });
+		expect(thinkingParam('gemini-3.5-flash')).toEqual({ reasoning_effort: 'none' });
 	});
 });
 

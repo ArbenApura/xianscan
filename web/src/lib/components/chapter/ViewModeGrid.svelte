@@ -114,8 +114,6 @@
 		{@const isOutput = webtoonKind === 'output' && Boolean(page.outputPath)}
 		{@const hasRatio = Boolean(page.width && page.height)}
 		<div
-			draggable="true"
-			on:dragstart={(e) => dispatch('dragStart', { event: e, index: idx })}
 			on:dragover={(e) => dispatch('dragOver', { event: e, index: idx })}
 			on:drop={(e) => dispatch('drop', { event: e, index: idx })}
 			on:dragend={(e) => dispatch('dragEnd', e)}
@@ -131,7 +129,12 @@
 			<div>
 				<div class="mb-2 flex items-center justify-between">
 					<div class="flex items-center gap-2">
-						<span class="flex items-center gap-1 cursor-grab text-xs font-bold active:cursor-grabbing">
+						<span
+							draggable="true"
+							on:dragstart={(e) => dispatch('dragStart', { event: e, index: idx })}
+							on:dragend={(e) => dispatch('dragEnd', e)}
+							class="flex items-center gap-1 cursor-grab select-none rounded px-1.5 py-0.5 text-xs font-bold transition hover:bg-black/5 active:cursor-grabbing dark:hover:bg-white/5"
+						>
 							<GripVertical size={13} class="opacity-40" /> Page {page.seq + 1}
 						</span>
 						<Badge

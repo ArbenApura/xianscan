@@ -4,6 +4,7 @@
 	import { cubicOut } from 'svelte/easing';
 	import { goto } from '$app/navigation';
 	import { batchTracker, batchProgress } from '$lib/stores/batch-tracker';
+	import { jobTracker } from '$lib/stores/job-tracker';
 	import { settings, THEME_POPOVER, THEME_PANEL_BORDER } from '$lib/stores/settings';
 	import { ripple } from '$lib/actions/ripple';
 	import { PIPELINE_STEP_LABELS, type PipelinePhase } from '$lib/types';
@@ -83,23 +84,6 @@
 		}
 		return `${min}m ${remSec}s`;
 	}
-
-	const PHASES: { id: PipelinePhase; label: string; num: string }[] = [
-		{ id: 'phase1_analyze', label: 'Detect & OCR', num: '1' },
-		{ id: 'phase2_extract', label: 'Term Discovery', num: '2' },
-		{ id: 'phase3_typeset', label: 'Translate & Render', num: '3' },
-	];
-
-	function getPhaseIndex(phase: PipelinePhase | undefined): number {
-		if (!phase) return 0;
-		if (phase === 'phase1_analyze') return 0;
-		if (phase === 'phase2_extract') return 1;
-		if (phase === 'phase3_typeset') return 2;
-		if (phase === 'completed') return 3;
-		return 0;
-	}
-
-	$: activePhaseIndex = getPhaseIndex(currentSnapshot?.currentPhase);
 
 	function jumpToReader(chapterId?: number) {
 		const targetId = chapterId || currentChapter?.id;
@@ -262,72 +246,64 @@
 					class="flex flex-col gap-3 p-3.5 sm:p-4 border-t border-black/[0.06] dark:border-white/[0.06] max-h-[70vh] overflow-y-auto no-scrollbar"
 				>
 					<!-- ACTIVE CHAPTER CURRENT PHASE & PAGE METRICS -->
-					{#if currentChapter && (isRunning || isPaused)}
-						<div class="rounded-xl border border-black/10 bg-black/[0.02] p-3 dark:border-white/10 dark:bg-white/[0.02]">
-							<div class="flex items-center justify-between gap-2 text-xs font-semibold">
-								<span class="truncate">Chapter {currentChapter.seq + 1}: {currentChapter.titleTarget || currentChapter.title || `Chapter ${currentChapter.seq + 1}`}</span>
-								<button
-									type="button"
-									on:click={() => jumpToReader(currentChapter.id)}
-									class="inline-flex items-center gap-1 text-[11px] text-[#b23a2e] dark:text-[#e08a63] hover:underline shrink-0 font-medium"
-								>
-									<BookOpen size={12} />
-									<span>Open</span>
-								</button>
-							</div>
-
-							{#if currentChapter.status === 'reslicing'}
-								<div class="mt-2.5 flex items-center gap-2 rounded-lg bg-[#b23a2e]/10 px-2.5 py-2 text-xs font-medium text-[#b23a2e] dark:text-[#e08a63] border border-[#b23a2e]/20">
-									<Sparkles size={14} class="animate-spin shrink-0 text-[#b23a2e] dark:text-[#e08a63]" />
-									<div class="min-w-0 flex-1">
-										<div class="font-bold text-[11px]">Smart Page Re-slicing</div>
-										<div class="text-[10px] opacity-75 truncate">{currentChapter.resliceMessage || 'Stitching canvas & finding clean text gutters...'}</div>
-									</div>
-								</div>
-							{:else}
-								<!-- 3-PHASE STEPPING INDICATOR -->
-								<div class="mt-2.5 grid grid-cols-3 gap-1 text-[10px] font-medium">
-									{#each PHASES as ph, idx}
-										{@const isCur = activePhaseIndex === idx}
-										{@const isPast = activePhaseIndex > idx}
-										<div
-											class={`flex items-center gap-1.5 rounded-lg px-2 py-1 transition-all ${
-												isCur
-													? 'bg-[#b23a2e]/15 text-[#b23a2e] dark:bg-[#e08a63]/20 dark:text-[#e08a63] font-bold ring-1 ring-[#b23a2e]/30'
-													: isPast
-														? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-														: 'opacity-40 bg-black/5 dark:bg-white/5'
-											}`}
+					{#if (isRunning || isPaused) && (($batchProgress.activeChapters && $batchProgress.activeChapters.length > 0) || currentChapter)}
+						{@const activeList = $batchProgress.activeChapters && $batchProgress.activeChapters.length > 0 ? $batchProgress.activeChapters : (currentChapter ? [currentChapter] : [])}
+						<div class="flex flex-col gap-2.5">
+							{#each activeList as ch (ch.id)}
+								{@const chJobState = $jobTracker.jobs[ch.id]}
+								{@const chSnapshot = chJobState?.snapshot}
+								<div class="rounded-xl border border-black/10 bg-black/[0.02] p-3 dark:border-white/10 dark:bg-white/[0.02]">
+									<div class="flex items-center justify-between gap-2 text-xs font-semibold">
+										<div class="flex items-center gap-1.5 min-w-0">
+											{#if ch.status === 'reslicing'}
+												<span class="inline-block h-2 w-2 rounded-full bg-amber-500 animate-pulse"></span>
+											{:else}
+												<span class="inline-block h-2 w-2 rounded-full bg-[#b23a2e] dark:bg-[#e08a63] animate-ping"></span>
+											{/if}
+											<span class="truncate">Chapter {ch.seq + 1}: {ch.titleTarget || ch.title || `Chapter ${ch.seq + 1}`}</span>
+										</div>
+										<button
+											type="button"
+											on:click={() => jumpToReader(ch.id)}
+											class="inline-flex items-center gap-1 text-[11px] text-[#b23a2e] dark:text-[#e08a63] hover:underline shrink-0 font-medium"
 										>
-											<span class="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-current/10 text-[9px] font-bold">
-												{isPast ? '✓' : ph.num}
-											</span>
-											<span class="truncate">{ph.label}</span>
-										</div>
-									{/each}
-								</div>
-
-								<!-- PAGE LEVEL SUB-PROGRESS BAR -->
-								{#if currentSnapshot}
-									{@const donePages = currentSnapshot.completedPages || 0}
-									{@const totalPgs = currentSnapshot.totalPages || currentChapter.pageCount || 0}
-									{@const pgPct = totalPgs > 0 ? Math.min(100, Math.round((donePages / totalPgs) * 100)) : 0}
-									<div class="mt-2.5">
-										<div class="flex items-center justify-between text-[10px] opacity-70 mb-1">
-											<span>Page Pipeline Progress</span>
-											<span class="font-mono font-bold">
-												{donePages}/{totalPgs} pgs ({pgPct}%)
-												{#if isRunning && estimatedRemainingMs !== null}
-													• ~{formatDuration(estimatedRemainingMs)} left
-												{/if}
-											</span>
-										</div>
-										<div class="h-1.5 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
-											<div class="h-full rounded-full bg-[#b23a2e] dark:bg-[#e08a63] transition-all duration-300" style={`width: ${pgPct}%`}></div>
-										</div>
+											<BookOpen size={12} />
+											<span>Open</span>
+										</button>
 									</div>
-								{/if}
-							{/if}
+
+									{#if ch.status === 'reslicing'}
+										<div class="mt-2.5 flex items-center gap-2 rounded-lg bg-[#b23a2e]/10 px-2.5 py-2 text-xs font-medium text-[#b23a2e] dark:text-[#e08a63] border border-[#b23a2e]/20">
+											<Sparkles size={14} class="animate-spin shrink-0 text-[#b23a2e] dark:text-[#e08a63]" />
+											<div class="min-w-0 flex-1">
+												<div class="font-bold text-[11px]">Smart Page Re-slicing</div>
+												<div class="text-[10px] opacity-75 truncate">{ch.resliceMessage || 'Stitching canvas & finding clean text gutters...'}</div>
+											</div>
+										</div>
+									{:else}
+										<!-- PAGE LEVEL SUB-PROGRESS BAR -->
+										{#if chSnapshot}
+											{@const donePages = chSnapshot.completedPages || 0}
+											{@const totalPgs = chSnapshot.totalPages || ch.pageCount || 0}
+											{@const pgPct = totalPgs > 0 ? Math.min(100, Math.round((donePages / totalPgs) * 100)) : 0}
+											<div class="mt-2.5">
+												<div class="flex items-center justify-between text-[10px] opacity-70 mb-1">
+													<span>Page Pipeline Progress</span>
+													<span class="font-mono font-bold">
+														{donePages}/{totalPgs} pgs ({pgPct}%)
+														{#if isRunning && estimatedRemainingMs !== null && activeList.length === 1}
+															• ~{formatDuration(estimatedRemainingMs)} left
+														{/if}
+													</span>
+												</div>
+												<div class="h-1.5 w-full overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+													<div class="h-full rounded-full bg-[#b23a2e] dark:bg-[#e08a63] transition-all duration-300" style={`width: ${pgPct}%`}></div>
+												</div>
+											</div>
+										{/if}
+									{/if}
+								</div>
+							{/each}
 						</div>
 					{/if}
 

@@ -99,25 +99,15 @@ function resolveOpts(opts: RippleOptions): ResolvedOptions {
 function createHandler(el: HTMLElement, opts: ResolvedOptions) {
 	const { background, opacity, zIndex, duration, outDuration, timing, width, height, triggerOnChild, triggerExcept } =
 		opts;
-	const isTouch = 'ontouchstart' in window;
 
-	function onEvent(e: MouseEvent | TouchEvent) {
+	function onPointerDown(e: PointerEvent) {
 		const exceptions = resolveExceptions(triggerExcept, el);
 		if (exceptions.includes(e.target as Element)) return;
 		if (e.target !== el && !triggerOnChild) return;
 
 		const pos = offset(el);
-		let cx: number, cy: number;
-		try {
-			const t = (e as TouchEvent).touches;
-			// IGNORE MULTI-TOUCH
-			if (t[1]) return;
-			cx = t[0].pageX - pos.left;
-			cy = t[0].pageY - pos.top;
-		} catch {
-			cx = (e as MouseEvent).pageX - pos.left;
-			cy = (e as MouseEvent).pageY - pos.top;
-		}
+		const cx = e.pageX - pos.left;
+		const cy = e.pageY - pos.top;
 
 		// THE EFFECT NEEDS A POSITIONED ANCESTOR — PROMOTE STATIC ELEMENTS TO relative.
 		if (computedProp(el, 'position').toLowerCase() === 'static') el.style.position = 'relative';
@@ -148,22 +138,31 @@ function createHandler(el: HTMLElement, opts: ResolvedOptions) {
 		});
 		parent.appendChild(dot);
 
-		const removeEvents = isTouch ? 'touchend touchcancel' : 'mouseleave mouseup';
+		let cleaned = false;
 		function removeRipple() {
+			if (cleaned) return;
+			cleaned = true;
 			parent.style.opacity = '0';
 			setTimeout(() => {
 				if (parent.parentNode === el) el.removeChild(parent);
 			}, outDuration);
-			removeEvents.split(' ').forEach((ev) => el.removeEventListener(ev, removeRipple));
+			window.removeEventListener('pointerup', removeRipple);
+			window.removeEventListener('pointercancel', removeRipple);
+			el.removeEventListener('pointerleave', removeRipple);
 		}
-		removeEvents.split(' ').forEach((ev) => el.addEventListener(ev, removeRipple));
+
+		window.addEventListener('pointerup', removeRipple, { once: true });
+		window.addEventListener('pointercancel', removeRipple, { once: true });
+		el.addEventListener('pointerleave', removeRipple, { once: true });
+
+		// SAFETY TIMEOUT: GUARANTEES REMOVAL EVEN IF EVENTS ARE INTERCEPTED BY MODALS OR NAVIGATION
+		setTimeout(removeRipple, duration + outDuration + 100);
 	}
 
-	const event = isTouch ? 'touchstart' : 'mousedown';
-	el.addEventListener(event, onEvent as EventListener);
+	el.addEventListener('pointerdown', onPointerDown);
 	return {
 		destroy() {
-			el.removeEventListener(event, onEvent as EventListener);
+			el.removeEventListener('pointerdown', onPointerDown);
 		},
 	};
 }

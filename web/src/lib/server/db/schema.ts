@@ -240,6 +240,24 @@ export const aiUsage = sqliteTable(
 	}),
 );
 
+// AI TRANSLATION PROVIDERS (DEEPSEEK, GOOGLE AI STUDIO, ETC.) STORED DIRECTLY IN SQLITE.
+export const aiProviders = sqliteTable('ai_providers', {
+	id: text('id').primaryKey(), // 'deepseek' | 'google'
+	name: text('name').notNull(), // 'DeepSeek' | 'Google AI Studio'
+	apiKey: text('api_key').notNull().default(''),
+	baseUrl: text('base_url').notNull(),
+	activeModel: text('active_model').notNull(),
+	availableModels: text('available_models').notNull().default('[]'),
+	enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+	isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
+	createdAt: epochMs('created_at')
+		.notNull()
+		.$defaultFn(() => Date.now()),
+	updatedAt: epochMs('updated_at')
+		.notNull()
+		.$defaultFn(() => Date.now()),
+});
+
 // -- TYPES -- //
 
 export type Book = typeof books.$inferSelect;
@@ -265,3 +283,7 @@ export type NewGlossaryEntry = typeof glossary.$inferInsert;
 export type Translation = typeof translations.$inferSelect;
 
 export type AiUsage = typeof aiUsage.$inferSelect;
+
+export type AiProvider = typeof aiProviders.$inferSelect;
+
+export type NewAiProvider = typeof aiProviders.$inferInsert;

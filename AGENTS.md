@@ -17,5 +17,9 @@ When troubleshooting specific edge-case samples (e.g. staff credit pages, title 
    - Detect and classify platform and studio logos (`腾讯动漫`, `阅文集团`, `快看`, etc.) as dedicated `LOGO` / `BRAND` entities.
    - Avoid routing graphic emblems through standard dialogue OCR and destructive inpainting.
 
-4. **Mandatory Full Test Suite Verification:**
-   - Always run the full test suite (`pytest` in `ml/tests/`) against all existing real-page fixtures (`page_679.jpg`, `page_683.jpg`, `page_688.jpg`, title-subtitle separation tests, scale differentiation tests) to mathematically prove 0 regressions on standard story pages before committing any changes.
+4. **Mandatory Full Test Suite Verification (When Touching ML Files):**
+   - Run the full test suite (`pytest` in `ml/tests/`) against all existing real-page fixtures (`page_679.jpg`, `page_683.jpg`, `page_688.jpg`, title-subtitle separation tests, scale differentiation tests) to prove 0 regressions on story pages whenever changes are made to Python/ML code.
+
+5. **Skip Python Tests If No Python Files Touched:**
+   - Do **NOT** execute Python/ML tests (`pytest`) if Python files in `ml/` were not modified, as the test suite is extensive and takes significant time. Only run `web` tests (`npm run test`) for web/frontend/TS changes.
+

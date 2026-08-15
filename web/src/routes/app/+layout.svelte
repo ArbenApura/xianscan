@@ -21,6 +21,7 @@
 	import Moon from 'lucide-svelte/icons/moon';
 	import Coffee from 'lucide-svelte/icons/coffee';
 	import Cpu from 'lucide-svelte/icons/cpu';
+	import Info from 'lucide-svelte/icons/info';
 
 	// IMPORTED UI COMPONENTS
 	import SettingsModal from '$lib/components/SettingsModal.svelte';
@@ -93,7 +94,8 @@
 
 	$: activePath = $page.url.pathname as string;
 	$: isGlossaryActive = activePath.startsWith('/app/glossary');
-	$: isLibraryActive = !isGlossaryActive && (activePath === '/app/' || activePath === '/app' || activePath.startsWith('/app/books'));
+	$: isAboutActive = activePath.startsWith('/app/about');
+	$: isLibraryActive = !isGlossaryActive && !isAboutActive && (activePath === '/app/' || activePath === '/app' || activePath.startsWith('/app/books'));
 </script>
 
 <svelte:window on:scroll={handleScroll} />
@@ -148,6 +150,20 @@
 					>
 						<Languages size={14} class={isGlossaryActive ? 'text-[#b23a2e] dark:text-[#e08a63]' : ''} />
 						<span class="hidden min-[480px]:inline">Glossary</span>
+					</a>
+
+					<!-- ABOUT LINK -->
+					<a
+						href="/app/about"
+						class={`flex items-center gap-1 sm:gap-1.5 rounded-lg px-2 sm:px-2.5 py-1 text-xs font-semibold transition-all duration-150 active:scale-95 ${
+							isAboutActive
+								? 'bg-black/[0.06] text-[#b23a2e] dark:bg-white/[0.08] dark:text-[#e08a63] shadow-2xs'
+								: 'text-current opacity-70 hover:opacity-100 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
+						}`}
+						aria-current={isAboutActive ? 'page' : undefined}
+					>
+						<Info size={14} class={isAboutActive ? 'text-[#b23a2e] dark:text-[#e08a63]' : ''} />
+						<span class="hidden min-[480px]:inline">About</span>
 					</a>
 				</div>
 
