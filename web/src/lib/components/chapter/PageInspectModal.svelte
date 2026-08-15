@@ -12,8 +12,10 @@
 		close: void;
 	}>();
 
-	let inspectTab: 'output' | 'cleaned' | 'original' | 'bbox' = 'output';
+	let inspectTab: 'output' | 'cleaned' | 'original' = 'output';
+	let showRegions = true;
 	let hoveredRegionId: number | null = null;
+	let imageScrollContainer: HTMLDivElement | null = null;
 
 	$: if (page) {
 		if (page.outputPath) inspectTab = 'output';
@@ -32,6 +34,17 @@
 		}
 		if (typeof rawBox === 'object') return rawBox;
 		return null;
+	}
+
+	function scrollToRegion(region: any) {
+		const b = getBox(region.box);
+		if (!b || !imageScrollContainer || !page?.height) return;
+		const ratio = b.y / page.height;
+		const scrollTarget = ratio * imageScrollContainer.scrollHeight - 60;
+		imageScrollContainer.scrollTo({
+			top: Math.max(0, scrollTarget),
+			behavior: 'smooth',
+		});
 	}
 
 	function copyInspectDebugInfo() {
@@ -60,17 +73,18 @@
 <Modal
 	{open}
 	title={`Inspect Page ${page ? page.seq + 1 : ''} (ID: ${page?.id ?? ''})`}
-	size="xl"
+	size="3xl"
+	bodyClass="p-4 sm:p-5 overflow-hidden flex flex-col h-[82vh] max-h-[82vh]"
 	on:close={() => dispatch('close')}
 >
 	{#if page}
 		{@const pw = page.width}
 		{@const ph = page.height}
-		<div class="grid grid-cols-1 gap-6 lg:grid-cols-12">
+		<div class="grid grid-cols-1 gap-5 lg:grid-cols-12 flex-1 min-h-0 h-full">
 			<!-- IMAGE / OVERLAY COLUMN -->
-			<div class="flex flex-col gap-3 lg:col-span-7">
+			<div class="flex flex-col gap-2.5 lg:col-span-7 h-full min-h-0">
 				<!-- TAB STRIP -->
-				<div class="flex flex-wrap items-center gap-1.5 text-xs">
+				<div class="flex flex-wrap items-center gap-1.5 text-xs shrink-0">
 					{#if page.outputPath}
 						<button
 							type="button"
@@ -111,70 +125,85 @@
 						Original Image
 					</button>
 
-					<!-- REGION MAP -->
+					<div class="mx-1 h-4 w-px bg-black/10 dark:bg-white/10"></div>
+
+					<!-- REGION MAP TOGGLE -->
 					<button
 						type="button"
-						class={`rounded-lg px-3 py-1.5 font-medium transition ${
-							inspectTab === 'bbox'
-								? 'bg-emerald-600 text-white'
-								: 'bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10'
+						class={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-medium transition ${
+							showRegions
+								? 'bg-emerald-600 text-white shadow-sm hover:bg-emerald-700'
+								: 'bg-black/5 text-black/60 hover:bg-black/10 dark:bg-white/5 dark:text-white/60 dark:hover:bg-white/10'
 						}`}
-						on:click={() => (inspectTab = 'bbox')}
+						on:click={() => (showRegions = !showRegions)}
 					>
-						🎯 Region Map
+						<span>🎯 Region Map</span>
+						<span
+							class={`rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase ${
+								showRegions
+									? 'bg-black/20 text-white'
+									: 'bg-black/10 text-black/60 dark:bg-white/10 dark:text-white/60'
+							}`}
+						>
+							{showRegions ? 'On' : 'Off'}
+						</span>
 					</button>
 				</div>
 
-				<!-- PANEL: bbox overlay -->
-				{#if inspectTab === 'bbox'}
-					<div class="relative overflow-hidden rounded-xl border border-black/10 bg-black/5 dark:border-white/10">
+				<!-- SCROLLABLE IMAGE CONTAINER -->
+				<div
+					bind:this={imageScrollContainer}
+					class="relative flex-1 min-h-0 overflow-y-auto rounded-xl border border-black/10 bg-neutral-950/[0.03] dark:border-white/10 dark:bg-neutral-950/40"
+				>
+					<div class="relative w-full">
 						<img
-							src={`/api/pages/${page.id}/file?kind=original&v=${reloadKey}`}
-							alt={`Page ${page.seq + 1} original`}
-							class="block h-auto w-full object-contain"
-							style="max-height: 60vh;"
-							loading="lazy"
+							src={`/api/pages/${page.id}/file?kind=${inspectTab}&v=${reloadKey}`}
+							alt={`Page ${page.seq + 1} ${inspectTab}`}
+							class="block w-full h-auto select-none"
+							loading="eager"
 							decoding="async"
 						/>
 						{#if pw && ph}
 							<svg
 								class="pointer-events-none absolute inset-0 h-full w-full"
 								viewBox="0 0 {pw} {ph}"
-								preserveAspectRatio="xMidYMid meet"
+								preserveAspectRatio="none"
 								xmlns="http://www.w3.org/2000/svg"
 							>
 								{#each page.regions || [] as region (region.id)}
-									{@const b = getBox(region.box)}
-									{@const bx = b?.x ?? 0}
-									{@const by = b?.y ?? 0}
-									{@const bw = b?.w ?? 0}
-									{@const bh = b?.h ?? 0}
-									{@const stroke = '#b23a2e'}
 									{@const active = hoveredRegionId === region.id}
-									<rect
-										x={bx}
-										y={by}
-										width={bw}
-										height={bh}
-										fill={active ? `${stroke}26` : 'none'}
-										stroke={stroke}
-										stroke-width={active ? 6 : 3}
-										rx="6"
-										opacity={active ? 1 : 0.7}
-									/>
-									<text
-										x={bx + 6}
-										y={by + 20}
-										font-size="18"
-										font-weight="bold"
-										fill={stroke}
-										stroke="#000"
-										stroke-width="4"
-										paint-order="stroke"
-									>#{region.seq + 1}</text>
+									{#if showRegions || active}
+										{@const b = getBox(region.box)}
+										{@const bx = b?.x ?? 0}
+										{@const by = b?.y ?? 0}
+										{@const bw = b?.w ?? 0}
+										{@const bh = b?.h ?? 0}
+										{@const stroke = '#b23a2e'}
+										<rect
+											x={bx}
+											y={by}
+											width={bw}
+											height={bh}
+											fill={active ? `${stroke}30` : 'none'}
+											stroke={stroke}
+											stroke-width={active ? 5 : 2.5}
+											rx="4"
+											opacity={active ? 1 : 0.75}
+										/>
+										<text
+											x={bx + 6}
+											y={by + 20}
+											font-size="18"
+											font-weight="bold"
+											fill={stroke}
+											stroke="#000"
+											stroke-width="4"
+											paint-order="stroke"
+										>#{region.seq + 1}</text>
+									{/if}
 								{/each}
 							</svg>
-						{:else}
+						{:else if showRegions}
 							<div class="absolute inset-x-0 bottom-3 flex justify-center">
 								<span class="rounded-lg bg-black/70 px-3 py-1.5 text-[11px] font-medium text-white backdrop-blur">
 									Run the pipeline first to see bounding boxes
@@ -182,27 +211,16 @@
 							</div>
 						{/if}
 					</div>
-				{:else}
-					<div class="overflow-hidden rounded-xl border border-black/10 bg-black/5 dark:border-white/10">
-						<img
-							src={`/api/pages/${page.id}/file?kind=${inspectTab}&v=${reloadKey}`}
-							alt={`Page ${page.seq + 1}`}
-							class="block h-auto w-full object-contain"
-							style="max-height: 60vh;"
-							loading="lazy"
-							decoding="async"
-						/>
-					</div>
-				{/if}
+				</div>
 
 				{#if pw && ph}
-					<p class="text-[10px] opacity-40 font-mono">{pw} × {ph} px · {page.regions?.length ?? 0} regions</p>
+					<p class="shrink-0 text-[10px] opacity-40 font-mono">{pw} × {ph} px · {page.regions?.length ?? 0} regions</p>
 				{/if}
 			</div>
 
 			<!-- REGIONS LIST COLUMN -->
-			<div class="flex flex-col gap-3 lg:col-span-5 h-full">
-				<div class="flex items-center justify-between gap-2">
+			<div class="flex flex-col gap-2.5 lg:col-span-5 h-full min-h-0">
+				<div class="flex items-center justify-between gap-2 shrink-0">
 					<h3 class="text-sm font-bold">
 						Detected Regions ({page.regions?.length ?? 0})
 					</h3>
@@ -211,21 +229,20 @@
 				{#if !page.regions || page.regions.length === 0}
 					<p class="text-xs opacity-60">No text regions detected on this page yet.</p>
 				{:else}
-					<div class="flex-1 min-h-[300px] max-h-[65vh] space-y-2 overflow-y-auto pr-1">
+					<div class="flex-1 min-h-0 space-y-2 overflow-y-auto pr-1">
 						{#each page.regions as region (region.id)}
 							{@const b = getBox(region.box)}
 							<!-- svelte-ignore a11y-no-static-element-interactions -->
+							<!-- svelte-ignore a11y-click-events-have-key-events -->
 							<div
-								class={`rounded-lg border p-3 text-xs transition-all ${
+								class={`rounded-lg border p-3 text-xs transition-all cursor-pointer ${
 									hoveredRegionId === region.id
-										? 'border-[#b23a2e]/50 bg-[#b23a2e]/5 dark:border-[#e08a63]/40 dark:bg-[#e08a63]/5'
+										? 'border-[#b23a2e]/50 bg-[#b23a2e]/5 dark:border-[#e08a63]/40 dark:bg-[#e08a63]/5 shadow-sm'
 										: 'border-black/10 bg-black/[0.02] dark:border-white/10 dark:bg-white/[0.02] hover:border-black/20 dark:hover:border-white/20'
 								}`}
-								on:mouseenter={() => {
-									hoveredRegionId = region.id;
-									if (inspectTab !== 'bbox') inspectTab = 'bbox';
-								}}
+								on:mouseenter={() => (hoveredRegionId = region.id)}
 								on:mouseleave={() => (hoveredRegionId = null)}
+								on:click={() => scrollToRegion(region)}
 							>
 								<!-- HEADER ROW: sequence badge + confidence + box size -->
 								<div class="flex items-center justify-between">

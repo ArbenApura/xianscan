@@ -44,8 +44,9 @@ export const FONT_MONO = 'CC Wild Words';
 export const FONT_FALLBACK_NAME = 'Friendly Sans';
 export const FONT_FALLBACK = ', "Friendly Sans", "Yu Gothic Bold", "Yu Gothic", "Microsoft YaHei Bold", "Microsoft YaHei", Arial, "Segoe UI", sans-serif';
 
-// RENDER MARGINS INSIDE THE DETECTED BOX — 8% INSET ENSURES MAXIMUM USABLE SPACE WHILE STAYING INSIDE BUBBLE EDGES
-const BOX_INSET = 0.08;
+// RENDER MARGINS INSIDE THE DETECTED BOX — 5% INSET (0.05) GIVES MAXIMUM BOUNDARY UTILIZATION WITH CLEAN EDGE PADDING
+const BOX_INSET = 0.05;
+const SFX_BOX_INSET = 0.05;
 const MIN_FONT_SIZE = 6;
 const LINE_HEIGHT = 1.2;
 // TEXT OUTLINE (THE BLACK/WHITE STROKE DRAWN UNDER THE FILL) — SIZED RELATIVE TO THE FONT WITH A
@@ -56,13 +57,7 @@ const OUTLINE_MIN = 2.5;
 // A FRAGMENT OF NOTHING BUT TRAILING PUNCTUATION (e.g. THE "." THAT CHARACTER-BREAKING WOULD
 // OTHERWISE STRAND ON ITS OWN LINE).
 const LONE_PUNCT = /^[.．…·!！?？,，;；:：~～)"'']{1,3}$/;
-// ABSOLUTE FONT-SIZE CAP FOR DIALOGUE / MONO REGIONS — PREVENTS A LARGE DETECTED BOX
-// (e.g. A MULTI-LINE BUBBLE WHOSE UNION BOX SPANS MOST OF THE PAGE WIDTH OR A SINGLE SHORT WORD)
-// FROM INFLATING THE TEXT TO AN UNNATURAL GIANT SIZE. SFX IS DELIBERATELY EXCLUDED — BIG SFX IS INTENTIONAL.
-const MAX_DIALOGUE_FONT_SIZE = 22;
-// SFX CAN LEGITIMATELY BE LARGE (IMPACT TEXT), BUT AN UNCAPPED BOX-DERIVED SIZE PRODUCES
-// ABSURD RESULTS WHEN THE REGION BOX IS OVERSIZED (e.g. A WIDE GROUPED PARAGRAPH THAT
-// CLASSIFY_REGION MISLABELS AS SFX). CAP AT A GENEROUS BUT SANE MAXIMUM.
+// ABSOLUTE FONT-SIZE CEILING CAP — SCALES WITH REGION DIMENSIONS TO MAXIMIZE BOUNDARY
 const MAX_SFX_FONT_SIZE = 100;
 
 // KEYWORDS THAT MARK A LINE AS A RARITY+TYPE LINE
@@ -100,18 +95,25 @@ function registerFonts(): void {
 
 // Matches Japanese Hiragana, Katakana, Kanji, and Korean Hangul
 const CJK_REGEX = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
+// Characters unsupported by CC Wild Words or remapped to arrows/glyphs (e.g. [ and ] are comic bubble arrows in CC Wild Words)
+const UNSUPPORTED_WILDWORDS_REGEX = /[\[\]{}|_\\]/;
 
 export function fontFor(text?: string): string {
-	if (text && CJK_REGEX.test(text)) {
+	if (text && (CJK_REGEX.test(text) || UNSUPPORTED_WILDWORDS_REGEX.test(text))) {
 		return FONT_FALLBACK_NAME;
 	}
 	return FONT_DIALOGUE;
 }
 
 export function fontSpec(size: number, fontNameOrText?: string, text?: string): string {
-	const fontName = fontNameOrText && fontNameOrText !== FONT_DIALOGUE && fontNameOrText !== FONT_FALLBACK_NAME
-		? fontNameOrText
-		: (text && CJK_REGEX.test(text) ? FONT_FALLBACK_NAME : FONT_DIALOGUE);
+	let fontName: string;
+	if (fontNameOrText && fontNameOrText !== FONT_DIALOGUE && fontNameOrText !== FONT_FALLBACK_NAME) {
+		fontName = fontNameOrText;
+	} else if (text && (CJK_REGEX.test(text) || UNSUPPORTED_WILDWORDS_REGEX.test(text))) {
+		fontName = FONT_FALLBACK_NAME;
+	} else {
+		fontName = fontNameOrText ?? FONT_DIALOGUE;
+	}
 	if (fontName === FONT_FALLBACK_NAME) {
 		return `bold ${size}px "${FONT_FALLBACK_NAME}", "Yu Gothic Bold", "Yu Gothic", "Microsoft YaHei Bold", "Microsoft YaHei", Arial, "Segoe UI", sans-serif`;
 	}
@@ -178,6 +180,24 @@ function _classifyLine(line: string): TextSegment[] {
 	const fw = line.split(/\s+/)[0].toUpperCase();
 	if (RARITY_KEYWORDS.has(fw)) return [{ kind: 'rarity', text: line.toUpperCase() }];
 	return [{ kind: 'body', text: line }];
+}
+
+/**
+ * Detects whether text is an SFX / sound effect / impact exclamation (e.g. "WEI!", "NIAN!", "BOOM!", "SWOOSH!").
+ */
+export function isSfxOrShout(text: string): boolean {
+	const trimmed = text.trim();
+	if (!trimmed) return false;
+	if (trimmed.includes('\n')) return false;
+
+	const words = trimmed.split(/\s+/);
+	// Single standalone token (e.g. "WEI!", "NIAN!", "BOOM!", "SLASH!", "咻")
+	if (words.length === 1) return true;
+	// Short 2-word sound effect (e.g. "CLANG CLANG!", "HEH HEH", "THUMP THUMP")
+	if (words.length === 2 && trimmed.length <= 15) {
+		return true;
+	}
+	return false;
 }
 
 // -- LAYOUT (PURE, CANVAS-MEASURED) -- //
@@ -665,39 +685,28 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		const text = CJK_REGEX.test(rawText) ? rawText : rawText.toUpperCase();
 		const { x, y, w, h } = r.box;
 
-		// TINY ACTION/EMOTE BADGE (e.g. "转", "汗", "!", size <= 32px):
-		// When inpainting erases a circular emote sticker on dark artwork/grass,
-		// restore a clean pure white circular badge backing without border.
-		const isTinyBadge = Math.max(w, h) <= 32;
-		if (isTinyBadge) {
-			const cx = x + w / 2;
-			const cy = y + h / 2;
-			const rx = Math.max(10, w / 2 + 2);
-			const ry = Math.max(10, h / 2 + 2);
-			ctx.save();
-			ctx.beginPath();
-			ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
-			ctx.fillStyle = '#ffffff';
-			ctx.fill();
-			ctx.restore();
-			color = { fill: '#111111', stroke: '#ffffff' };
-		}
-
 		const angleDeg = r.angle ?? 0;
 		const hasRotation = Math.abs(angleDeg) >= 2.0 && Math.abs(angleDeg) <= 45.0;
 
 		const font = fontFor(text);
-		const startSize = Math.max(MIN_FONT_SIZE, Math.min(w, h) * 0.45 * scale);
+		const isSfx = isSfxOrShout(text);
 
-		// CAP MAX FONT SIZE SO IT SITS NATURALLY INSIDE THE BUBBLE CONTOUR
-		const rawMax = Math.max(startSize, Math.min(h * 0.6, startSize * 1.25));
-		const sizeCap = MAX_DIALOGUE_FONT_SIZE * scale;
-		const maxSize = Math.min(rawMax, sizeCap);
-		const size = fitFontSize(ctx, text, font, w, h, startSize, maxSize);
+		// FULL BOUNDARY UTILIZATION — 0% INSET
+		const maxW = Math.max(10, w * (1 - 2 * BOX_INSET));
+		const maxH = Math.max(10, h * (1 - 2 * BOX_INSET));
+
+		const sizeCap = Math.max(MAX_SFX_FONT_SIZE, Math.max(w, h)) * scale;
+		let size: number;
+		if (isSfx) {
+			// Single-line fitting maximizes SFX to fill full width/height without wrapping
+			size = fitSingleLineSize(ctx, text, font, maxW, maxH, sizeCap);
+		} else {
+			// Fit dialogue font size to fill the maximum boundary dimensions
+			size = fitFontSize(ctx, text, font, w, h, sizeCap, sizeCap);
+		}
+
 		ctx.font = fontSpec(size, font, text);
-		const isSingleWord = !text.includes(' ') && !text.includes('\n');
-		const maxW = Math.max(10, isSingleWord && w <= 60 ? w - 4 : w * (1 - 2 * BOX_INSET));
-		const lines = reflowText(ctx, text, maxW);
+		const lines = isSfx ? [text] : reflowText(ctx, text, maxW);
 		const lineH = size * LINE_HEIGHT;
 		const totalH = lines.length * lineH;
 

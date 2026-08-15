@@ -21,7 +21,7 @@
 
 	export let open = false;
 	export let title = '';
-	export let size: 'sm' | 'md' | 'lg' | 'xl' = 'md';
+	export let size: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl' | 'full' = 'md';
 	export let closable = true;
 	// PADDING OF THE SCROLLABLE BODY. OVERRIDE (E.G. DROP THE TOP PAD) WHEN THE SLOT HAS ITS OWN STICKY HEADER.
 	export let bodyClass = 'p-5';
@@ -36,6 +36,11 @@
 		md: 'sm:max-w-lg',
 		lg: 'sm:max-w-2xl',
 		xl: 'sm:max-w-4xl',
+		'2xl': 'sm:max-w-5xl',
+		'3xl': 'sm:max-w-6xl',
+		'4xl': 'sm:max-w-7xl',
+		'5xl': 'sm:max-w-[90vw]',
+		full: 'sm:max-w-[96vw]',
 	};
 
 	// -- REACTIVE STATES -- //

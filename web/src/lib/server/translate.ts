@@ -387,12 +387,9 @@ export async function translatePage(
 	if (regions.length === 0) return { byRegion: new Map(), usage };
 
 	// FIRST PASS — THE FULL REGION LIST
-	console.log(`[translatePage] Translating ${regions.length} regions:`, JSON.stringify(regions.map(r => ({ id: r.id, text: r.text }))));
 	const { raw, usage: u1 } = await callTranslate(regions, terms, pair, opts);
 	mergeUsage(usage, u1);
-	console.log(`[translatePage] Raw LLM response:`, raw);
 	const byRegion = parseTranslations(raw, new Set(regions.map((r) => r.id)), regions) ?? new Map();
-	console.log(`[translatePage] Parsed byRegion:`, [...byRegion.entries()]);
 
 	// REFILL — REGIONS THAT CAME BACK EMPTY / MISSING / DEGENERATE GET ONE TARGETED CALL
 	const missing = regions.filter((r) => {

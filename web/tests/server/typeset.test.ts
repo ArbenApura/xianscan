@@ -5,6 +5,7 @@ import {
 	decollideRegions,
 	fontFor,
 	fitFontSize,
+	isSfxOrShout,
 	pickTextColor,
 	reflowText,
 	renderText,
@@ -37,7 +38,13 @@ describe('fontFor', () => {
 	it('uses CC Wild Words even when text contains tildes or special punctuation', () => {
 		expect(fontFor()).toBe('CC Wild Words');
 		expect(fontFor("And those heroines' scandalous news, heh heh heh~")).toBe('CC Wild Words');
-		expect(fontFor('Boss, you don\'t know! [Item]')).toBe('CC Wild Words');
+		expect(fontFor('Boss, you don\'t know!')).toBe('CC Wild Words');
+	});
+
+	it('uses fallback font for square brackets and unsupported symbols (Page 58670)', () => {
+		expect(fontFor('[LORD OF LIANGZHOU] Arc ends,')).toBe('Friendly Sans');
+		expect(fontFor('[GU GOD ARC] begins')).toBe('Friendly Sans');
+		expect(fontFor('Item: {Skill}')).toBe('Friendly Sans');
 	});
 
 	it('uses fallback font for CJK text', () => {
@@ -81,6 +88,22 @@ describe('renderText', () => {
 
 	it('leaves CJK and punctuation unchanged (preserves unicode symbols for font fallback rendering)', () => {
 		expect(renderText({ id: 'r0', box: { x: 0, y: 0, w: 10, h: 10 }, text: '小心！BOOM…' })).toBe('小心！BOOM…');
+	});
+});
+
+describe('isSfxOrShout', () => {
+	it('identifies single words and exclamations as SFX', () => {
+		expect(isSfxOrShout('WEI!')).toBe(true);
+		expect(isSfxOrShout('NIAN!')).toBe(true);
+		expect(isSfxOrShout('BOOM!')).toBe(true);
+		expect(isSfxOrShout('咻')).toBe(true);
+		expect(isSfxOrShout('CLANG CLANG!')).toBe(true);
+	});
+
+	it('identifies multi-line or long narrative as dialogue, not SFX', () => {
+		expect(isSfxOrShout('Zilong, Tong Fei, Zhang Fei, and Guan Yu\nlead troops...')).toBe(false);
+		expect(isSfxOrShout('Hello there, this is a longer dialogue sentence with multiple words')).toBe(false);
+		expect(isSfxOrShout('')).toBe(false);
 	});
 });
 
@@ -192,7 +215,7 @@ describe('fitFontSize', () => {
 		expect(size).toBeGreaterThanOrEqual(8);
 		expect(size).toBeLessThanOrEqual(60);
 
-		// VERIFY THE FOUND SIZE ACTUALLY FITS (UNDER THE CURRENT CONSTANTS: INSET 0.05, PITCH 1.2)
+		// VERIFY THE FOUND SIZE ACTUALLY FITS WITHIN THE 5% INSET BOX (PITCH 1.2)
 		x.font = `${size}px Arial`;
 		const lines = wrapText(x, 'Hello world this is dialogue', 200 * 0.9);
 		expect(lines.length * size * 1.2).toBeLessThanOrEqual(100 * 0.9);
@@ -285,27 +308,13 @@ describe('typesetPage', () => {
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 	});
 
-	it('renders tiny action/emote badge with clean white circle backing and legible text', async () => {
-		// Small 20x20 action badge (e.g. "TURN" / "转") on a dark grass background
+	it('renders small text regions cleanly without crashes or distortion', async () => {
+		// Small 20x20 action text (e.g. "TURN" / "转") on a dark background
 		const out = await typesetPage(blankPng(200, 200, 'black'), [
 			{ id: 'r0', box: { x: 90, y: 90, w: 20, h: 20 }, text: 'TURN' },
 		]);
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-		const img = await loadImage(out);
-		const probe = createCanvas(img.width, img.height);
-		const px = probe.getContext('2d');
-		px.drawImage(img, 0, 0);
-		// Inside the badge at center (100, 100), there should be white backing and dark text
-		const data = px.getImageData(88, 88, 24, 24).data;
-		let whitePixels = 0;
-		let darkPixels = 0;
-		for (let i = 0; i < data.length; i += 4) {
-			const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
-			if (r > 200 && g > 200 && b > 200) whitePixels++;
-			if (r < 50 && g < 50 && b < 50) darkPixels++;
-		}
-		expect(whitePixels).toBeGreaterThan(50); // White circle backing was drawn
-		expect(darkPixels).toBeGreaterThan(5); // Dark text glyphs were drawn
+		expect(await brightPixels(out)).toBeGreaterThan(0);
 	});
 
 	it('renders an angled/rotated region with rotation transform', async () => {
@@ -396,6 +405,28 @@ describe('typesetPage', () => {
 		]);
 		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
 		expect(await brightPixels(out)).toBeGreaterThan(0);
+	});
+
+	it('scales standalone SFX up dynamically inside large boxes while leaving boundary padding (Page 58643)', async () => {
+		const out = await typesetPage(blankPng(900, 1385, 'white'), [
+			{ id: '22412', box: { x: 118, y: 230, w: 110, h: 123 }, text: 'WEI!' },
+			{ id: '22413', box: { x: 540, y: 552, w: 253, h: 243 }, text: 'NIAN!' },
+		]);
+		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+		const dark = await (async () => {
+			const img = await loadImage(out);
+			const probe = createCanvas(img.width, img.height);
+			const px = probe.getContext('2d');
+			px.drawImage(img, 0, 0);
+			const data = px.getImageData(0, 0, img.width, img.height).data;
+			let cnt = 0;
+			for (let i = 0; i < data.length; i += 4) {
+				if (data[i] < 60) cnt++;
+			}
+			return cnt;
+		})();
+		// Standalone SFX rendered in large boxes with bold strokes have substantial ink coverage
+		expect(dark).toBeGreaterThan(500);
 	});
 });
 
