@@ -237,5 +237,48 @@ describe('startChapterJob', () => {
 		expect(snapshot?.pages[0].timings.analyze?.durationMs).toBe(120);
 		expect(snapshot?.pages[0].outputPath).toBe('output/5/0.png');
 	});
+
+	it('buffers addPages calls before setChapterJobAddPage is registered and drains them', async () => {
+		const { setChapterJobAddPage } = await import('$lib/server/translation-service');
+
+		const added: number[] = [];
+		const handle = startChapterJob(6, async (signal) => {
+			await new Promise((r) => setTimeout(r, 50));
+			if (signal.aborted) return;
+		});
+
+		// Call addPages BEFORE registerAddPage callback is attached
+		handle.addPages([201, 202]);
+
+		// Now register callback
+		setChapterJobAddPage(6, (pageId) => {
+			added.push(pageId);
+		});
+
+		expect(added).toEqual([201, 202]);
+
+		// Subsequent calls should route immediately
+		handle.addPages([203]);
+		expect(added).toEqual([201, 202, 203]);
+	});
+
+	it('cancelPage cancels a single page without aborting the entire chapter job', async () => {
+		const { isChapterPageCancelled } = await import('$lib/server/translation-service');
+
+		let chapterSignalAborted = false;
+		const handle = startChapterJob(7, async (signal) => {
+			signal.addEventListener('abort', () => {
+				chapterSignalAborted = true;
+			});
+			await new Promise((r) => setTimeout(r, 50));
+		});
+
+		handle.cancelPage(301);
+
+		expect(isChapterPageCancelled(7, 301)).toBe(true);
+		expect(isChapterPageCancelled(7, 302)).toBe(false);
+		expect(chapterSignalAborted).toBe(false);
+		expect(handle.status).toBe('running');
+	});
 });
 

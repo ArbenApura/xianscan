@@ -196,7 +196,7 @@
 	};
 
 	// REAL-TIME SYNCHRONIZED PAGES MERGED WITH SNAPSHOT
-	$: displayPages = (() => {
+	$: displayPages = ((): ChapterPageItem[] => {
 		if (!currentJobState.snapshot?.pages?.length) return pages;
 		const snapshotPageMap = new Map<number, (typeof currentJobState.snapshot.pages)[0]>();
 		for (const sp of currentJobState.snapshot.pages) {
@@ -209,7 +209,7 @@
 			const isDone = sp.status === 'done';
 			const isError = sp.status === 'error';
 			const isProcessing = sp.status === 'processing' && currentJobState.running;
-			const status = isDone ? 'done' : isError ? 'error' : isProcessing ? 'processing' : 'pending';
+			const status: 'pending' | 'processing' | 'done' | 'error' = isDone ? 'done' : isError ? 'error' : isProcessing ? 'processing' : 'pending';
 
 			return {
 				...p,
@@ -225,6 +225,19 @@
 	$: activeViewMode = $settings.readerViewMode;
 	$: webtoonKind = $settings.webtoonKind;
 	$: webtoonWidth = $settings.webtoonWidth;
+
+	// AUTO-CLOSE INSPECTOR OR SYNC WITH DISPLAY PAGES
+	$: if (inspectModalOpen && inspectPage) {
+		const current = displayPages.find((p) => p.id === inspectPage?.id);
+		if (current) {
+			if (current.status === 'processing') {
+				inspectModalOpen = false;
+				inspectPage = null;
+			} else {
+				inspectPage = current;
+			}
+		}
+	}
 
 	// ROUTE SWITCHING REACTIVITY FOR NEXT / PREV CHAPTER NAVIGATION
 	let lastLoadedChapterId: number | null = null;
@@ -519,6 +532,7 @@
 	}
 
 	function openInspector(pg: ChapterPageItem) {
+		if (pg.status === 'processing') return;
 		inspectPage = pg;
 		inspectModalOpen = true;
 	}

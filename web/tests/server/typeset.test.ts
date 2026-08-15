@@ -47,6 +47,12 @@ describe('fontFor', () => {
 		expect(fontFor('Item: {Skill}')).toBe('Friendly Sans');
 	});
 
+	it('uses CC Wild Words as primary font for dialogue with em-dashes while dashes resolve via font stack (Page 45358)', () => {
+		expect(fontFor('Even the principal says so—')).toBe('CC Wild Words');
+		expect(fontFor('Might as well use them all—who knows')).toBe('CC Wild Words');
+		expect(fontFor('Wait–what?')).toBe('CC Wild Words');
+	});
+
 	it('uses fallback font for CJK text', () => {
 		expect(fontFor('还有那些侠女的花边新闻')).toBe('Friendly Sans');
 	});
@@ -59,27 +65,23 @@ describe('sanitizeForFont', () => {
 		expect(sanitizeForFont('Heh heh heh～～～')).toBe('Heh heh heh~~~');
 	});
 
-	it('replaces em-dashes and en-dashes with natural comma pauses', () => {
+	it('preserves em-dashes and en-dashes for fallback font rendering (Page 45358)', () => {
+		expect(sanitizeForFont('Even the principal says so—')).toBe('Even the principal says so—');
 		expect(sanitizeForFont('Might as well use them all—who knows, I might get something good.')).toBe(
-			'Might as well use them all, who knows, I might get something good.',
+			'Might as well use them all—who knows, I might get something good.',
 		);
-	});
-
-	it('cleans up trailing em-dashes or punctuation collisions', () => {
-		expect(sanitizeForFont('Wait—!')).toBe('Wait!');
-		expect(sanitizeForFont('Hello — world')).toBe('Hello, world');
 	});
 });
 
 describe('renderText', () => {
-	it('uppercases Latin text at render time and cleans em-dashes', () => {
+	it('uppercases Latin text at render time and preserves em-dashes for fallback font', () => {
 		expect(
 			renderText({
 				id: 'r0',
 				box: { x: 0, y: 0, w: 10, h: 10 },
-				text: 'Might as well use them all—who knows',
+				text: 'Even the principal says so—',
 			}),
-		).toBe('MIGHT AS WELL USE THEM ALL, WHO KNOWS');
+		).toBe('EVEN THE PRINCIPAL SAYS SO—');
 	});
 
 	it('uppercases accented letters', () => {

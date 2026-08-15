@@ -486,6 +486,51 @@ describe('runChapterPipeline', () => {
 		expect(events.filter((e) => e.type === 'page-done').length).toBe(1);
 		expect(events.find((e) => e.type === 'page-done')?.pageId).toBe(p2.id);
 	});
+
+	it('executes cleanly when SSR data loaders run concurrently with parallel pipeline writes', async () => {
+		const { getChapterReaderData } = await import('$lib/server/chapters');
+		const { getBookDetails } = await import('$lib/server/books');
+
+		seedBook(db, { id: 'b_ssr' });
+		const chapter = seedChapter(db, { bookId: 'b_ssr', seq: 0 });
+		mkdirSync(join(dataRoot, 'uploads'), { recursive: true });
+		for (let i = 0; i < 4; i++) {
+			seedPage(db, { chapterId: chapter.id, seq: i, filePath: `uploads/ssr_${i}.png` });
+			writeFileSync(join(dataRoot, `uploads/ssr_${i}.png`), PAGE_PNG);
+		}
+
+		// SLOW DOWN ANALYZE & TRANSLATE TO ENSURE SSR QUERIES OVERLAP WITH PARALLEL PIPELINE WRITES
+		const concurrent = new FakePipeline();
+		const origClean = concurrent.clean.bind(concurrent);
+		concurrent.clean = async (img, regs, sig) => {
+			await new Promise((r) => setTimeout(r, 15));
+			return origClean(img, regs, sig);
+		};
+
+		// LAUNCH PIPELINE
+		const pipelinePromise = chapterWork(chapter.id, {
+			pipeline: concurrent,
+			dataRoot,
+			llm: fakeLlm(),
+			pageConcurrency: 4,
+		})(new AbortController().signal, () => {});
+
+		// SIMULATE MULTIPLE RAPID SSR LOADS RUNNING CONCURRENTLY
+		const ssrPromises = [
+			getChapterReaderData(chapter.id),
+			getBookDetails('b_ssr'),
+			getChapterReaderData(chapter.id),
+			getBookDetails('b_ssr'),
+		];
+
+		const [_, ...ssrResults] = await Promise.all([pipelinePromise, ...ssrPromises]);
+
+		expect(ssrResults[0].chapter.id).toBe(chapter.id);
+		expect(ssrResults[1].book.id).toBe('b_ssr');
+
+		const finalPages = db.select().from(pages).where(eq(pages.chapterId, chapter.id)).all();
+		expect(finalPages.every((p) => p.status === 'done')).toBe(true);
+	});
 });
 
 

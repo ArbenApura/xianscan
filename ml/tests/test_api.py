@@ -194,7 +194,7 @@ class BoxDetector:
 		return DetectResult(
 			boxes=list(self._boxes),
 			scores=[0.9] * len(self._boxes),
-			mask=self._mask if self._mask is not None else np.zeros((PAGE_H, PAGE_W), dtype=np.uint8),
+			mask=self._mask if self._mask is not None else np.zeros((img_bgr.shape[0], img_bgr.shape[1]), dtype=np.uint8),
 			backend="comic-ctd",
 		)
 
@@ -631,6 +631,293 @@ class TestClean:
 		# Region 2: bottom panel text
 		assert "回眸时，已是阴阳永隔" in res.regions[2].text
 		assert res.regions[2].box.h < 100
+
+	def test_sample6_stray_ocr_artifact_ignored(self, monkeypatch):
+		"""SAMPLE 6: Page 58378 with 8 legitimate dialogue / intro regions and 1 stray OCR detection
+		error ('L' at x=654, y=1933, w=28, h=28, confidence=0.59284).
+		Verifies that the stray 1-character OCR noise is skipped/ignored, producing 0 inpaint and 0 translation,
+		while all 8 valid regions are preserved.
+		"""
+		boxes = [
+			_box(151, 114, 108, 42),
+			_box(456, 242, 231, 111),
+			_box(121, 505, 265, 79),
+			_box(167, 798, 108, 47),
+			_box(523, 1003, 77, 44),
+			_box(66, 1234, 326, 74),
+			_box(473, 1407, 244, 76),
+			_box(9, 1753, 296, 136),
+			_box(654, 1933, 28, 28),
+		]
+		monkeypatch.setattr(pipeline, "detector", BoxDetector(boxes))
+
+		ocr_lines = [
+			(_box(151, 114, 108, 42), "格斗家", 0.99975),
+			(_box(456, 242, 231, 111), "高防御力和强力的团队辅助，团战必备。", 0.99999),
+			(_box(121, 505, 265, 79), "强控职业，连招打击是该职业特点。", 0.99988),
+			(_box(167, 798, 108, 47), "弓箭手", 0.99967),
+			(_box(523, 1003, 77, 44), "牧师", 0.99992),
+			(_box(66, 1234, 326, 74), "拥有最远攻击距离，取人首级于千里之外。", 0.99993),
+			(_box(473, 1407, 244, 76), "唯一的治疗职业，生命力顽强。", 0.99915),
+			(_box(9, 1753, 296, 136), "都怪阿发那小子稀里糊涂的，把已经设定好职业和姓名的账号给了我！", 0.99988),
+			(_box(654, 1933, 28, 28), "L", 0.59284),
+		]
+		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+
+		res = pipeline.analyze_image(np.zeros((2017, 800, 3), dtype=np.uint8))
+		# The stray 'L' artifact at (654, 1933) must be filtered out -> exactly 8 regions returned
+		assert len(res.regions) == 8
+		texts = [r.text for r in res.regions]
+		assert "格斗家" in texts[0]
+		assert "弓箭手" in texts[3]
+		assert "牧师" in texts[4]
+		assert not any(r.text.strip() == "L" for r in res.regions)
+		assert not any(r.box.x == 654 and r.box.y == 1933 for r in res.regions)
+
+	def test_sample7_page_58383_ellipsis_bounds(self, monkeypatch):
+		"""SAMPLE 7: Page 58383 with single-line dialogue ending in ellipsis ('老师……').
+		Verifies that the bounding box does not exceed rightward beyond the speech bubble / panel
+		into the white page gutter (width stays <= 140px, right edge <= 765px).
+		"""
+		boxes = [
+			_box(623, 172, 130, 44),
+			_box(315, 214, 123, 42),
+			_box(267, 755, 248, 70),
+			_box(76, 846, 91, 42),
+		]
+		monkeypatch.setattr(pipeline, "detector", BoxDetector(boxes))
+
+		ocr_lines = [
+			(_box(635, 178, 110, 32), "老师……", 0.96947),
+			(_box(320, 220, 110, 30), "阿发？!", 0.86711),
+			(_box(270, 760, 240, 60), "好了好了，在游\n戏里别叫我老师！", 0.99994),
+			(_box(80, 850, 80, 30), "老师?", 0.86114),
+		]
+		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+
+		res = pipeline.analyze_image(np.zeros((1138, 800, 3), dtype=np.uint8))
+		assert len(res.regions) == 4
+		r0 = next(r for r in res.regions if "老师……" in r.text)
+		# Must remain tight to the speech bubble, NOT reaching page margin x=798 / w=175
+		assert r0.box.w <= 140, f"Bubble width ({r0.box.w}px) must stay <= 140px, got {r0.box.w}px"
+		assert r0.box.x + r0.box.w <= 765, f"Bubble right edge ({r0.box.x + r0.box.w}px) must stay <= 765px"
+
+	def test_sample8_page_45358_hahaha_bottom_bounds(self, monkeypatch):
+		"""SAMPLE 8: Page 45358 with dialogue and exclamation '哈哈哈！' ending in terminal punctuation.
+		Verifies that '哈哈哈！' bounding box height stays tight to the text (height <= 42px)
+		and does not over-detect downward into empty bubble tails or artwork.
+		"""
+		boxes = [
+			_box(76, 71, 135, 153),
+			_box(612, 399, 136, 204),
+			_box(181, 676, 281, 37),
+			_box(212, 800, 256, 143),
+			_box(203, 1021, 123, 38),
+		]
+		mask = np.zeros((1331, 800), dtype=np.uint8)
+		# Simulate detector mask that has a bubble tail extending down to y=1080
+		mask[1021:1080, 203:326] = 255
+		monkeypatch.setattr(pipeline, "detector", BoxDetector(boxes, mask=mask))
+
+		ocr_lines = [
+			(_box(76, 71, 135, 153), "行凶者是\n这个须发\n皆白的老\n头", 0.99996),
+			(_box(612, 399, 136, 204), "受害者就\n是我们号\n称会功夫\n的顾飞老\n师。", 0.99992),
+			(_box(181, 676, 281, 37), "连校长都这么说——", 0.933),
+			(_box(212, 800, 256, 143), "什么是无耻？顾飞\n老师一再说他会功\n夫是我这辈子见过\n最无耻的事。", 0.99993),
+			(_box(203, 1021, 123, 35), "哈哈哈！", 0.97298),
+		]
+		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+
+		res = pipeline.analyze_image(np.zeros((1331, 800, 3), dtype=np.uint8))
+		assert len(res.regions) == 5
+		r_haha = next(r for r in res.regions if "哈哈哈！" in r.text)
+		# Must remain tight to text height, NOT stretching down into bubble tail (h <= 42px, not 59px)
+		assert r_haha.box.h <= 42, f"'哈哈哈！' box height ({r_haha.box.h}px) must stay <= 42px, got {r_haha.box.h}px"
+		assert r_haha.box.y + r_haha.box.h <= 1060, f"'哈哈哈！' bottom ({r_haha.box.y + r_haha.box.h}px) must stay <= 1060px"
+
+	def test_sample9_page_45371_tilted_shout_bubble_detected(self, monkeypatch):
+		"""SAMPLE 9: Page 45371 with tilted shout bubble '哇啊啊啊啊！！' in panel 2.
+		Verifies that all 5 text elements (sound effects '啪！', '咚！', bottom dialogue, and
+		tilted scream balloon '哇啊啊啊啊！！') are detected and included in the regions.
+		"""
+		boxes = [
+			_box(573, 79, 76, 50),
+			_box(130, 530, 290, 110),  # Tilted scream bubble '哇啊啊啊啊！！'
+			_box(245, 1254, 69, 51),
+			_box(605, 1295, 64, 47),
+			_box(273, 1609, 256, 123),
+		]
+		monkeypatch.setattr(pipeline, "detector", BoxDetector(boxes))
+
+		ocr_lines = [
+			(_box(573, 79, 76, 50), "啪！", 0.97008),
+			(_box(145, 545, 260, 80), "哇啊啊啊啊！！", 0.965),
+			(_box(245, 1254, 69, 51), "咚！", 0.99398),
+			(_box(605, 1295, 64, 47), "啪！", 0.91888),
+			(_box(273, 1609, 256, 123), "真是个疯子！这\n家伙怎么越打越\n精神？！", 0.99996),
+		]
+		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+
+		res = pipeline.analyze_image(np.zeros((1866, 800, 3), dtype=np.uint8))
+		assert len(res.regions) == 5
+		texts = [r.text for r in res.regions]
+		assert any("哇啊啊啊啊" in t for t in texts), f"Tilted shout bubble must be detected: {texts}"
+
+	def test_sample10_page_45360_split_touching_speech_bubbles(self, monkeypatch):
+		"""SAMPLE 10: Page 45360 with two touching circular speech bubbles:
+		Bubble A: '靠！反正\\n最多挨顿\\n打，不过\\n是游戏，'
+		Bubble B: '真是的，\\n自己又不\\n会受伤'
+		Verifies that touching bubbles with shifted centroids and gap are separated into 2 distinct regions,
+		and thought-bubble tail circles ('000') are ignored.
+		"""
+		# Touching speech bubbles enclosed in one detector bounding box
+		touching_box = _box(211, 525, 228, 325)
+		tail_circles_box = _box(454, 691, 47, 47)
+		sfx1_box = _box(333, 1095, 71, 51)
+		sfx2_box = _box(498, 1276, 70, 53)
+
+		boxes = [touching_box, tail_circles_box, sfx1_box, sfx2_box]
+		monkeypatch.setattr(pipeline, "detector", BoxDetector(boxes))
+
+		ocr_lines = [
+			# Bubble A lines (mean center ~295)
+			(_box(250, 540, 90, 28), "靠！反正", 0.999),
+			(_box(250, 575, 90, 28), "最多挨顿", 0.999),
+			(_box(250, 610, 90, 28), "打，不过", 0.999),
+			(_box(255, 645, 80, 28), "是游戏，", 0.999),
+			# Bubble B lines (mean center ~370, shifted right and down)
+			(_box(330, 695, 80, 28), "真是的，", 0.999),
+			(_box(330, 730, 80, 28), "自己又不", 0.999),
+			(_box(330, 765, 75, 28), "会受伤", 0.999),
+			# Thought bubble tail circles
+			(_box(454, 691, 47, 47), "000", 0.84732),
+			# Sound effects
+			(_box(333, 1095, 71, 51), "砰！", 0.98404),
+			(_box(498, 1276, 70, 53), "啪！", 0.99564),
+		]
+		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+
+		res = pipeline.analyze_image(np.zeros((1839, 800, 3), dtype=np.uint8))
+		# Exactly 4 valid regions (Bubble A, Bubble B, SFX 1, SFX 2) — 000 is filtered
+		assert len(res.regions) == 4
+		texts = [r.text for r in res.regions]
+		# Bubble A and Bubble B must be split
+		assert any("靠！反正" in t and "是游戏，" in t for t in texts), f"Bubble A missing: {texts}"
+		assert any("真是的，" in t and "会受伤" in t for t in texts), f"Bubble B missing: {texts}"
+		# Must NOT be fused into one 7-line block
+		assert not any("靠！反正" in t and "真是的，" in t for t in texts), f"Bubbles must not be fused: {texts}"
+		# '000' circle noise must be filtered out
+		assert not any(r.text.strip() == "000" for r in res.regions)
+
+	def test_sample10_page_45360_needs_rescue_splits_crop_lines(self, monkeypatch):
+		"""SAMPLE 10 (Rescue Path): When RapidOCR full-page scan only detects 1 line inside
+		the 228x325 box and triggers needs_rescue (recognize_crop), verify that the crop result
+		with 7 lines is split into Bubble A and Bubble B instead of assigning the entire 7 lines to one box.
+		"""
+		touching_box = _box(211, 525, 228, 325)
+		monkeypatch.setattr(pipeline, "detector", BoxDetector([touching_box]))
+
+		# RapidOCR full-page only matched 1 line in the box (triggering needs_rescue)
+		monkeypatch.setattr(
+			pipeline.ocr,
+			"recognize_full",
+			lambda img: [(_box(250, 540, 90, 28), "靠！反正", 0.65)],
+		)
+
+		# recognize_crop returns all 7 lines
+		crop_ocr_lines = [
+			(_box(40, 15, 90, 28), "靠！反正", 0.999),
+			(_box(40, 50, 90, 28), "最多挨顿", 0.999),
+			(_box(40, 85, 90, 28), "打，不过", 0.999),
+			(_box(45, 120, 80, 28), "是游戏，", 0.999),
+			(_box(120, 170, 80, 28), "真是的，", 0.999),
+			(_box(120, 205, 80, 28), "自己又不", 0.999),
+			(_box(120, 240, 75, 28), "会受伤", 0.999),
+		]
+		crop_text = "\n".join(t for _b, t, _s in crop_ocr_lines)
+		crop_res = OcrResult(text=crop_text, score=0.99993, lines=crop_ocr_lines)
+		monkeypatch.setattr(pipeline.ocr, "recognize_crop", lambda crop: crop_res)
+
+		res = pipeline.analyze_image(np.zeros((1839, 800, 3), dtype=np.uint8))
+		assert len(res.regions) == 2
+		texts = [r.text for r in res.regions]
+		assert any("靠！反正" in t and "是游戏，" in t for t in texts), f"Bubble A missing: {texts}"
+		assert any("真是的，" in t and "会受伤" in t for t in texts), f"Bubble B missing: {texts}"
+		assert not any("靠！反正" in t and "真是的，" in t for t in texts), f"Bubbles must not be combined: {texts}"
+
+	def test_sample11_page_63532_hollow_circles_ellipsis_normalized(self, monkeypatch):
+		"""SAMPLE 11: Page 63532 where hollow outline ellipsis dots '但是......'
+		were misrecognized by OCR as '但是0000'.
+		Verifies that '但是0000' / '但是oooo' is automatically normalized to '但是……'.
+		"""
+		box0 = _box(436, 93, 145, 50)
+		box1 = _box(87, 903, 272, 141)
+		box2 = _box(131, 1317, 326, 103)
+
+		monkeypatch.setattr(pipeline, "detector", BoxDetector([box0, box1, box2]))
+
+		ocr_lines = [
+			(_box(436, 93, 145, 50), "但是0000", 0.80501),
+			(_box(87, 903, 272, 141), "刚才我可以用功夫\n打败他们，也就是\n说我这个法师有了\n格斗家的“技能”", 0.9999),
+			(_box(131, 1317, 326, 103), "如果是格斗家，这职业\n的属性加成一定更适合\n我的功夫发挥。", 0.9999),
+		]
+		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+
+		res = pipeline.analyze_image(np.zeros((1560, 800, 3), dtype=np.uint8))
+		assert len(res.regions) == 3
+		r0 = next(r for r in res.regions if "但是" in r.text)
+		assert r0.text == "但是……", f"Expected '但是……', got '{r0.text}'"
+		assert "0000" not in r0.text, f"'0000' must not remain in OCR text: '{r0.text}'"
+
+	def test_sample12_page_45403_trailing_line_recovered(self, monkeypatch):
+		"""SAMPLE 12: Page 45403 with bottom bubble missing line 3 '一下？'.
+		Bubble contains:
+		Line 1: '你要不要也'
+		Line 2: '来“熟悉”'
+		Line 3: '一下？'
+		Verifies that the full 3-line dialogue is recovered and not truncated.
+		"""
+		box0 = _box(305, 81, 278, 137)
+		box1 = _box(396, 621, 175, 147)
+		box2 = _box(280, 1330, 210, 140)  # Bubble 3 full mask/box
+
+		mask = np.zeros((1598, 800), dtype=np.uint8)
+		mask[1330:1470, 280:490] = 255
+		monkeypatch.setattr(pipeline, "detector", BoxDetector([box0, box1, box2], mask=mask))
+
+		ocr_lines = [
+			(_box(305, 81, 278, 137), "小弟弟，我可是一\n个自律的游戏工作\n者，你别指望从我\n这里得到什么好处。", 0.99991),
+			(_box(396, 621, 175, 147), "我没那意思，\n就是想跟着\n你在游戏里\n熟悉一下。", 0.99998),
+			# Full page only detected top 2 lines in Bubble 3
+			(_box(312, 1348, 169, 32), "你要不要也", 0.9999),
+			(_box(312, 1385, 169, 32), "来“熟悉”", 0.9999),
+		]
+		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+
+		# recognize_crop or recognize_line on band or crop finds '一下？'
+		monkeypatch.setattr(
+			pipeline.ocr,
+			"recognize_crop",
+			lambda crop: OcrResult(text="一下？", score=0.98),
+		)
+		monkeypatch.setattr(
+			pipeline.ocr,
+			"recognize_line",
+			lambda crop: OcrResult(text="一下？", score=0.98),
+		)
+
+		res = pipeline.analyze_image(np.zeros((1598, 800, 3), dtype=np.uint8))
+		assert len(res.regions) == 3
+		r2 = next(r for r in res.regions if "你要不要也" in r.text)
+		assert "一下？" in r2.text or "一下?" in r2.text, f"Expected '一下？' in dialogue, got: '{r2.text}'"
+
+
+
+
+
+
+
+
 
 
 

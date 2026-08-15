@@ -4,7 +4,6 @@ import { db } from '$lib/server/db';
 import { pages, chapters } from '$lib/server/db/schema';
 import { eq } from 'drizzle-orm';
 import { resetPageProgress } from '$lib/server/chapters';
-import { clearChapterJob } from '$lib/server/translation-service';
 import type { RequestHandler } from './$types';
 
 export const POST: RequestHandler = async ({ params }) => {
@@ -15,8 +14,6 @@ export const POST: RequestHandler = async ({ params }) => {
 	if (!page) throw error(404, 'Page not found.');
 
 	resetPageProgress(pageId);
-	clearChapterJob(page.chapterId);
-	db.update(chapters).set({ status: 'pending' }).where(eq(chapters.id, page.chapterId)).run();
 
 	return json({ ok: true, chapterId: page.chapterId });
 };

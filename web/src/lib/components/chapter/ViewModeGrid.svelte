@@ -78,6 +78,7 @@
 			value: 'inspect',
 			label: 'Inspect Page',
 			icon: Eye,
+			disabled: isPageProcessing,
 		});
 
 		if (idx < pages.length - 1) {
@@ -147,8 +148,9 @@
 					<div class="flex items-center gap-1.5">
 						<button
 							type="button"
+							disabled={page.status === 'processing'}
 							on:click={() => dispatch('inspect', page)}
-							class="flex items-center gap-1 rounded-md bg-black/5 px-2 py-1 text-xs font-semibold transition hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"
+							class="flex items-center gap-1 rounded-md bg-black/5 px-2 py-1 text-xs font-semibold transition hover:bg-black/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-black/5 dark:bg-white/5 dark:hover:bg-white/10 dark:disabled:hover:bg-white/5"
 						>
 							<Eye size={12} /> Inspect
 						</button>
@@ -172,8 +174,8 @@
 						loading="lazy"
 						decoding="async"
 						draggable="false"
-						class="h-full w-full object-cover transition-opacity duration-200 select-none cursor-pointer"
-						on:click={() => dispatch('inspect', page)}
+						class={`h-full w-full object-cover transition-opacity duration-200 select-none ${page.status === 'processing' ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'}`}
+						on:click={() => page.status !== 'processing' && dispatch('inspect', page)}
 					/>
 				</div>
 

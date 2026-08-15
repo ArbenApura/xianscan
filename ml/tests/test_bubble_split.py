@@ -1004,6 +1004,51 @@ def test_page_58976_flashback_scene_bubbles():
     assert "不过" not in b_bot.text, f"Bottom bubble must NOT merge with top bubble: {repr(b_bot.text)}"
 
 
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_63517.png").exists(),
+    reason="Page 63517 sample fixture not found",
+)
+def test_page_63517_trailing_ellipsis_detection():
+    """Page 63517 regression test:
+    1. Region 0 ('龙字军夜袭“黑风寨”……') must recover the trailing horizontal ellipsis ('……')
+       after the closing quote and expand bounding box/polygon past x=820 to enclose all 6 dots.
+    2. Region 1 ('肥字军剿灭水贼\\n“混江龙”') must remain a clean 2-line dialogue region without
+       erroneously inheriting a trailing ellipsis.
+    3. Region 2 ('鱼字军剿灭……') must recover the trailing horizontal ellipsis ('……')
+       and expand bounding box/polygon past x=850 to enclose all 6 dots.
+    4. Exactly 3 regions must be produced.
+    """
+    img_path = FIXTURES_DIR / "page_63517.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 3, f"Expected exactly 3 regions on page 63517, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    # 1. Check dialogue 1 (Region 0)
+    b0 = next((r for r in resp.regions if "龙字军" in r.text), None)
+    assert b0 is not None, f"Dialogue 1 ('龙字军...') missing. Found: {[r.text for r in resp.regions]}"
+    assert b0.text.endswith("……") or b0.text.endswith("..."), f"Dialogue 1 missing trailing ellipsis: {repr(b0.text)}"
+    assert "黑风寨" in b0.text
+    assert b0.box.x + b0.box.w >= 820, f"Dialogue 1 box width must cover all ellipsis dots (right >= 820), got {b0.box.x + b0.box.w}"
+    assert max(p[0] for p in b0.polygon) >= 820, f"Dialogue 1 polygon must cover all ellipsis dots (right >= 820), got {max(p[0] for p in b0.polygon)}"
+
+    # 2. Check dialogue 2 (Region 1)
+    b1 = next((r for r in resp.regions if "肥字军" in r.text), None)
+    assert b1 is not None, f"Dialogue 2 ('肥字军...') missing. Found: {[r.text for r in resp.regions]}"
+    assert "混江龙" in b1.text
+    assert not b1.text.endswith("……") and not b1.text.endswith("..."), f"Dialogue 2 should not have trailing ellipsis: {repr(b1.text)}"
+
+    # 3. Check dialogue 3 (Region 2)
+    b2 = next((r for r in resp.regions if "鱼字军" in r.text), None)
+    assert b2 is not None, f"Dialogue 3 ('鱼字军...') missing. Found: {[r.text for r in resp.regions]}"
+    assert b2.text.endswith("……") or b2.text.endswith("..."), f"Dialogue 3 missing trailing ellipsis: {repr(b2.text)}"
+    assert b2.box.x + b2.box.w >= 850, f"Dialogue 3 box width must cover all ellipsis dots (right >= 850), got {b2.box.x + b2.box.w}"
+    assert max(p[0] for p in b2.polygon) >= 850, f"Dialogue 3 polygon must cover all ellipsis dots (right >= 850), got {max(p[0] for p in b2.polygon)}"
+
+
+
 
 
 

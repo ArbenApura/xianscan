@@ -95,8 +95,8 @@ function registerFonts(): void {
 
 // Matches Japanese Hiragana, Katakana, Kanji, and Korean Hangul
 const CJK_REGEX = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
-// Characters unsupported by CC Wild Words or remapped to arrows/glyphs (e.g. [ and ] are comic bubble arrows in CC Wild Words)
-const UNSUPPORTED_WILDWORDS_REGEX = /[\[\]{}|_\\]/;
+// Characters remapped to arrow glyphs in CC Wild Words (e.g. [ and ] are comic bubble arrows)
+const UNSUPPORTED_WILDWORDS_REGEX = /[\[\]{}|\\]/;
 
 export function fontFor(text?: string): string {
 	if (text && (CJK_REGEX.test(text) || UNSUPPORTED_WILDWORDS_REGEX.test(text))) {
@@ -431,7 +431,6 @@ export function sanitizeForFont(text: string): string {
 	const trimmed = text.trim();
 	if (CJK_REGEX.test(trimmed)) {
 		return trimmed
-			.replace(/\s*[—–]+\s*/g, ' ')
 			.replace(/[ \t]{2,}/g, ' ')
 			.trim();
 	}
@@ -443,7 +442,6 @@ export function sanitizeForFont(text: string): string {
 		.replace(/[“”„‟]/g, '"')
 		.replace(/[‘’‚‛]/g, "'")
 		.replace(/[〜～]/g, '~')
-		.replace(/\s*[—–]+\s*/g, ', ')
 		.replace(/,\s*,/g, ', ')
 		.replace(/\.\s*,/g, '. ')
 		.replace(/!\s*,/g, '! ')

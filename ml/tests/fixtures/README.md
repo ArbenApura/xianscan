@@ -39,6 +39,7 @@ This directory stores permanent, version-controlled image samples used by `pytes
 | [`page_58971.png`](page_58971.png) | 900 × 1730 | Chapter 47 / Page 58971 | **Dialogue Angle Stability & Same-Line Fragment Merging**: Ensures standard horizontal dialogue bubbles (*"还有那些侠女的..."*) maintain `angle = 0.0` and merge same-line horizontal punctuation fragments (*"嘿~～～"*) into 1 unified line without rotation. |
 | [`page_58976.png`](page_58976.png) | 900 × 1734 | Chapter 47 / Page 58976 | **Flashback Scene Bubble Grouping & Distinct Bubble Separation**: Ensures 5-line flashback bubbles (*"生死爱恨..."*) capture all lines completely without vertical overlap dropping, and diagonally-adjacent speech bubbles (*"不过……她\n不重要。"* vs *"我真正想找的人\n……是你。"*) stay strictly separated. |
 | [`page_58994.png`](page_58994.png) | 900 × 1264 | Chapter 48 / Page 58994 | **Short 1-Character Trailing Line Angle Stability**: Ensures dialogue bubbles ending with 1-character trailing lines (*"前，"*) snap subpixel baseline noise to `angle = 0.0` without tilting translated text. |
+| [`page_63517.png`](page_63517.png) | 900 × 1981 | Chapter 52 / Page 63517 | **Trailing Ellipsis Detection & Full-Dot Coverage**: Ensures trailing horizontal ellipsis dots (*"龙字军夜袭“黑风寨”……"* after closing quotes and *"鱼字军剿灭……"*) are extracted via mask growth and expanded to 2 ems (`x >= 820` / `x >= 850`) to cleanly inpaint all 6 dots without residue. |
 
 ---
 

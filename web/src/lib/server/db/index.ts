@@ -23,11 +23,13 @@ declare global {
 export function createDb(path: string) {
 	// better-sqlite3 WILL NOT CREATE MISSING DIRECTORIES — ENSURE THE DATA DIR EXISTS FIRST.
 	if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-	const sqlite = new Database(path);
+	const sqlite = new Database(path, { timeout: 30000 });
 	// WAL ALLOWS CONCURRENT READERS (AND SURVIVES PROCESS KILLS); :memory: IGNORES IT GRACEFULLY.
 	sqlite.pragma('journal_mode = WAL');
 	// SQLITE DOES NOT ENFORCE FKs BY DEFAULT — CASCADE/SET-NULL BEHAVIOUR DEPENDS ON THIS.
 	sqlite.pragma('foreign_keys = ON');
+	sqlite.pragma('busy_timeout = 30000');
+	sqlite.pragma('synchronous = NORMAL');
 	return drizzle(sqlite, { schema });
 }
 
@@ -46,10 +48,12 @@ const MIGRATIONS_DIR = existsSync(resolve('drizzle'))
 // better-sqlite3 WILL NOT CREATE MISSING DIRECTORIES — ENSURE THE DATA DIR EXISTS BEFORE OPENING.
 if (!globalThis.__mtSqlite) {
 	if (DB_PATH !== ':memory:') mkdirSync(dirname(DB_PATH), { recursive: true });
-	const sqlite = new Database(DB_PATH);
+	const sqlite = new Database(DB_PATH, { timeout: 30000 });
 	globalThis.__mtSqlite = sqlite;
 	sqlite.pragma('journal_mode = WAL');
 	sqlite.pragma('foreign_keys = ON');
+	sqlite.pragma('busy_timeout = 30000');
+	sqlite.pragma('synchronous = NORMAL');
 	// SELF-HOSTED FRIENDLINESS: RUN PENDING MIGRATIONS AT BOOT SO `npm run dev` / `npm run start` WORK ON
 	// A FRESH CLONE WITHOUT A MANUAL `npm run db:migrate` STEP (migrate RUNS ONLY PENDING ONES — THE
 	migrate(drizzle(sqlite, { schema }), { migrationsFolder: MIGRATIONS_DIR });

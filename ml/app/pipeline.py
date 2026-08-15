@@ -27,6 +27,8 @@ _QUESTION_TAIL = re.compile(r"[?？]$")
 _PUNCT_ONLY = re.compile(r"^[.．…·!！?？~～]{1,2}$")
 _STRAY_DOT_LINE = re.compile(r"^[.．·…]$")
 _STRAY_LATIN_SUFFIX = re.compile(r'([\u4e00-\u9fa5]{2,})[a-zA-Z]$')
+_TRAILING_CIRCLES_ELLIPSIS = re.compile(r'([\u4e00-\u9fa5])[0oO·•]{2,}$')
+_PURE_CIRCLES_ELLIPSIS = re.compile(r'^[0oO·•]{2,}$')
 
 
 def _clean_stray_ocr_artifacts(text: str) -> str:
@@ -36,7 +38,11 @@ def _clean_stray_ocr_artifacts(text: str) -> str:
 	lines = text.split('\n')
 	cleaned_lines = []
 	for line in lines:
-		cleaned = _STRAY_LATIN_SUFFIX.sub(r'\1', line.strip())
+		cleaned = line.strip()
+		cleaned = _STRAY_LATIN_SUFFIX.sub(r'\1', cleaned)
+		cleaned = _TRAILING_CIRCLES_ELLIPSIS.sub(r'\1……', cleaned)
+		if _PURE_CIRCLES_ELLIPSIS.fullmatch(cleaned):
+			cleaned = "……"
 		cleaned_lines.append(cleaned)
 	return '\n'.join(cleaned_lines)
 
@@ -61,7 +67,10 @@ def _ellipsis_polygon(base_pts: np.ndarray, union_box: np.ndarray, text: str, pa
 	if _ALL_ELLIPSIS.fullmatch(text) and (x1 - x0) <= base_w * 1.35:
 		x1 = min(float(page_w), x1 + base_w * 1.2)
 	elif _ELLIPSIS_TAIL.search(text) or text.endswith("……") or text.endswith("..."):
-		x1 = min(float(page_w), x1 + min(h * 0.75, 45.0))
+		if (ox + ow) >= float(base_pts[:, 0].max()) + 2.0:
+			x1 = min(float(page_w), max(x1, float(ox + ow)))
+		else:
+			x1 = min(float(page_w), x1 + max(40.0, base_w * 0.28))
 	x0 = max(0.0, x0)
 	return [[int(x0), int(y0)], [int(x1), int(y0)], [int(x1), int(y1)], [int(x0), int(y1)]]
 
@@ -298,9 +307,9 @@ def _is_multiline_comic_blob(
 	if not overlapping_rapid:
 		return False
 
-	# 2. EXCESSIVE HEIGHT RATIO OVER DETECTED TEXT LINES
+	# 2. EXCESSIVE HEIGHT RATIO OVER DETECTED TEXT LINES (WHEN 2+ LINES ALREADY DETECTED)
 	avg_rh = sum(r[3] for r in overlapping_rapid) / len(overlapping_rapid)
-	if ch > 2.8 * avg_rh and ch > 160:
+	if len(overlapping_rapid) >= 2 and ch > 2.8 * avg_rh and ch > 160:
 		return True
 
 	# 3. SPANS MULTIPLE LINES ALREADY DETECTED (VERTICALLY STACKED OR SIDE-BY-SIDE COLUMNS)
@@ -387,32 +396,48 @@ def _apply_mask_growth(
 				line_h = float(detect.box_to_xywh(box)[3])
 			else:
 				line_h = 0.0
+			last_char = region.text.rstrip()[-1] if region.text.strip() else ""
+			is_terminal = last_char in "。.;；:：!！?？"
 			# A SHORT BAND ADDED BELOW THE TEXT IS A MISSED TRAILING LINE OR DOTS LINE
-			if line_h > 0 and 0.35 * line_h <= added_h <= 1.5 * line_h:
-				last_char = region.text.rstrip()[-1] if region.text.strip() else ""
-				if last_char not in "。.;；:：!！?？)]】”’\"'":
-					recognized_tail = False
-					if ocr_img is not None and page_h > 0 and page_w > 0:
-						band_y0 = int(prev_bottom - 2)
-						band_y1 = int(max(p[1] for p in grown) + 2)
-						band_x0 = int(min(p[0] for p in grown))
-						band_x1 = int(max(p[0] for p in grown))
-						band_crop = ocr_img[max(0, band_y0):min(page_h, band_y1), max(0, band_x0):min(page_w, band_x1)]
-						if band_crop.size > 0:
-							rec = ocr.recognize_line(band_crop)
-							if rec and rec.text.strip() and rec.score >= 0.50:
-								tail_t = rec.text.strip()
-								if re.fullmatch(r"^[-—－_.~·.．…\s]+$", tail_t) or _ALL_ELLIPSIS.fullmatch(tail_t):
-									tail_t = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
-								elif _ELLIPSIS_TAIL.search(tail_t):
-									tail_t = re.sub(r"[.．…·\s]{1,}$", "……", tail_t)
-								elif _EXCLAIM_TAIL.search(tail_t) or _QUESTION_TAIL.search(tail_t):
-									tail_t = re.sub(r"[!！?？\s]{1,}$", "！", tail_t)
+			if not is_terminal and line_h > 0 and 0.35 * line_h <= added_h <= 1.85 * line_h:
+				recognized_tail = False
+				if ocr_img is not None and page_h > 0 and page_w > 0:
+					band_y0 = int(prev_bottom - max(12.0, line_h * 0.45))
+					band_y1 = int(max(p[1] for p in grown) + 2)
+					band_x0 = int(min(p[0] for p in grown))
+					band_x1 = int(max(p[0] for p in grown))
+					band_crop = ocr_img[max(0, band_y0):min(page_h, band_y1), max(0, band_x0):min(page_w, band_x1)]
+					if band_crop.size > 0:
+						rec = ocr.recognize_line(band_crop) or ocr.recognize_crop(band_crop)
+						if rec and rec.text.strip() and rec.score >= 0.50:
+							tail_t = rec.text.strip()
+							if _ELLIPSIS_TAIL.search(tail_t) or _ALL_ELLIPSIS.fullmatch(tail_t) or re.fullmatch(r"^[-—－_.~·.．…\s]+$", tail_t):
+								tail_t = re.sub(r"[.．…·\s]{1,}$", "……", tail_t)
 								region.text = region.text.rstrip() + "\n" + tail_t
 								recognized_tail = True
-					if not recognized_tail:
+							elif _QUESTION_TAIL.search(tail_t):
+								tail_t = re.sub(r"[?？\s]{1,}$", "？", tail_t)
+								region.text = region.text.rstrip() + "\n" + tail_t
+								recognized_tail = True
+							elif _EXCLAIM_TAIL.search(tail_t):
+								tail_t = re.sub(r"[!！\s]{1,}$", "！", tail_t)
+								region.text = region.text.rstrip() + "\n" + tail_t
+								recognized_tail = True
+				if not recognized_tail:
+					if _EXCLAIM_TAIL.search(region.text) or "！" in region.text[-4:]:
+						unit = "！"
+					elif _QUESTION_TAIL.search(region.text) or "？" in region.text[-4:]:
+						unit = "？"
+					else:
 						unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
-						region.text = region.text.rstrip() + "\n" + unit
+					region.text = region.text.rstrip() + "\n" + unit
+			elif is_terminal:
+				# FOR TERMINAL PUNCTUATION, DO NOT GROW DOWNWARD INTO EMPTY BUBBLE TAILS / ARTWORK
+				clamped_grown = [[p[0], min(p[1], prev_bottom)] for p in grown]
+				if clamped_grown != orig_polygon:
+					region.polygon = clamped_grown
+					bx, by, bw, bh = _polygon_bounds(clamped_grown)
+					region.box = _safe_box(bx, by, bw, bh, page_w, page_h)
 			last_pts = [p for p in orig_polygon if p[1] >= prev_bottom - max(15.0, line_h * 1.2)]
 			last_right = max(p[0] for p in last_pts) if last_pts else prev_right
 			grown_last_pts = [p for p in grown if p[1] >= prev_bottom - max(15.0, line_h * 1.2)]
@@ -437,15 +462,33 @@ def _apply_mask_growth(
 						region.polygon = widened
 						bx, by, bw, bh = _polygon_bounds(widened)
 						region.box = _safe_box(bx, by, bw, bh, page_w, page_h)
-				elif region.text.strip() and region.text.rstrip()[-1] not in "。.;；:：!！?？)]】”’\"'":
-					unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
-					region.text = region.text.rstrip() + unit
-					poly_pts = np.asarray(region.polygon, dtype=np.float64)
-					widened = _ellipsis_polygon(poly_pts, box, region.text, page_w)
-					if widened != region.polygon:
-						region.polygon = widened
-						bx, by, bw, bh = _polygon_bounds(widened)
-						region.box = _safe_box(bx, by, bw, bh, page_w, page_h)
+				elif region.text.strip():
+					last_c = region.text.rstrip()[-1]
+					if last_c not in "。.;；:：!！?？)]】”’\"'":
+						unit = "……" if any(ord(c) > 0x2E80 for c in region.text) else "..."
+						region.text = region.text.rstrip() + unit
+						poly_pts = np.asarray(region.polygon, dtype=np.float64)
+						widened = _ellipsis_polygon(poly_pts, box, region.text, page_w)
+						if widened != region.polygon:
+							region.polygon = widened
+							bx, by, bw, bh = _polygon_bounds(widened)
+							region.box = _safe_box(bx, by, bw, bh, page_w, page_h)
+					elif last_c in "”’\"'" and ocr_img is not None and page_h > 0 and page_w > 0:
+						t_y0 = int(prev_bottom - max(20.0, line_h * 1.3))
+						t_y1 = int(prev_bottom + max(10.0, line_h * 0.3))
+						t_x0 = int(prev_right - max(15.0, line_h * 0.4))
+						t_x1 = min(page_w, int(prev_right + max(80.0, line_h * 2.5)))
+						t_crop = ocr_img[max(0, t_y0):min(page_h, t_y1), max(0, t_x0):min(page_w, t_x1)]
+						if t_crop.size > 0:
+							rec_tail = ocr.recognize_crop(t_crop) or ocr.recognize_line(t_crop)
+							if rec_tail and (_ELLIPSIS_TAIL.search(rec_tail.text) or _ALL_ELLIPSIS.fullmatch(rec_tail.text) or "…" in rec_tail.text or ".." in rec_tail.text or "." in rec_tail.text):
+								region.text = region.text.rstrip() + "……"
+								poly_pts = np.asarray(region.polygon, dtype=np.float64)
+								widened = _ellipsis_polygon(poly_pts, box, region.text, page_w)
+								if widened != region.polygon:
+									region.polygon = widened
+									bx, by, bw, bh = _polygon_bounds(widened)
+									region.box = _safe_box(bx, by, bw, bh, page_w, page_h)
 	except Exception:
 		pass
 
@@ -957,15 +1000,17 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					hull_pts = hull.reshape(-1, 2).astype(np.float64)
 					_hx, _hy, hw, hh = detect.box_to_xywh(hull_pts)
 
-					# MULTI-LINE / STAT-CARD RESCUE: FOR COMPACT SINGLE-BUBBLE / CARD DETECTIONS WHERE ONLY 1 LINE WAS FOUND
+					# MULTI-LINE / STAT-CARD RESCUE: FOR COMPACT SINGLE-BUBBLE / CARD DETECTIONS WHERE LINES WERE MISSED
+					avg_lh = max(1.0, float(hh) / max(1, len(s_matched)))
+					is_unclosed_tail = bool(s_region.text.strip() and s_region.text.rstrip()[-1] not in "。.;；:：!！?？")
 					needs_rescue = (
 						len(sub_groups) == 1
-						and len(s_matched) == 1
 						and not _ALL_ELLIPSIS.fullmatch(s_region.text)
 						and not bool(_PUNCT_ONLY.fullmatch(s_region.text))
-						and 75 <= bh <= 320
+						and 75 <= bh <= 380
 						and (
-							(1.25 * hh <= bh <= 4.0 * hh)
+							(len(s_matched) == 1 and 1.25 * hh <= bh <= 4.0 * hh)
+							or (is_unclosed_tail and (bh - hh) >= 0.45 * avg_lh)
 							or s_region.confidence < 0.70
 							or (detect.is_vertical_box(hull_pts) and s_region.confidence < 0.85)
 						)
@@ -978,19 +1023,82 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 							if (len(crop_lines) > len(current_lines) and crop_res.score >= 0.70) or (
 								crop_res.score > s_region.confidence + 0.15 and crop_res.score >= 0.75
 							):
-								s_region.text = crop_res.text.strip()
-								s_region.confidence = max(s_region.confidence, crop_res.score)
-								s_region.polygon = [[int(px), int(py)] for px, py in box]
-								s_region.box = _safe_box(_bx, _by, bw, bh, page_w, page_h)
-								s_region.vertical = detect.is_vertical_box(box)
-								line_angles = [line_ang for _l, _t, _s, line_ang in s_matched]
-								if line_angles:
-									med = float(np.median(line_angles))
-									s_region.angle = 0.0 if abs(med) < 2.5 else round(med, 2)
+								if getattr(crop_res, "lines", None) and len(crop_res.lines) > 1:
+									offset_x = max(0, _bx - 2)
+									offset_y = max(0, _by - 2)
+									c_groups: list[list[tuple]] = []
+									for c_box, c_txt, c_sc in crop_res.lines:
+										c_clean = c_txt.strip()
+										if not c_clean:
+											continue
+										c_shifted = c_box.copy()
+										c_shifted[:, 0] += offset_x
+										c_shifted[:, 1] += offset_y
+										c_ang = detect.calculate_box_angle(c_shifted)
+										if not c_groups:
+											c_groups.append([(c_shifted, c_clean, c_sc, c_ang)])
+										else:
+											last_c = c_groups[-1][-1][0]
+											_lx, _ly, _lw, _lh = detect.box_to_xywh(last_c)
+											_cx, _cy, _cw, _ch = detect.box_to_xywh(c_shifted)
+											_gap = _cy - (_ly + _lh)
+											_x_overlap = min(_cx + _cw, _lx + _lw) - max(_cx, _lx)
+											_min_w = min(_cw, _lw)
+											_min_h = min(_ch, _lh)
+											_grp_cxs = [detect.box_to_xywh(g[0])[0] + detect.box_to_xywh(g[0])[2] / 2.0 for g in c_groups[-1]]
+											_grp_mean_cx = sum(_grp_cxs) / len(_grp_cxs)
+											_new_cx = _cx + _cw / 2.0
+											_is_trailing = (
+												(_cw <= int(_lw * 0.70) and _cw <= 70 and _ch <= _lh * 1.75)
+												or (0 < len(c_clean) <= 3 and _ch <= _lh * 1.80 and abs(_cx - _lx) <= 0.25 * max(_cw, _lw))
+											)
+											_is_left_aligned = abs(_cx - _lx) <= 0.25 * _min_w
+											_is_right_aligned = abs((_cx + _cw) - (_lx + _lw)) <= 0.25 * _min_w
+											_is_shifted = (
+												not _is_trailing
+												and not _is_left_aligned
+												and not _is_right_aligned
+												and (
+													abs(_new_cx - _grp_mean_cx) > max(40.0, 0.50 * _min_w)
+													or (_gap >= 0.20 * _min_h and _x_overlap <= 0.20 * _min_w)
+													or (_gap > 1.2 * max(_lh, _ch))
+												)
+											)
+											if _is_shifted:
+												c_groups.append([(c_shifted, c_clean, c_sc, c_ang)])
+											else:
+												c_groups[-1].append((c_shifted, c_clean, c_sc, c_ang))
+									for cg_matched in c_groups:
+										cg_pts = np.vstack([l.reshape(-1, 2) for l, _t, _s, _a in cg_matched]).astype(np.float32)
+										cg_hull = cv2.convexHull(cg_pts)
+										cg_poly = cg_hull.reshape(-1, 2).astype(np.float64) if cg_hull is not None else box
+										cghx, cghy, cghw, cghh = detect.box_to_xywh(cg_poly)
+										cg_clean_t = _clean_stray_ocr_artifacts("\n".join(t for _l, t, _s, _a in cg_matched if t.strip()))
+										cg_reg = Region(
+											id=f"r{len(regions)}",
+											box=_safe_box(cghx, cghy, max(1, cghw), max(1, cghh), page_w, page_h),
+											polygon=[[int(p[0]), int(p[1])] for p in cg_poly],
+											text=cg_clean_t,
+											confidence=float(max(s for _l, _t, s, _a in cg_matched)),
+											vertical=detect.is_vertical_box(cg_poly),
+											angle=float(np.median([a for _l, _t, _s, a in cg_matched])) if cg_matched else 0.0,
+										)
+										regions.append(cg_reg)
+									continue
 								else:
-									s_region.angle = 0.0
-								regions.append(s_region)
-								continue
+									s_region.text = crop_res.text.strip()
+									s_region.confidence = max(s_region.confidence, crop_res.score)
+									s_region.polygon = [[int(px), int(py)] for px, py in box]
+									s_region.box = _safe_box(_bx, _by, bw, bh, page_w, page_h)
+									s_region.vertical = detect.is_vertical_box(box)
+									line_angles = [line_ang for _l, _t, _s, line_ang in s_matched]
+									if line_angles:
+										med = float(np.median(line_angles))
+										s_region.angle = 0.0 if abs(med) < 2.5 else round(med, 2)
+									else:
+										s_region.angle = 0.0
+									regions.append(s_region)
+									continue
 
 					s_region.polygon = [[int(p[0]), int(p[1])] for p in hull_pts]
 					if len(s_matched) == 1 and _PUNCT_TAIL.search(s_region.text):
@@ -1258,8 +1366,11 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		t_strip = r.text.strip()
 		has_c = bool(detect._CHINESE_RE.search(t_strip))
 		c_count = len(re.sub(r"\s+", "", t_strip))
-		is_stray_non_chinese = not has_c and c_count <= 2 and (
-			r.box.h >= 120 or r.box.w >= 120 or (r.box.h >= 80 and (r.box.h / max(1, r.box.w) >= 2.5 or r.box.w / max(1, r.box.h) >= 2.5))
+		is_punct = bool(_PUNCT_ONLY.fullmatch(t_strip) or _ALL_ELLIPSIS.fullmatch(t_strip))
+		is_stray_non_chinese = not has_c and not is_punct and (
+			(c_count <= 2 and (r.box.h >= 120 or r.box.w >= 120 or (r.box.h >= 80 and (r.box.h / max(1, r.box.w) >= 2.5 or r.box.w / max(1, r.box.h) >= 2.5))))
+			or (c_count <= 1 and (bool(re.fullmatch(r"[a-zA-Z]", t_strip)) or r.confidence < 0.75))
+			or (c_count <= 4 and bool(re.fullmatch(r"^[0oO·•]+$", t_strip)) and r.box.w <= 70 and r.box.h <= 70)
 		)
 		if not t_strip or _IGNORED_NOISE_RE.fullmatch(t_strip) or detect.is_pure_watermark_region(t_strip) or is_stray_non_chinese:
 			continue

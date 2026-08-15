@@ -445,6 +445,7 @@ export async function getChapterReaderData(chapterId: number): Promise<ChapterRe
 		.all();
 
 	// SELF-HEALING: EXTRACT AND CACHE DIMENSIONS FOR ANY PAGES MISSING THEM SO SSR HAS EXACT RATIOS
+	const missingDims: { id: number; width: number; height: number }[] = [];
 	for (const p of pageRows) {
 		if ((p.width === null || p.height === null) && p.filePath) {
 			const absPath = join(DATA_ROOT, p.filePath);
@@ -455,14 +456,26 @@ export async function getChapterReaderData(chapterId: number): Promise<ChapterRe
 				if (img.width && img.height) {
 					p.width = img.width;
 					p.height = img.height;
-					db.update(pages)
-						.set({ width: img.width, height: img.height })
-						.where(eq(pages.id, p.id))
-						.run();
+					missingDims.push({ id: p.id, width: img.width, height: img.height });
 				}
 			} catch {
 				// ignore if file is missing or unreadable
 			}
+		}
+	}
+
+	if (missingDims.length > 0) {
+		try {
+			db.transaction((tx) => {
+				for (const item of missingDims) {
+					tx.update(pages)
+						.set({ width: item.width, height: item.height })
+						.where(eq(pages.id, item.id))
+						.run();
+				}
+			});
+		} catch {
+			// Non-blocking: never fail SSR if background parallel translation is writing
 		}
 	}
 

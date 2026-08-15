@@ -238,10 +238,12 @@ export async function runChapterPipeline(
 					if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
 					emit({ type: 'page-step-end', chapterId, page: injectIdx, pageId: injectRow.id, step: 'analyze', stepStatus: 'completed', durationMs: performance.now() - tA0, stepDetails: { regionsCount: analyzed.regions.length } });
 					emit({ type: 'page-step-start', chapterId, page: injectIdx, pageId: injectRow.id, step: 'persist_regions' });
-					db.delete(regions).where(eq(regions.pageId, injectRow.id)).run();
-					if (analyzed.regions.length > 0) {
-						db.insert(regions).values(analyzed.regions.map((r, idx) => ({ ...regionRow(r, idx), pageId: injectRow.id }))).run();
-					}
+					db.transaction((tx) => {
+						tx.delete(regions).where(eq(regions.pageId, injectRow.id)).run();
+						if (analyzed.regions.length > 0) {
+							tx.insert(regions).values(analyzed.regions.map((r, idx) => ({ ...regionRow(r, idx), pageId: injectRow.id }))).run();
+						}
+					});
 					emit({ type: 'page-step-end', chapterId, page: injectIdx, pageId: injectRow.id, step: 'persist_regions', stepStatus: 'completed' });
 
 					if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
@@ -272,11 +274,13 @@ export async function runChapterPipeline(
 					// PERSIST TRANSLATIONS
 					emit({ type: 'page-step-start', chapterId, page: injectIdx, pageId: injectRow.id, step: 'persist_translations' });
 					const seqById = new Map(analyzed.regions.map((r, idx) => [r.id, idx]));
-					for (const region of analyzed.regions) {
-						let target = byRegion.get(region.id)?.trim() ?? '';
-						if (!target) { const punct = resolveDialoguePunctuation(region.text); if (punct) { target = punct; byRegion.set(region.id, target); } }
-						db.update(regions).set({ textTarget: target || null, status: target ? 'translated' : 'failed' }).where(and(eq(regions.pageId, injectRow.id), eq(regions.seq, seqById.get(region.id) ?? -1))).run();
-					}
+					db.transaction((tx) => {
+						for (const region of analyzed.regions) {
+							let target = byRegion.get(region.id)?.trim() ?? '';
+							if (!target) { const punct = resolveDialoguePunctuation(region.text); if (punct) { target = punct; byRegion.set(region.id, target); } }
+							tx.update(regions).set({ textTarget: target || null, status: target ? 'translated' : 'failed' }).where(and(eq(regions.pageId, injectRow.id), eq(regions.seq, seqById.get(region.id) ?? -1))).run();
+						}
+					});
 					emit({ type: 'page-step-end', chapterId, page: injectIdx, pageId: injectRow.id, step: 'persist_translations', stepStatus: 'completed' });
 
 					if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
@@ -364,12 +368,14 @@ export async function runChapterPipeline(
 
 				// 2) PERSIST REGIONS (REPLACE THE PREVIOUS RUN'S)
 				emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'persist_regions' });
-				db.delete(regions).where(eq(regions.pageId, page.id)).run();
-				if (analyzed.regions.length > 0) {
-					db.insert(regions)
-						.values(analyzed.regions.map((r, idx) => ({ ...regionRow(r, idx), pageId: page.id })))
-						.run();
-				}
+				db.transaction((tx) => {
+					tx.delete(regions).where(eq(regions.pageId, page.id)).run();
+					if (analyzed.regions.length > 0) {
+						tx.insert(regions)
+							.values(analyzed.regions.map((r, idx) => ({ ...regionRow(r, idx), pageId: page.id })))
+							.run();
+					}
+				});
 				emit({
 					type: 'page-step-end',
 					chapterId,
@@ -547,20 +553,22 @@ export async function runChapterPipeline(
 				activeStep = 'persist_translations';
 				emit({ type: 'page-step-start', chapterId, page: i, pageId: page.id, step: 'persist_translations' });
 				const seqById = new Map(analyzed.regions.map((r, idx) => [r.id, idx]));
-				for (const region of analyzed.regions) {
-					let target = byRegion.get(region.id)?.trim() ?? '';
-					if (!target) {
-						const punct = resolveDialoguePunctuation(region.text);
-						if (punct) {
-							target = punct;
-							byRegion.set(region.id, target);
+				db.transaction((tx) => {
+					for (const region of analyzed.regions) {
+						let target = byRegion.get(region.id)?.trim() ?? '';
+						if (!target) {
+							const punct = resolveDialoguePunctuation(region.text);
+							if (punct) {
+								target = punct;
+								byRegion.set(region.id, target);
+							}
 						}
+						tx.update(regions)
+							.set({ textTarget: target || null, status: target ? 'translated' : 'failed' })
+							.where(and(eq(regions.pageId, page.id), eq(regions.seq, seqById.get(region.id) ?? -1)))
+							.run();
 					}
-					db.update(regions)
-						.set({ textTarget: target || null, status: target ? 'translated' : 'failed' })
-						.where(and(eq(regions.pageId, page.id), eq(regions.seq, seqById.get(region.id) ?? -1)))
-						.run();
-				}
+				});
 				emit({
 					type: 'page-step-end',
 					chapterId,

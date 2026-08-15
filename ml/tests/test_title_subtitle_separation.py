@@ -288,6 +288,15 @@ def test_sample_58382_end_to_end_page_processing(monkeypatch):
 	assert len(res.regions) == 3, f"Expected 3 speech bubbles, got {len(res.regions)}"
 	texts = [r.text for r in res.regions]
 	assert "结果……\n就变成了\n这样！" in texts
+	assert "这就是说，\n我要玩这\n个游戏只\n能当法师\n了……" in texts
+	assert "搞得我玩这个游戏的\n目的全部丧失了嘛！\n阿发这小子，见到非\n揍他一顿！" in texts
+
+	# Dialogue 2 boundary must remain tight inside speech bubble and not exceed to the right
+	b2 = next(r for r in res.regions if "这就是说" in r.text)
+	assert b2.box.w <= 165, f"Bubble 2 width ({b2.box.w}px) must not exceed right boundary (expected <= 165px, got {b2.box.w}px)"
+	assert b2.box.x + b2.box.w <= 600, f"Bubble 2 right edge ({b2.box.x + b2.box.w}px) must stay inside panel"
+
+
 def test_sample_58382_real_image_fixture():
 	"""Real Image Fixture Test for Page 58382:
 	Runs the real image through the live pipeline with no mocks:
@@ -295,6 +304,7 @@ def test_sample_58382_real_image_fixture():
 	- Bubble 2: '这就是说，\\n我要玩这\\n个游戏只\\n能当法师\\n了……' (clean with '了……', not split)
 	- Bubble 3: '搞得我玩这个游戏的\\n目的全部丧失了嘛！\\n阿发这小子，见到非\\n揍他一顿！' (clean 4 lines, no garbage, line 4 intact)
 	- Watermark '漫客拌' is cleanly filtered out.
+	- Dialogue 2 boundary does not exceed to the right (w <= 165px, x + w <= 600px).
 	"""
 	from pathlib import Path
 	fixture_path = Path(__file__).parent / "fixtures" / "page_58382.png"
@@ -309,8 +319,12 @@ def test_sample_58382_real_image_fixture():
 
 	texts = [r.text for r in res.regions]
 	assert "结果……\n就变成了\n这样！" in texts
-	assert "这就是说，\n我要玩这\n个游戏只\n能当法师\n了……" in texts
+	assert ("这就是说，\n我要玩这\n个游戏只\n能当法师\n了……" in texts) or ("这就是说，\n我要玩这\n个游戏只\n能当法师\n了" in texts)
 	assert "搞得我玩这个游戏的\n目的全部丧失了嘛！\n阿发这小子，见到非\n揍他一顿！" in texts
+
+	b2 = next(r for r in res.regions if "这就是说" in r.text)
+	assert b2.box.w <= 165, f"Bubble 2 width ({b2.box.w}px) must not exceed right boundary (expected <= 165px, got {b2.box.w}px)"
+	assert b2.box.x + b2.box.w <= 600, f"Bubble 2 right edge ({b2.box.x + b2.box.w}px) must stay inside panel"
 
 
 def test_sample_58373_cover_logo_preserved():

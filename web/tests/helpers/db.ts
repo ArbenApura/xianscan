@@ -47,9 +47,11 @@ export function getRawDb(): TestRawDb {
 }
 
 function createTestState(): TestState {
-	const raw = new Database(':memory:');
+	const raw = new Database(':memory:', { timeout: 30000 });
 	raw.pragma('journal_mode = WAL');
 	raw.pragma('foreign_keys = ON');
+	raw.pragma('busy_timeout = 30000');
+	raw.pragma('synchronous = NORMAL');
 	const db = drizzle(raw, { schema });
 	return { raw, db };
 }

@@ -85,6 +85,7 @@
 			value: 'inspect',
 			label: 'Inspect Page',
 			icon: Eye,
+			disabled: isPageProcessing,
 		});
 
 		if (idx < pages.length - 1) {
@@ -175,8 +176,9 @@
 				<div class="absolute bottom-3 right-3 flex items-center gap-1.5 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
 					<button
 						type="button"
+						disabled={page.status === 'processing'}
 						on:click={() => dispatch('inspect', page)}
-						class="flex items-center gap-1 rounded-md bg-black/80 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-black pointer-events-auto"
+						class="flex items-center gap-1 rounded-md bg-black/80 px-2.5 py-1 text-[11px] font-semibold text-white backdrop-blur transition hover:bg-black pointer-events-auto disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-black/80"
 					>
 						<Eye size={12} /> Inspect
 					</button>

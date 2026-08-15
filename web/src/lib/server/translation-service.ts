@@ -85,6 +85,8 @@ interface Job {
 	snapshot: ChapterJobSnapshot;
 	/** PAGES QUEUED WHILE THE JOB IS RUNNING — DRAINED BY THE PIPELINE VIA addPageToPool. */
 	addPageToPool: ((pageId: number) => void) | null;
+	/** QUEUED PAGE IDS ARRIVING BEFORE addPageToPool HAS REGISTERED */
+	pendingAddQueue: number[];
 	/** PAGE IDS THAT HAVE BEEN INDIVIDUALLY CANCELLED — CHECKED BY THE PIPELINE BEFORE EACH STEP. */
 	cancelledPages: Set<number>;
 }
@@ -310,6 +312,7 @@ export function startChapterJob(chapterId: number, work: ChapterJobWork, opts: {
 		listeners: new Set(),
 		snapshot: initialSnapshot,
 		addPageToPool: null,
+		pendingAddQueue: [],
 		cancelledPages: new Set(),
 	};
 
@@ -328,7 +331,13 @@ export function getChapterJob(chapterId: number): JobHandle | null {
  *  CAN INJECT NEW PAGES INTO THE RUNNING PQUEUE WITHOUT SUPERSEDING THE JOB. */
 export function setChapterJobAddPage(chapterId: number, fn: (pageId: number) => void): void {
 	const job = jobs.get(`chapter:${chapterId}`);
-	if (job) job.addPageToPool = fn;
+	if (job) {
+		job.addPageToPool = fn;
+		while (job.pendingAddQueue.length > 0) {
+			const id = job.pendingAddQueue.shift()!;
+			fn(id);
+		}
+	}
 }
 
 
@@ -403,10 +412,14 @@ function toHandle(job: Job): JobHandle {
 			job.controller.abort();
 		},
 		addPages(pageIds: number[]) {
-			if (job.status !== 'running' || !job.addPageToPool) return;
+			if (job.status !== 'running') return;
 			for (const id of pageIds) {
 				job.cancelledPages.delete(id);
-				job.addPageToPool(id);
+				if (job.addPageToPool) {
+					job.addPageToPool(id);
+				} else {
+					job.pendingAddQueue.push(id);
+				}
 			}
 		},
 		cancelPage(pageId: number) {
