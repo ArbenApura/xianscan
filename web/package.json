@@ -21,6 +21,10 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^9.14.0",
+		"@fontsource/lexend": "^5.3.0",
+		"@fontsource/montserrat": "^5.3.0",
+		"@fontsource/nunito-sans": "^5.3.0",
+		"@fontsource/poppins": "^5.3.0",
 		"@sveltejs/adapter-node": "^5.2.9",
 		"@sveltejs/kit": "^2.8.0",
 		"@sveltejs/vite-plugin-svelte": "^3.1.2",

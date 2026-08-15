@@ -7,6 +7,7 @@ import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { streamSse } from '$lib/sse';
 import { jobTracker } from './job-tracker';
+import { settings } from './settings';
 import type { BatchChapterItem, BatchTranslationState, ChapterJobSnapshot } from '$lib/types';
 
 const STORAGE_KEY = 'xianscan:batch_translation';
@@ -225,9 +226,10 @@ function createBatchTrackerStore() {
 			}
 
 			// ----------------------------------------------------
-			// STEP 1: ALWAYS SMART RE-SLICE CHAPTER PAGES FIRST (IF PAGES EXIST)
+			// STEP 1: SMART RE-SLICE CHAPTER PAGES (GATED BY USER PREFERENCE)
 			// ----------------------------------------------------
-			if (currentChapter.pageCount > 0) {
+			const shouldReslice = (get(settings).resliceBeforeBatch ?? true) && currentChapter.pageCount > 0;
+			if (shouldReslice) {
 				update((s) => {
 					const q = [...s.queue];
 					if (q[expectedIndex]) {

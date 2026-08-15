@@ -66,9 +66,21 @@ class TestLamaOnnxInpainter:
 		mask = np.zeros((60, 60), dtype=np.uint8)
 		mask[10:20, 10:20] = 255
 
-		out = inpainter(img, mask)
-		assert out.shape == (60, 60, 3)
-		assert out.dtype == np.uint8
+		# Default / patch mode
+		out_patch = inpainter(img, mask, mode="patch")
+		assert out_patch.shape == (60, 60, 3)
+		assert out_patch.dtype == np.uint8
+
+		# Scaled mode
+		out_scaled = inpainter(img, mask, mode="scaled")
+		assert out_scaled.shape == (60, 60, 3)
+		assert out_scaled.dtype == np.uint8
+
+		# Full dynamic mode
+		out_full = inpainter(img, mask, mode="full")
+		assert out_full.shape == (60, 60, 3)
+		assert out_full.dtype == np.uint8
+
 
 
 class TestInpainterUnsupported:

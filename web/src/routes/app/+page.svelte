@@ -762,14 +762,14 @@
 											{/if}
 											<a
 												href={`/app/books/${book.id}/`}
-												class="font-bold text-sm sm:text-base tracking-tight hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate"
+												class="font-bold text-sm sm:text-base tracking-tight hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate px-0.5"
 												title={book.titleTarget || book.title}
 											>
 												{book.titleTarget || book.title}
 											</a>
 										</div>
 										{#if book.titleTarget && book.titleTarget !== book.title}
-											<p class="text-[11px] sm:text-xs opacity-60 font-medium truncate mt-0.5" title={book.title}>
+											<p class="text-[11px] sm:text-xs opacity-60 font-medium truncate mt-0.5 px-0.5" title={book.title}>
 												{book.title}
 											</p>
 										{/if}
@@ -894,13 +894,13 @@
 								{/if}
 								<a
 									href={`/app/books/${book.id}/`}
-									class="font-bold text-xs sm:text-sm hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block"
+									class="font-bold text-xs sm:text-sm hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block px-0.5"
 									title={book.titleTarget || book.title}
 								>
 									{book.titleTarget || book.title}
 								</a>
 								{#if book.titleTarget && book.titleTarget !== book.title}
-									<span class="text-xs opacity-50 font-medium truncate hidden md:inline" title={book.title}>
+									<span class="text-xs opacity-50 font-medium truncate hidden md:inline px-0.5" title={book.title}>
 										({book.title})
 									</span>
 								{/if}
@@ -978,7 +978,7 @@
 						<div class="min-w-0 flex-1">
 							<a
 								href={`/app/books/${book.id}/`}
-								class="font-semibold text-xs hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block"
+								class="font-semibold text-xs hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block px-0.5"
 								title={book.titleTarget || book.title}
 							>
 								{book.titleTarget || book.title}
@@ -1053,12 +1053,12 @@
 							<td class="py-2.5 px-3 font-semibold">
 								<a
 									href={`/app/books/${book.id}/`}
-									class="hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate max-w-xs"
+									class="hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate max-w-xs px-0.5"
 								>
 									{book.titleTarget || book.title}
 								</a>
 							</td>
-							<td class="py-2.5 px-3 opacity-60 hidden md:table-cell truncate max-w-xs" title={book.title}>
+							<td class="py-2.5 px-3 opacity-60 hidden md:table-cell truncate max-w-xs px-0.5" title={book.title}>
 								{book.title}
 							</td>
 							<td class="py-2.5 px-3">
@@ -1120,7 +1120,7 @@
 </div>
 
 <!-- CREATE BOOK MODAL -->
-<Modal open={createModalOpen} title="Create New Book Series" size="sm" on:close={() => (createModalOpen = false)}>
+<Modal open={createModalOpen} title="Create New Book Series" size="md" on:close={() => (createModalOpen = false)}>
 	<form class="flex flex-col gap-4" on:submit|preventDefault={createBook}>
 		<TextField
 			bind:value={title}
@@ -1185,7 +1185,7 @@
 </Modal>
 
 <!-- EDIT BOOK MODAL -->
-<Modal open={editModalOpen} title="Edit Book Series" size="sm" on:close={() => (editModalOpen = false)}>
+<Modal open={editModalOpen} title="Edit Book Series" size="md" on:close={() => (editModalOpen = false)}>
 	{#if editingBook}
 		<form class="flex flex-col gap-4" on:submit|preventDefault={updateBook}>
 			<TextField

@@ -27,14 +27,14 @@ class Inpainter:
 	def available(self) -> bool:
 		return self.backend == "lama-onnx"
 
-	def __call__(self, img_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+	def __call__(self, img_bgr: np.ndarray, mask: np.ndarray, mode: str = "patch") -> np.ndarray:
 		"""FILL `mask` REGIONS (255 = ERASE) IN img_bgr. RETURNS A NEW IMAGE."""
 		if not self.available():
 			raise RuntimeError(
 				"Inpainting is not supported: LaMa ONNX model is not available. "
 				"Please run `python scripts/download_models.py` to download models/lama.onnx."
 			)
-		return _lama_inpaint(img_bgr, mask)
+		return _lama_inpaint(img_bgr, mask, mode=mode)
 
 
 # -- PURE HELPERS (UNIT-TESTED) -- #
@@ -91,14 +91,14 @@ def _get_lama():
 	return _lama_model
 
 
-def _lama_inpaint(img_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
+def _lama_inpaint(img_bgr: np.ndarray, mask: np.ndarray, mode: str = "patch") -> np.ndarray:
 	model = _get_lama()
 	if model is None:
 		raise RuntimeError(
 			"Inpainting is not supported: LaMa ONNX model is not available. "
 			"Please run `python scripts/download_models.py` to download models/lama.onnx."
 		)
-	return model(img_bgr, mask)
+	return model(img_bgr, mask, mode=mode)
 
 
 def get_inpainter() -> Inpainter:

@@ -37,7 +37,7 @@ def warmup_models() -> dict[str, bool]:
         if pipeline.detector is not None and pipeline.detector.available():
             pipeline.detector._load()
             status["detector"] = True
-            print("  [+] ComicTextDetector    : Ready (ONNX)")
+            print("  [+] ComicTextDetector    : Ready (ONNX DBNet)")
         else:
             status["detector"] = False
             print("  [-] ComicTextDetector    : Not Found (Fallback to RapidOCR Det)")
@@ -51,7 +51,7 @@ def warmup_models() -> dict[str, bool]:
 
         ocr._get_engine()
         status["ocr"] = True
-        print("  [+] RapidOCR Engine      : Ready (PP-OCRv4)")
+        print("  [+] RapidOCR Engine      : Ready (PP-OCR / ONNX)")
     except Exception as e:
         status["ocr"] = False
         print(f"  [!] RapidOCR Engine      : Error ({e})")
@@ -63,7 +63,7 @@ def warmup_models() -> dict[str, bool]:
         if inpaint.config.LAMA_MODEL_PATH.exists():
             inpaint._get_lama()
             status["inpainter"] = True
-            print("  [+] LaMa Inpainter       : Ready (ONNX Big-LaMa)")
+            print("  [+] LaMa Inpainter       : Ready (LaMa-Manga Dynamic FP32)")
         else:
             status["inpainter"] = False
             print("  [-] LaMa Inpainter       : Model File Not Found (Solid Infill Fallback)")
@@ -176,8 +176,30 @@ def preprocess(image: UploadFile = File(...)) -> Response:
     return Response(content=pipeline.encode_png(preprocessed), media_type="image/png")
 
 
+@app.get("/system/hardware")
+def get_hardware() -> dict:
+    """RETURNS CURRENT COMPUTE ACCELERATOR AND HARDWARE DIAGNOSTICS."""
+    from . import device
+
+    return device.get_hardware_status()
+
+
+@app.post("/system/device")
+def set_device(payload: dict) -> dict:
+    """DYNAMICALLY SWITCHES THE ACTIVE COMPUTE PROVIDER."""
+    from . import device
+
+    requested_device = payload.get("device", "auto")
+    device.set_active_provider(requested_device)
+    return device.get_hardware_status()
+
+
 @app.post("/pages/clean")
-def clean(image: UploadFile = File(...), regions: str = Form(...)) -> Response:
+def clean(
+    image: UploadFile = File(...),
+    regions: str = Form(...),
+    inpaint_mode: str = Form("patch"),
+) -> Response:
     data = image.file.read()
     if not data:
         raise HTTPException(status_code=400, detail="empty upload")
@@ -192,7 +214,7 @@ def clean(image: UploadFile = File(...), regions: str = Form(...)) -> Response:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     try:
-        cleaned = pipeline.clean_image(img, parsed)
+        cleaned = pipeline.clean_image(img, parsed, mode=inpaint_mode)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     return Response(content=pipeline.encode_png(cleaned), media_type="image/png")

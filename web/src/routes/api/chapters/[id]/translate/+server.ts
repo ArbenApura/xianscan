@@ -24,6 +24,8 @@ import type { RequestHandler } from './$types';
 const Body = z.object({
 	force: z.boolean().default(false),
 	pageIds: z.array(z.number().int().positive()).optional(),
+	inpaintMode: z.string().optional(),
+	pageConcurrency: z.number().int().min(1).max(16).optional(),
 });
 
 function createSseStream(handle: JobHandle): Response {
@@ -88,7 +90,7 @@ export const GET: RequestHandler = async ({ params }) => {
 	return createSseStream(handle);
 };
 
-export const POST: RequestHandler = async ({ params, request }) => {
+export const POST: RequestHandler = async ({ params, request, cookies }) => {
 	const chapterId = Number(params.id);
 	if (!Number.isInteger(chapterId)) throw error(400, 'Invalid chapter id.');
 	await assertChapterExists(chapterId);
@@ -96,10 +98,16 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	const parsed = Body.safeParse(await request.json().catch(() => null));
 	const force = parsed.success ? parsed.data.force : false;
 	const pageIds = parsed.success ? parsed.data.pageIds : undefined;
+	const inpaintMode = parsed.success && parsed.data.inpaintMode ? parsed.data.inpaintMode : cookies.get('mt_inpaint_mode') ?? 'patch';
+	const pageConcurrency = parsed.success && typeof parsed.data.pageConcurrency === 'number'
+		? Math.max(1, Math.min(16, parsed.data.pageConcurrency))
+		: Math.max(1, Math.min(16, Number(cookies.get('mt_parallel_processes') ?? '3') || 3));
 
 	// RECORD AI SPEND ON THE LEDGER (THE JOB STAYS DETACHED — FAILURES LOG, NOT THROW)
 	const deps = {
 		pipeline: createPipelineClient(),
+		inpaintMode,
+		pageConcurrency,
 		dataRoot: DATA_ROOT,
 		// THE CACHE MUST NEVER MIX PROVIDERS: MOCK ↔ REAL SWITCHES PRODUCE A FRESH KEY
 		cacheSalt: env.DEEPSEEK_BASE_URL ?? '',

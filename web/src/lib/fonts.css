@@ -1,6 +1,17 @@
-/* SELF-HOSTED UI FONTS — SUBSET DIET, WOFF2-ONLY (ADAPTED FROM xianslate; ONLY THE FAMILIES THIS APP
-   ACTUALLY RENDERS: INTER FOR UI TEXT, LORA FOR READING/LONG-FORM). CJK FALLS BACK TO SYSTEM FONTS.
-   FAMILY NAMES MUST MATCH src/lib/fonts.ts STACKS AND src/lib/components/ui/* USAGE. */
+@import '@fontsource/poppins/400.css';
+@import '@fontsource/poppins/600.css';
+@import '@fontsource/poppins/700.css';
+@import '@fontsource/nunito-sans/400.css';
+@import '@fontsource/nunito-sans/600.css';
+@import '@fontsource/nunito-sans/700.css';
+@import '@fontsource/montserrat/400.css';
+@import '@fontsource/montserrat/600.css';
+@import '@fontsource/montserrat/700.css';
+@import '@fontsource/lexend/400.css';
+@import '@fontsource/lexend/600.css';
+@import '@fontsource/lexend/700.css';
+
+/* SELF-HOSTED UI FONTS — SUBSET DIET, WOFF2-ONLY */
 @font-face {
 	font-family: 'Inter';
 	font-style: normal;
@@ -45,3 +56,52 @@
 	font-weight: 600;
 	src: url('@fontsource/lora/files/lora-latin-600-normal.woff2') format('woff2');
 }
+
+@font-face {
+	font-family: 'CC Wild Words';
+	font-style: normal;
+	font-display: swap;
+	font-weight: 100 900;
+	src: url('/fonts/CCWildWords-Roman.ttf') format('truetype');
+}
+
+@font-face {
+	font-family: 'CC Wild Words';
+	font-style: italic;
+	font-display: swap;
+	font-weight: 100 900;
+	src: url('/fonts/CCWildWords-Roman.ttf') format('truetype');
+}
+
+@font-face {
+	font-family: 'WildWorld';
+	font-style: normal;
+	font-display: swap;
+	font-weight: 100 900;
+	src: url('/fonts/CCWildWords-Roman.ttf') format('truetype');
+}
+
+@font-face {
+	font-family: 'WildWorld';
+	font-style: italic;
+	font-display: swap;
+	font-weight: 100 900;
+	src: url('/fonts/CCWildWords-Roman.ttf') format('truetype');
+}
+
+@font-face {
+	font-family: 'Friendly Sans';
+	font-style: normal;
+	font-display: swap;
+	font-weight: 400 700;
+	src: url('/fonts/FriendlySans-Regular.ttf') format('truetype');
+}
+
+@font-face {
+	font-family: 'Friendly Sans';
+	font-style: italic;
+	font-display: swap;
+	font-weight: 400 700;
+	src: url('/fonts/FriendlySans-Italic.ttf') format('truetype');
+}
+

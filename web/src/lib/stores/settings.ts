@@ -8,13 +8,26 @@ import { DEFAULT_SOURCE_LANG, DEFAULT_TARGET_LANG } from '$lib/languages';
 // -- TYPES -- //
 
 export type Theme = 'light' | 'sepia' | 'dark';
+export type AppFont = 'comic' | 'poppins' | 'proxima' | 'nunito' | 'montserrat' | 'lexend';
+export type InpaintMode = 'patch' | 'scaled' | 'full';
+export type ExecutionDevice = 'auto' | 'cuda' | 'dml' | 'cpu';
 
 export interface AppSettings {
 	version: number;
 	theme: Theme;
+	// APP INTERFACE TYPOGRAPHY FONT
+	appFont: AppFont;
 	// THE GLOBAL DEEPSEEK MODEL THE TRANSLATE PIPELINE USES (flash = fast/cheap, pro = best). SENT WITH
 	// EVERY TRANSLATE REQUEST; THE SERVER VALIDATES IT AGAINST ITS ALLOWLIST (src/lib/server/deepseek).
 	model: string;
+	// INPAINTING STRATEGY (patch = fast & native sharp, scaled = 512x512 balanced, full = dynamic canvas)
+	inpaintMode: InpaintMode;
+	// HARDWARE EXECUTION ACCELERATOR FOR ML MODELS
+	executionDevice: ExecutionDevice;
+	// PARALLEL PROCESSES (WORKERS) FOR BATCH AND CHAPTER TRANSLATION
+	parallelProcesses: number; // Parallel page workers per chapter (1 to 8, default 3)
+	parallelChapters: number; // Parallel chapters in batch queue (1 to 4, default 1)
+	resliceBeforeBatch: boolean; // Auto smart-reslice chapter pages before batch translation begins (default true)
 	// DEFAULT TRANSLATION DIRECTION FOR NEWLY CREATED BOOKS (PER-BOOK OVERRIDES AT CREATION)
 	sourceLang: string;
 	targetLang: string;
@@ -31,13 +44,104 @@ export const TRANSLATION_MODELS: { id: string; label: string; blurb: string }[] 
 	{ id: 'deepseek-v4-pro', label: 'Pro', blurb: 'Higher-quality prose — slower, costs more' },
 ];
 
+export const INPAINT_MODES: { id: InpaintMode; label: string; tag: string; badgeColor: string; blurb: string }[] = [
+	{
+		id: 'patch',
+		label: 'Patch Crop',
+		tag: 'Recommended (10–14× Faster)',
+		badgeColor: 'text-emerald-700 bg-emerald-500/10 border-emerald-500/30 dark:text-emerald-300',
+		blurb: 'Inpaints localized text bubbles at full native pixel resolution. Preserves pristine line art with minimum CPU latency.',
+	},
+	{
+		id: 'scaled',
+		label: 'Balanced (512×512)',
+		tag: '8× Faster',
+		badgeColor: 'text-amber-700 bg-amber-500/10 border-amber-500/30 dark:text-amber-300',
+		blurb: 'Resizes the canvas to 512×512 before inpainting and upscales. Fast single pass, suited for low-memory devices.',
+	},
+	{
+		id: 'full',
+		label: 'Full Dynamic',
+		tag: 'High Memory',
+		badgeColor: 'text-sky-700 bg-sky-500/10 border-sky-500/30 dark:text-sky-300',
+		blurb: 'Processes the entire full-resolution canvas in one dynamic pass. Highest CPU/VRAM usage and slowest latency.',
+	},
+];
+
+export const EXECUTION_DEVICES: { id: ExecutionDevice; label: string; blurb: string }[] = [
+	{ id: 'auto', label: 'Auto Detect', blurb: 'Automatically selects fastest available accelerator' },
+	{ id: 'cuda', label: 'NVIDIA Dedicated GPU (CUDA)', blurb: 'High-performance tensor acceleration on NVIDIA GPUs' },
+	{ id: 'dml', label: 'DirectML / Integrated GPU', blurb: 'DirectX 12 acceleration on Intel, AMD, or Qualcomm GPUs' },
+	{ id: 'cpu', label: 'CPU Multi-threaded', blurb: 'Universal safe execution on multi-core CPU' },
+];
+
+export const APP_FONTS: { id: AppFont; label: string; sample: string; blurb: string; stack: string }[] = [
+	{
+		id: 'comic',
+		label: 'Wild Words',
+		sample: 'COMIC SCANLATION',
+		blurb: 'Iconic all-caps scanlation typography for authentic comic feel',
+		stack: "'CC Wild Words', 'WildWorld', 'Montserrat', sans-serif",
+	},
+	{
+		id: 'poppins',
+		label: 'Poppins',
+		sample: 'Modern Geometric Sans',
+		blurb: 'Friendly, balanced geometric sans-serif with circular letterforms',
+		stack: "'Poppins', sans-serif",
+	},
+	{
+		id: 'proxima',
+		label: 'Proxima Nova',
+		sample: 'Clean Editorial Sans',
+		blurb: 'Modern proportions blending classic geometric and humanist sans',
+		stack: "'Proxima Nova', 'Montserrat', sans-serif",
+	},
+	{
+		id: 'nunito',
+		label: 'Nunito Sans',
+		sample: 'Balanced Rounded Sans',
+		blurb: 'Highly readable modern sans-serif optimized for reading UI',
+		stack: "'Nunito Sans', sans-serif",
+	},
+	{
+		id: 'montserrat',
+		label: 'Montserrat',
+		sample: 'Urban Modern Sans',
+		blurb: 'Bold geometric typeface inspired by classic urban posters',
+		stack: "'Montserrat', sans-serif",
+	},
+	{
+		id: 'lexend',
+		label: 'Lexend',
+		sample: 'Fluent Reading Sans',
+		blurb: 'Engineered specifically to reduce visual stress and improve readability',
+		stack: "'Lexend', sans-serif",
+	},
+];
+
+export const FONT_STACKS: Record<AppFont, string> = {
+	comic: "'CC Wild Words', 'WildWorld', 'Montserrat', sans-serif",
+	poppins: "'Poppins', sans-serif",
+	proxima: "'Proxima Nova', 'Montserrat', sans-serif",
+	nunito: "'Nunito Sans', sans-serif",
+	montserrat: "'Montserrat', sans-serif",
+	lexend: "'Lexend', sans-serif",
+};
+
 // -- CONSTANTS -- //
 
 // BUMP version WHEN DEFAULTS CHANGE — TRIGGERS A ONE-TIME MIGRATION OF SAVED SETTINGS
 export const DEFAULTS: AppSettings = {
-	version: 5,
+	version: 8,
 	theme: 'sepia',
+	appFont: 'comic',
 	model: 'deepseek-v4-flash',
+	inpaintMode: 'patch',
+	executionDevice: 'auto',
+	parallelProcesses: 3,
+	parallelChapters: 1,
+	resliceBeforeBatch: true,
 	sourceLang: DEFAULT_SOURCE_LANG,
 	targetLang: DEFAULT_TARGET_LANG,
 	readerViewMode: 'reader',
@@ -49,11 +153,17 @@ const KEY = 'xianscan:settings';
 
 // COOKIE CONSTANTS FOR SSR PRE-RENDERING (NO FLICKER)
 export const THEME_COOKIE = 'mt_theme';
+export const FONT_COOKIE = 'mt_font';
 export const LIB_LAYOUT_COOKIE = 'mt_lib_layout';
 export const CH_LAYOUT_COOKIE = 'mt_ch_layout';
 export const READER_VIEW_COOKIE = 'mt_reader_view';
 export const WEBTOON_KIND_COOKIE = 'mt_webtoon_kind';
 export const WEBTOON_WIDTH_COOKIE = 'mt_webtoon_width';
+export const INPAINT_MODE_COOKIE = 'mt_inpaint_mode';
+export const EXEC_DEVICE_COOKIE = 'mt_exec_device';
+export const PARALLEL_PROCESSES_COOKIE = 'mt_parallel_processes';
+export const PARALLEL_CHAPTERS_COOKIE = 'mt_parallel_chapters';
+export const RESLICE_BEFORE_BATCH_COOKIE = 'mt_reslice_batch';
 
 export function setCookie(name: string, value: string): void {
 	if (typeof document === 'undefined') return;
@@ -146,6 +256,18 @@ export function applyThemeClass(theme: Theme): void {
 	document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_BG[theme]);
 }
 
+// APPLY THE APP-WIDE INTERFACE FONT FAMILY
+export function applyFontFamily(font: AppFont): void {
+	if (!browser) return;
+	const stack = FONT_STACKS[font] || FONT_STACKS.comic;
+	document.documentElement.style.setProperty('--app-font-family', stack);
+	document.documentElement.style.fontFamily = stack;
+	if (document.body) {
+		document.body.style.setProperty('--app-font-family', stack);
+		document.body.style.fontFamily = stack;
+	}
+}
+
 export function resetSettings() {
 	settings.set({ ...DEFAULTS });
 }
@@ -161,6 +283,12 @@ function mergeKnown(parsed: unknown): AppSettings {
 		}
 	}
 	if (!['light', 'sepia', 'dark'].includes(out.theme)) out.theme = 'sepia';
+	if (!['comic', 'poppins', 'proxima', 'nunito', 'montserrat', 'lexend'].includes(out.appFont)) out.appFont = 'comic';
+	if (!['patch', 'scaled', 'full'].includes(out.inpaintMode)) out.inpaintMode = 'patch';
+	if (!['auto', 'cuda', 'dml', 'cpu'].includes(out.executionDevice)) out.executionDevice = 'auto';
+	out.parallelProcesses = Math.max(1, Math.min(8, Number(out.parallelProcesses) || 3));
+	out.parallelChapters = Math.max(1, Math.min(4, Number(out.parallelChapters) || 1));
+	out.resliceBeforeBatch = typeof (parsed as any)?.resliceBeforeBatch === 'boolean' ? (parsed as any).resliceBeforeBatch : true;
 	if (!['reader', 'grid', 'compare'].includes(out.readerViewMode)) out.readerViewMode = 'reader';
 	if (!['output', 'original'].includes(out.webtoonKind)) out.webtoonKind = 'output';
 	if (!['sm', 'md', 'lg'].includes(out.webtoonWidth)) out.webtoonWidth = 'md';
@@ -188,25 +316,43 @@ function load(): AppSettings {
 }
 
 function createSettings() {
-	const store = writable<AppSettings>(load());
+	const initial = load();
+	const store = writable<AppSettings>(initial);
 	if (browser) {
 		let prevTheme: Theme | null = null;
+		let prevFont: AppFont | null = null;
+
+		// INITIAL APPLICATION
+		applyThemeClass(initial.theme);
+		applyFontFamily(initial.appFont);
+		prevTheme = initial.theme;
+		prevFont = initial.appFont;
+
 		store.subscribe((s) => {
 			try {
 				localStorage.setItem(KEY, JSON.stringify(s));
 				// MIRROR THE THEME & READER PREFERENCES TO COOKIES SO SSR CAN PRE-RENDER THEM
 				setCookie(THEME_COOKIE, s.theme);
+				setCookie(FONT_COOKIE, s.appFont);
+				setCookie(INPAINT_MODE_COOKIE, s.inpaintMode);
+				setCookie(EXEC_DEVICE_COOKIE, s.executionDevice);
+				setCookie(PARALLEL_PROCESSES_COOKIE, String(s.parallelProcesses));
+				setCookie(PARALLEL_CHAPTERS_COOKIE, String(s.parallelChapters));
+				setCookie(RESLICE_BEFORE_BATCH_COOKIE, String(s.resliceBeforeBatch));
 				setCookie(READER_VIEW_COOKIE, s.readerViewMode);
 				setCookie(WEBTOON_KIND_COOKIE, s.webtoonKind);
 				setCookie(WEBTOON_WIDTH_COOKIE, s.webtoonWidth);
 			} catch {
 				// IGNORE STORAGE ERRORS (PRIVATE MODE / QUOTA)
 			}
-			// ONLY TOUCH THE DOCUMENT ROOT WHEN THE THEME ACTUALLY CHANGED — OTHER EDITS (THE COMMON CASE)
-			// SHOULDN'T REWRITE classList/colorScheme/backgroundColor ON EVERY KEYSTROKE.
+			// ONLY TOUCH THE DOCUMENT ROOT WHEN THE THEME OR FONT ACTUALLY CHANGED
 			if (s.theme !== prevTheme) {
 				prevTheme = s.theme;
 				applyThemeClass(s.theme);
+			}
+			if (s.appFont !== prevFont) {
+				prevFont = s.appFont;
+				applyFontFamily(s.appFont);
 			}
 		});
 	}

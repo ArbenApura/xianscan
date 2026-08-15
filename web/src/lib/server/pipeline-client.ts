@@ -33,11 +33,23 @@ export interface CleanRegionInput {
 	polygon: number[][];
 }
 
+export interface HardwareStatus {
+	device_label: string;
+	active_provider: string;
+	providers: string[];
+	available_providers: string[];
+	has_cuda: boolean;
+	has_directml: boolean;
+	has_coreml: boolean;
+}
+
 export interface PipelineClient {
 	preprocess(image: Buffer, signal?: AbortSignal): Promise<Buffer>;
 	analyze(image: Buffer, signal?: AbortSignal): Promise<AnalyzeResult>;
-	clean(image: Buffer, regions: CleanRegionInput[], signal?: AbortSignal): Promise<Buffer>;
+	clean(image: Buffer, regions: CleanRegionInput[], inpaintMode?: string, signal?: AbortSignal): Promise<Buffer>;
 	health(): Promise<{ status: string; detector: string; inpainter: string }>;
+	getHardware?(signal?: AbortSignal): Promise<HardwareStatus>;
+	setDevice?(device: string, signal?: AbortSignal): Promise<HardwareStatus>;
 	stitch?(imageTop: Buffer, imageBottom: Buffer, signal?: AbortSignal): Promise<Buffer>;
 	reslice?(images: Buffer[], signal?: AbortSignal): Promise<Buffer[]>;
 }
@@ -92,13 +104,34 @@ export class HttpPipelineClient implements PipelineClient {
 		return (await resp.json()) as AnalyzeResult;
 	}
 
-	async clean(image: Buffer, regions: CleanRegionInput[], signal?: AbortSignal): Promise<Buffer> {
+	async clean(image: Buffer, regions: CleanRegionInput[], inpaintMode: string = 'patch', signal?: AbortSignal): Promise<Buffer> {
 		const form = new FormData();
 		form.append('image', new Blob([new Uint8Array(image)]), 'page.png');
 		form.append('regions', JSON.stringify(regions));
+		form.append('inpaint_mode', inpaintMode);
 		const resp = await this.request('/pages/clean', { method: 'POST', body: form }, signal);
 		if (!resp.ok) throw new PipelineError(`clean failed (${resp.status}): ${await resp.text()}`, resp.status);
 		return Buffer.from(await resp.arrayBuffer());
+	}
+
+	async getHardware(signal?: AbortSignal): Promise<HardwareStatus> {
+		const resp = await this.request('/system/hardware', { method: 'GET' }, signal);
+		if (!resp.ok) throw new PipelineError(`getHardware failed (${resp.status})`, resp.status);
+		return (await resp.json()) as HardwareStatus;
+	}
+
+	async setDevice(device: string, signal?: AbortSignal): Promise<HardwareStatus> {
+		const resp = await this.request(
+			'/system/device',
+			{
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ device }),
+			},
+			signal,
+		);
+		if (!resp.ok) throw new PipelineError(`setDevice failed (${resp.status})`, resp.status);
+		return (await resp.json()) as HardwareStatus;
 	}
 
 	async stitch(imageTop: Buffer, imageBottom: Buffer, signal?: AbortSignal): Promise<Buffer> {

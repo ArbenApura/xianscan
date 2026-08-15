@@ -5,7 +5,7 @@
 	import { Toaster } from 'svelte-sonner';
 	// IMPORTED MODULES
 	import '../app.css';
-	import { settings, THEME_CLASS, applyThemeClass } from '$lib/stores/settings';
+	import { settings, THEME_CLASS, applyThemeClass, applyFontFamily } from '$lib/stores/settings';
 	import type { LayoutData } from './$types';
 
 	export let data: LayoutData;
@@ -15,14 +15,23 @@
 		settings.update((s) => ({
 			...s,
 			theme: data.preferences.theme ?? s.theme,
+			appFont: data.preferences.appFont ?? s.appFont,
 			readerViewMode: data.preferences.readerViewMode ?? s.readerViewMode,
 			webtoonKind: data.preferences.webtoonKind ?? s.webtoonKind,
 			webtoonWidth: data.preferences.webtoonWidth ?? s.webtoonWidth,
+			inpaintMode: data.preferences.inpaintMode ?? s.inpaintMode,
+			executionDevice: data.preferences.executionDevice ?? s.executionDevice,
+			parallelProcesses: data.preferences.parallelProcesses ?? s.parallelProcesses,
+			parallelChapters: data.preferences.parallelChapters ?? s.parallelChapters,
+			resliceBeforeBatch: data.preferences.resliceBeforeBatch ?? s.resliceBeforeBatch,
 		}));
 	}
 
-	// KEEP THE DOCUMENT ROOT (dark CLASS, color-scheme, BG) IN SYNC WITH THE ACTIVE THEME
-	$: if (browser) applyThemeClass($settings.theme);
+	// KEEP THE DOCUMENT ROOT (dark CLASS, color-scheme, BG, FONT) IN SYNC WITH ACTIVE PREFERENCES
+	$: if (browser) {
+		applyThemeClass($settings.theme);
+		applyFontFamily($settings.appFont);
+	}
 </script>
 
 <!-- APP ROOT — THEME SURFACE COLOURS APPLIED ONCE HERE; PAGES/PANELS INHERIT THEM -->

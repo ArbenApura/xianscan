@@ -11,6 +11,7 @@ export interface FontOption {
 // -- CONSTANTS -- //
 
 export const LATIN_FONTS: FontOption[] = [
+	{ key: 'wildwords', label: 'Wild Words', stack: "'CC Wild Words', 'WildWorld', sans-serif" },
 	{ key: 'lora', label: 'Lora', stack: "'Lora', Georgia, serif" },
 	{ key: 'inter', label: 'Inter (sans)', stack: "'Inter', system-ui, sans-serif" },
 ];

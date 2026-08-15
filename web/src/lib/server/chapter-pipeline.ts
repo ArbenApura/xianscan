@@ -42,6 +42,7 @@ export interface ChapterPipelineDeps {
 	/** INJECTABLE LLM — TESTS PASS A FAKE; PRODUCTION USES THE DEEPSEEK SINGLETON. */
 	llm?: OpenAI;
 	model?: string;
+	inpaintMode?: string;
 	/**
 	 * OPACQUE PROVIDER DISCRIMINATOR FOR THE TRANSLATION CACHE — THE API LAYER SETS IT FROM
 	 * DEEPSEEK_BASE_URL SO SWITCHING PROVIDERS (e.g. MOCK ↔ REAL) NEVER SERVES STALE CACHED TEXT.
@@ -289,7 +290,7 @@ export async function runChapterPipeline(
 					emit({ type: 'page-step-start', chapterId, page: injectIdx, pageId: injectRow.id, step: 'clean' });
 					const tC0 = performance.now();
 					const cleanRegions = analyzed.regions.filter((r) => Boolean(byRegion.get(r.id)?.trim())).map((r) => ({ id: r.id, box: r.box, polygon: r.polygon }));
-					const cleaned = cleanRegions.length > 0 ? await deps.pipeline.clean(image, cleanRegions, signal) : image;
+					const cleaned = cleanRegions.length > 0 ? await deps.pipeline.clean(image, cleanRegions, deps.inpaintMode ?? 'patch', signal) : image;
 					if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
 					const cleanPath = `clean/${chapterId}/${injectRow.seq}.png`;
 					const cleanAbs = join(deps.dataRoot, cleanPath);
@@ -588,7 +589,7 @@ export async function runChapterPipeline(
 					.filter((r) => Boolean(byRegion.get(r.id)?.trim()))
 					.map((r) => ({ id: r.id, box: r.box, polygon: r.polygon }));
 				const cleaned =
-					cleanRegions.length > 0 ? await deps.pipeline.clean(image, cleanRegions, signal) : image;
+					cleanRegions.length > 0 ? await deps.pipeline.clean(image, cleanRegions, deps.inpaintMode ?? 'patch', signal) : image;
 				if (deps.isPageCancelled?.(page.id)) return;
 				const cleanPath = `clean/${chapterId}/${page.seq}.png`;
 				const cleanAbs = join(deps.dataRoot, cleanPath);

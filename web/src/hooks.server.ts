@@ -3,7 +3,7 @@ import type { Handle } from '@sveltejs/kit';
 // IMPORTED DEP-MODULES
 import { sequence } from '@sveltejs/kit/hooks';
 // IMPORTED MODULES
-import { THEME_BG, THEME_COOKIE } from '$lib/stores/settings';
+import { THEME_BG, THEME_COOKIE, FONT_COOKIE, FONT_STACKS, type AppFont } from '$lib/stores/settings';
 
 // -- TYPES -- //
 
@@ -28,16 +28,22 @@ if (!globalThis.__mtProcessGuards) {
 
 // -- HANDLES -- //
 
-// PRE-RENDER THE SAVED THEME ONTO <html> FROM THE COOKIE SO THERE'S NO FLASH ON LOAD
+// PRE-RENDER THE SAVED THEME & FONT ONTO <html> FROM COOKIES SO THERE'S ZERO FLASH ON LOAD
 const themeHandle: Handle = async ({ event, resolve }) => {
 	const theme = event.cookies.get(THEME_COOKIE) ?? 'sepia';
+	const font = (event.cookies.get(FONT_COOKIE) as AppFont) ?? 'comic';
 	const isDark = DARK.includes(theme);
 	const bg = (THEME_BG as Record<string, string>)[theme] ?? THEME_BG.sepia;
+	const fontStack = FONT_STACKS[font] ?? FONT_STACKS.comic;
 	const htmlClass = isDark ? 'h-full dark' : 'h-full';
+	const fontStyle = `--app-font-family: ${fontStack};`;
 	return resolve(event, {
-		// ALSO SEED THE MOBILE BROWSER-CHROME COLOR (theme-color META) FROM THE SAME THEME SO THE ADDRESS /
-		// STATUS BAR MATCHES THE PAGE ON FIRST PAINT — THE CLIENT KEEPS IT IN SYNC ON THEME CHANGE.
-		transformPageChunk: ({ html }) => html.replace('%THEME_CLASS%', htmlClass).replace('%THEME_COLOR%', bg),
+		// SEED THE MOBILE BROWSER-CHROME COLOR AND ROOT FONT ON FIRST PAINT
+		transformPageChunk: ({ html }) =>
+			html
+				.replace('%THEME_CLASS%', htmlClass)
+				.replace('%THEME_COLOR%', bg)
+				.replace('%APP_FONT_STYLE%', fontStyle),
 	});
 };
 

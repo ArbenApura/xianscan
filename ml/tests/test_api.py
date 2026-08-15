@@ -408,10 +408,14 @@ class TestEllipsisRecovery:
 
 class TestClean:
 	def test_erases_regions_and_returns_png(self, monkeypatch, page_png):
+		recorded_modes = []
+
 		class MockInpainter:
 			backend = "lama-onnx"
 			def available(self): return True
-			def __call__(self, img, mask): return img.copy()
+			def __call__(self, img, mask, mode="patch"):
+				recorded_modes.append(mode)
+				return img.copy()
 
 		monkeypatch.setattr(pipeline, "get_inpainter", lambda: MockInpainter())
 		payload = [
@@ -421,17 +425,18 @@ class TestClean:
 		resp = client.post(
 			"/pages/clean",
 			files={"image": ("page.png", page_png, "image/png")},
-			data={"regions": json.dumps(payload)},
+			data={"regions": json.dumps(payload), "inpaint_mode": "scaled"},
 		)
 		assert resp.status_code == 200
 		assert resp.headers["content-type"] == "image/png"
 		assert resp.content[:8] == b"\x89PNG\r\n\x1a\n"
+		assert recorded_modes == ["scaled"]
 
 	def test_empty_regions_returns_unchanged_image(self, monkeypatch, page_png):
 		class MockInpainter:
 			backend = "lama-onnx"
 			def available(self): return True
-			def __call__(self, img, mask): return img.copy()
+			def __call__(self, img, mask, mode="patch"): return img.copy()
 
 		monkeypatch.setattr(pipeline, "get_inpainter", lambda: MockInpainter())
 		resp = client.post("/pages/clean", files={"image": ("page.png", page_png, "image/png")}, data={"regions": "[]"})
@@ -796,6 +801,7 @@ class TestClean:
 			(_box(498, 1276, 70, 53), "啪！", 0.99564),
 		]
 		monkeypatch.setattr(pipeline.ocr, "recognize_full", lambda img: ocr_lines)
+		monkeypatch.setattr(pipeline.ocr, "recognize_crop", lambda img: OcrResult(text="000", score=0.84732))
 
 		res = pipeline.analyze_image(np.zeros((1839, 800, 3), dtype=np.uint8))
 		# Exactly 4 valid regions (Bubble A, Bubble B, SFX 1, SFX 2) — 000 is filtered
@@ -910,6 +916,27 @@ class TestClean:
 		assert len(res.regions) == 3
 		r2 = next(r for r in res.regions if "你要不要也" in r.text)
 		assert "一下？" in r2.text or "一下?" in r2.text, f"Expected '一下？' in dialogue, got: '{r2.text}'"
+
+
+class TestHardware:
+	def test_get_hardware_endpoint(self):
+		resp = client.get("/system/hardware")
+		assert resp.status_code == 200
+		data = resp.json()
+		assert "device_label" in data
+		assert "active_provider" in data
+		assert "available_providers" in data
+
+	def test_set_device_endpoint(self):
+		try:
+			resp = client.post("/system/device", json={"device": "cpu"})
+			assert resp.status_code == 200
+			data = resp.json()
+			assert data["active_provider"] == "CPUExecutionProvider"
+		finally:
+			from app import device
+			device.set_active_provider("auto")
+
 
 
 

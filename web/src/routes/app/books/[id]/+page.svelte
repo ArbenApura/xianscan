@@ -1077,13 +1077,13 @@
 										<div class="min-w-0 flex-1">
 											<a
 												href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
-												class="font-bold text-sm sm:text-base tracking-tight hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate"
+												class="font-bold text-sm sm:text-base tracking-tight hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate px-0.5"
 												title={chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 											>
 												{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 											</a>
 											{#if chapter.titleTarget && chapter.title && chapter.titleTarget !== chapter.title}
-												<p class="text-[11px] sm:text-xs opacity-60 font-medium truncate mt-0.5" title={chapter.title}>
+												<p class="text-[11px] sm:text-xs opacity-60 font-medium truncate mt-0.5 px-0.5" title={chapter.title}>
 													{chapter.title}
 												</p>
 											{/if}
@@ -1252,13 +1252,13 @@
 									</span>
 									<a
 										href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
-										class="font-bold text-xs sm:text-sm hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block"
+										class="font-bold text-xs sm:text-sm hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block px-0.5"
 										title={chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									>
 										{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									</a>
 									{#if chapter.titleTarget && chapter.title && chapter.titleTarget !== chapter.title}
-										<span class="text-xs opacity-50 font-medium truncate hidden md:inline" title={chapter.title}>
+										<span class="text-xs opacity-50 font-medium truncate hidden md:inline px-0.5" title={chapter.title}>
 											({chapter.title})
 										</span>
 									{/if}
@@ -1354,7 +1354,7 @@
 							<div class="min-w-0 flex-1">
 								<a
 									href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
-									class="font-semibold text-xs hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block"
+									class="font-semibold text-xs hover:text-[#b23a2e] dark:hover:text-[#e08a63] truncate block px-0.5"
 									title={chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 								>
 									{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
@@ -1465,12 +1465,12 @@
 								<td class="py-2 px-3 font-semibold">
 									<a
 										href={`/app/books/${$page.params.id}/chapters/${chapter.id}/`}
-										class="hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate max-w-xs"
+										class="hover:text-[#b23a2e] dark:hover:text-[#e08a63] block truncate max-w-xs px-0.5"
 									>
 										{chapter.titleTarget || chapter.title || `Chapter ${chapter.seq + 1}`}
 									</a>
 								</td>
-								<td class="py-2 px-3 opacity-60 hidden md:table-cell truncate max-w-xs">
+								<td class="py-2 px-3 opacity-60 hidden md:table-cell truncate max-w-xs px-0.5">
 									{chapter.titleTarget && chapter.title ? chapter.title : '—'}
 								</td>
 								<td class="py-2 px-3 font-mono opacity-70">
@@ -1595,7 +1595,7 @@
 
 
 <!-- CREATE CHAPTER MODAL -->
-<Modal open={createModalOpen} title="Create New Chapter" size="sm" on:close={() => (createModalOpen = false)}>
+<Modal open={createModalOpen} title="Create New Chapter" size="md" on:close={() => (createModalOpen = false)}>
 	<form class="flex flex-col gap-4" on:submit|preventDefault={createChapter}>
 		<TextField
 			bind:value={chapterTitle}
@@ -1721,7 +1721,7 @@
 </Modal>
 
 <!-- EDIT CHAPTER MODAL -->
-<Modal open={editChapterModalOpen} title="Edit Chapter Details" size="sm" on:close={() => (editChapterModalOpen = false)}>
+<Modal open={editChapterModalOpen} title="Edit Chapter Details" size="md" on:close={() => (editChapterModalOpen = false)}>
 	{#if editingChapter}
 		<form class="flex flex-col gap-4" on:submit|preventDefault={updateChapter}>
 			<TextField

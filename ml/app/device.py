@@ -40,16 +40,16 @@ def probe_hardware() -> tuple[list[str], str]:
 
 	if env_override in ("cpu", "none"):
 		providers = ["CPUExecutionProvider"]
-		label = "CPU (Forced via MT_DEVICE=cpu)"
+		label = "CPU Multi-threaded"
 	elif env_override in ("cuda", "gpu") and "CUDAExecutionProvider" in available:
 		providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-		label = "NVIDIA CUDA (Forced via MT_DEVICE=cuda)"
+		label = "NVIDIA CUDA GPU"
 	elif env_override in ("dml", "directml") and "DmlExecutionProvider" in available:
 		providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
-		label = "DirectML / DirectX 12 (Forced via MT_DEVICE=dml)"
+		label = "DirectML (DirectX 12)"
 	elif env_override in ("coreml", "apple") and "CoreMLExecutionProvider" in available:
 		providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
-		label = "Apple Silicon CoreML (Forced via MT_DEVICE=coreml)"
+		label = "Apple Silicon Metal (CoreML)"
 	else:
 		# 2. AUTO-DETECTION HIERARCHY
 		if "TensorrtExecutionProvider" in available:
@@ -60,16 +60,16 @@ def probe_hardware() -> tuple[list[str], str]:
 			label = "NVIDIA CUDA GPU"
 		elif "DmlExecutionProvider" in available:
 			providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
-			label = "DirectML (DirectX 12 / AMD & Intel & NVIDIA)"
+			label = "DirectML (DirectX 12)"
 		elif "ROCMExecutionProvider" in available:
 			providers = ["ROCMExecutionProvider", "CPUExecutionProvider"]
 			label = "AMD ROCm GPU"
 		elif "CoreMLExecutionProvider" in available:
 			providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
-			label = "Apple Silicon CoreML / Metal"
+			label = "Apple Silicon Metal (CoreML)"
 		else:
 			providers = ["CPUExecutionProvider"]
-			label = "CPU (Standard)"
+			label = "CPU Multi-threaded"
 
 	_RESOLVED_PROVIDERS = providers
 	_DEVICE_LABEL = label
@@ -117,6 +117,48 @@ def create_inference_session(model_path: str | os.PathLike, session_options: Any
 		raise
 
 
+def set_active_provider(mode: str) -> tuple[list[str], str]:
+	"""DYNAMICALLY SWITCHES THE ACTIVE HARDWARE PROVIDER AND RELOADS RUNNING SESSIONS."""
+	global _RESOLVED_PROVIDERS, _DEVICE_LABEL
+	clean_mode = mode.lower().strip()
+	os.environ["MT_DEVICE"] = clean_mode
+	_RESOLVED_PROVIDERS = None
+	_DEVICE_LABEL = None
+
+	providers, label = probe_hardware()
+
+	# HOT-RELOAD RUNNING SESSIONS ACROSS ALL PIPELINE STAGES
+	try:
+		from . import pipeline, ocr, inpaint
+
+		if pipeline.detector is not None:
+			pipeline.detector._session = None
+		ocr._engine = None
+		inpaint._lama_model = None
+		inpaint._lama_ready.clear()
+	except Exception as e:
+		logger.warning("Could not reset model sessions on device switch: %s", e)
+
+	return providers, label
+
+
+def get_hardware_status() -> dict[str, Any]:
+	"""RETURNS STRUCTURED HARDWARE & PROVIDER DIAGNOSTICS."""
+	providers, label = probe_hardware()
+	import onnxruntime as ort
+
+	available = ort.get_available_providers()
+	return {
+		"device_label": label,
+		"active_provider": providers[0] if providers else "CPUExecutionProvider",
+		"providers": providers,
+		"available_providers": available,
+		"has_cuda": "CUDAExecutionProvider" in available or "TensorrtExecutionProvider" in available,
+		"has_directml": "DmlExecutionProvider" in available,
+		"has_coreml": "CoreMLExecutionProvider" in available,
+	}
+
+
 def get_rapidocr_params() -> dict[str, Any]:
 	"""BUILDS HARDWARE-SPECIFIC CONFIGURATION PARAMETERS FOR RAPIDOCR ENGINE."""
 	providers = get_ort_providers()
@@ -127,3 +169,4 @@ def get_rapidocr_params() -> dict[str, Any]:
 	if "CoreMLExecutionProvider" in providers:
 		return {"Det.engine_cfg.use_coreml": True, "Rec.engine_cfg.use_coreml": True, "Cls.engine_cfg.use_coreml": True}
 	return {}
+

@@ -796,7 +796,7 @@
 />
 
 <!-- EDIT CHAPTER MODAL -->
-<Modal open={editChapterModalOpen} title="Edit Chapter Details" size="sm" on:close={() => (editChapterModalOpen = false)}>
+<Modal open={editChapterModalOpen} title="Edit Chapter Details" size="md" on:close={() => (editChapterModalOpen = false)}>
 	{#if chapter}
 		<form class="flex flex-col gap-4" on:submit|preventDefault={updateChapter}>
 			<TextField

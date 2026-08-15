@@ -1,5 +1,6 @@
 <script lang="ts">
 	// IMPORTED DEP-COMPONENTS
+	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/stores';
 	import { toast } from 'svelte-sonner';
 	// IMPORTED MODULES
@@ -8,10 +9,10 @@
 		settings,
 		THEME_CLASS,
 		THEME_BAR,
-		TRANSLATION_MODELS,
 		type Theme,
 	} from '$lib/stores/settings';
 	import { activeTranslatingChapters } from '$lib/stores/job-tracker';
+	import { mlStatus, type MLStatusState } from '$lib/stores/ml-status';
 	// IMPORTED ICONS
 	import BookOpen from 'lucide-svelte/icons/book-open';
 	import Languages from 'lucide-svelte/icons/languages';
@@ -19,14 +20,10 @@
 	import Sun from 'lucide-svelte/icons/sun';
 	import Moon from 'lucide-svelte/icons/moon';
 	import Coffee from 'lucide-svelte/icons/coffee';
-	import Check from 'lucide-svelte/icons/check';
 	import Cpu from 'lucide-svelte/icons/cpu';
-	import Sparkles from 'lucide-svelte/icons/sparkles';
 
 	// IMPORTED UI COMPONENTS
-	import Modal from '$lib/components/ui/Modal.svelte';
-	import Button from '$lib/components/ui/Button.svelte';
-	import LanguagePicker from '$lib/components/ui/LanguagePicker.svelte';
+	import SettingsModal from '$lib/components/SettingsModal.svelte';
 	import BatchProgressWidget from '$lib/components/BatchProgressWidget.svelte';
 	import { batchProgress } from '$lib/stores/batch-tracker';
 
@@ -34,6 +31,24 @@
 	let settingsOpen = false;
 	let lastScrollY = 0;
 	let topbarHidden = false;
+
+	onMount(() => {
+		mlStatus.startPolling();
+	});
+
+	onDestroy(() => {
+		mlStatus.stopPolling();
+	});
+
+	function formatSidecarLabel(state: MLStatusState): string {
+		if (state.loading) return 'Checking...';
+		if (!state.online) return 'ML Offline';
+		if (state.activeProvider.includes('CUDA')) return 'ML • CUDA';
+		if (state.activeProvider.includes('Dml') || state.activeProvider.includes('DirectML')) return 'ML • DML';
+		if (state.activeProvider.includes('CoreML')) return 'ML • CoreML';
+		if (state.activeProvider.includes('CPU')) return 'ML • CPU';
+		return 'ML Online';
+	}
 
 	function handleScroll() {
 		if (typeof window === 'undefined') return;
@@ -76,19 +91,6 @@
 		setTheme(THEME_ORDER[nextIndex]);
 	}
 
-	function setModel(m: string) {
-		settings.update((s) => ({ ...s, model: m }));
-		toast.success(`Model set to ${m === 'deepseek-v4-pro' ? 'DeepSeek Pro' : 'DeepSeek Flash'}`);
-	}
-
-	function updateSourceLang(lang: string) {
-		settings.update((s) => ({ ...s, sourceLang: lang }));
-	}
-
-	function updateTargetLang(lang: string) {
-		settings.update((s) => ({ ...s, targetLang: lang }));
-	}
-
 	$: activePath = $page.url.pathname as string;
 	$: isGlossaryActive = activePath.startsWith('/app/glossary');
 	$: isLibraryActive = !isGlossaryActive && (activePath === '/app/' || activePath === '/app' || activePath.startsWith('/app/books'));
@@ -98,55 +100,51 @@
 
 <!-- APP SHELL — THEMED SURFACE + TOP NAV -->
 <div class={THEME_CLASS[$settings.theme] + ' min-h-screen font-sans transition-colors duration-200'}>
-	<!-- SLEEK & DYNAMIC TOP BAR (HIDES ON SCROLL DOWN, REVEALS ON SCROLL UP) -->
+	<!-- TOP BAR -->
 	<header
-		class={`sticky top-0 z-40 border-b border-black/[0.07] backdrop-blur-md transition-all duration-300 ease-in-out dark:border-white/[0.07] ${THEME_BAR[$settings.theme]} ${
+		class={`sticky top-0 z-30 border-b border-black/10 transition-all duration-300 backdrop-blur-md dark:border-white/10 ${THEME_BAR[$settings.theme]} ${
 			topbarHidden ? '-translate-y-full opacity-0 pointer-events-none' : 'translate-y-0 opacity-100'
 		}`}
 	>
-		<nav class="mx-auto flex w-full max-w-6xl items-center justify-between gap-2 px-3 py-2 sm:gap-4 sm:px-6 sm:py-2.5">
-			<!-- LEFT: BRAND & MAIN NAVIGATION TABS -->
-			<div class="flex items-center gap-2 sm:gap-4 min-w-0">
-				<!-- BRAND LOGO -->
+		<nav class="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-3 sm:px-6">
+			<!-- LEFT: LOGO / HOME LINK -->
+			<div class="flex items-center gap-2 sm:gap-3 min-w-0">
 				<a
-					href="/app/"
-					class="group flex items-center gap-2 text-sm sm:text-base font-bold tracking-tight text-current transition opacity-90 hover:opacity-100 shrink-0"
+					href="/app"
+					class="flex items-center gap-2 sm:gap-2.5 font-bold tracking-tight transition-transform duration-200 hover:opacity-85 active:scale-95 shrink-0"
+					aria-label="XianScan Home"
 				>
-					<img
-						src="/favicon.svg"
-						alt="Xianscan"
-						class="h-6 w-6 sm:h-7 sm:w-7 rounded-lg shadow-xs object-contain transition-transform duration-300 group-hover:scale-105 shrink-0"
-					/>
-					<span class="font-bold tracking-tight text-sm sm:text-base">Xian<span class="text-[#b23a2e] dark:text-[#e08a63]">scan</span></span>
+					<img src="/favicon.svg" alt="XianScan Logo" class="h-6 w-6 sm:h-7 sm:w-7 shrink-0 rounded-lg shadow-2xs" />
+					<span class="text-base sm:text-lg font-comic font-bold tracking-wide text-[#b23a2e] dark:text-[#e08a63]">
+						Xian<span class="text-black dark:text-white">Scan</span>
+					</span>
 				</a>
 
-				<div class="h-4 w-px bg-black/10 dark:bg-white/10 hidden md:block"></div>
-
-				<!-- SEGMENTED NAVIGATION TABS (ACTIVE STATES) -->
-				<div class="flex items-center gap-0.5 sm:gap-1 rounded-xl border border-black/[0.06] bg-black/[0.04] p-0.5 sm:p-1 dark:border-white/[0.06] dark:bg-white/[0.04] shrink-0">
+				<!-- PRIMARY NAVIGATION TABS -->
+				<div class="flex items-center gap-1 pl-1 sm:pl-3 border-l border-black/10 dark:border-white/10">
+					<!-- LIBRARY LINK -->
 					<a
-						href="/app/"
-						class={`flex items-center gap-1.5 rounded-lg px-2 sm:px-3 py-1 sm:py-1.5 text-xs transition-all duration-200 ${
+						href="/app"
+						class={`flex items-center gap-1 sm:gap-1.5 rounded-lg px-2 sm:px-2.5 py-1 text-xs font-semibold transition-all duration-150 active:scale-95 ${
 							isLibraryActive
-								? 'bg-white font-bold text-black shadow-xs dark:bg-[#221e1a] dark:text-white'
-								: 'font-medium opacity-65 hover:opacity-100 hover:text-black dark:hover:text-white'
+								? 'bg-black/[0.06] text-[#b23a2e] dark:bg-white/[0.08] dark:text-[#e08a63] shadow-2xs'
+								: 'text-current opacity-70 hover:opacity-100 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
 						}`}
-						use:ripple
-						title="Library"
+						aria-current={isLibraryActive ? 'page' : undefined}
 					>
 						<BookOpen size={14} class={isLibraryActive ? 'text-[#b23a2e] dark:text-[#e08a63]' : ''} />
 						<span class="hidden min-[480px]:inline">Library</span>
 					</a>
 
+					<!-- GLOSSARY LINK -->
 					<a
-						href="/app/glossary/"
-						class={`flex items-center gap-1.5 rounded-lg px-2 sm:px-3 py-1 sm:py-1.5 text-xs transition-all duration-200 ${
+						href="/app/glossary"
+						class={`flex items-center gap-1 sm:gap-1.5 rounded-lg px-2 sm:px-2.5 py-1 text-xs font-semibold transition-all duration-150 active:scale-95 ${
 							isGlossaryActive
-								? 'bg-white font-bold text-black shadow-xs dark:bg-[#221e1a] dark:text-white'
-								: 'font-medium opacity-65 hover:opacity-100 hover:text-black dark:hover:text-white'
+								? 'bg-black/[0.06] text-[#b23a2e] dark:bg-white/[0.08] dark:text-[#e08a63] shadow-2xs'
+								: 'text-current opacity-70 hover:opacity-100 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
 						}`}
-						use:ripple
-						title="Glossary"
+						aria-current={isGlossaryActive ? 'page' : undefined}
 					>
 						<Languages size={14} class={isGlossaryActive ? 'text-[#b23a2e] dark:text-[#e08a63]' : ''} />
 						<span class="hidden min-[480px]:inline">Glossary</span>
@@ -180,8 +178,34 @@
 				{/if}
 			</div>
 
-			<!-- RIGHT: TACTILE THEME TOGGLE & SETTINGS BUTTONS -->
+			<!-- RIGHT: ML SIDECAR STATUS, THEME TOGGLE & SETTINGS BUTTONS -->
 			<div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+				<!-- ML SIDECAR STATUS PILL (RESPONSIVE: COMPACT ON MOBILE, EXPANDED ON TABLET/DESKTOP) -->
+				<button
+					type="button"
+					on:click={() => (settingsOpen = true)}
+					class={`flex h-8 sm:h-9 items-center gap-1.5 rounded-xl border px-2 sm:px-2.5 text-xs font-semibold shadow-2xs backdrop-blur transition-all duration-200 active:scale-95 ${
+						$mlStatus.online
+							? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:border-emerald-500/50 hover:bg-emerald-500/15 dark:text-emerald-400 dark:bg-emerald-500/10 dark:hover:bg-emerald-500/20'
+							: $mlStatus.loading
+								? 'border-black/10 bg-black/5 text-current opacity-70 dark:border-white/10 dark:bg-white/5'
+								: 'border-red-500/30 bg-red-500/10 text-red-600 hover:border-red-500/50 hover:bg-red-500/15 dark:text-red-400 dark:bg-red-500/10 dark:hover:bg-red-500/20'
+					}`}
+					title={$mlStatus.online
+						? `ML Sidecar: Online (${$mlStatus.deviceLabel}) — Click to configure hardware`
+						: $mlStatus.loading
+							? 'Connecting to ML Sidecar service...'
+							: `ML Sidecar: Offline (${$mlStatus.error || 'Unreachable'}) — Click to check settings`}
+					aria-label="ML Sidecar Status"
+					use:ripple
+				>
+					<Cpu size={14} class="opacity-85 shrink-0" />
+
+					<span class="hidden min-[540px]:inline font-mono text-[11px] font-bold tracking-tight px-0.5">
+						{formatSidecarLabel($mlStatus)}
+					</span>
+				</button>
+
 				<!-- THEME QUICK TOGGLE BUTTON (CYCLES ALL THEMES) -->
 				<button
 					type="button"
@@ -226,79 +250,4 @@
 
 
 <!-- GLOBAL SETTINGS & PREFERENCES MODAL -->
-<Modal open={settingsOpen} title="Preferences & Model Configuration" size="sm" on:close={() => (settingsOpen = false)}>
-	<div class="flex flex-col gap-5">
-		<!-- TRANSLATION ENGINE MODEL -->
-		<div>
-			<label class="mb-1.5 block text-xs font-semibold opacity-70">Translation Engine Model</label>
-			<div class="grid grid-cols-2 gap-2.5">
-				{#each TRANSLATION_MODELS as m}
-					<button
-						type="button"
-						on:click={() => setModel(m.id)}
-						class={`relative flex flex-col justify-between rounded-xl border p-3 text-left transition-all duration-200 ${
-							$settings.model === m.id
-								? 'border-[#b23a2e] bg-[#b23a2e]/10 text-[#b23a2e] dark:text-[#e08a63] ring-2 ring-[#b23a2e]/30'
-								: 'border-black/10 hover:border-black/20 hover:bg-black/[0.02] dark:border-white/10 dark:hover:border-white/20 dark:hover:bg-white/[0.02]'
-						}`}
-						use:ripple
-					>
-						<div class="flex items-center justify-between">
-							<div class="flex items-center gap-1.5 font-bold text-xs">
-								{#if m.id === 'deepseek-v4-pro'}
-									<Sparkles size={13} class="text-amber-500" />
-								{:else}
-									<Cpu size={13} class="opacity-60" />
-								{/if}
-								<span>{m.label}</span>
-							</div>
-							{#if $settings.model === m.id}
-								<Check size={14} class="text-[#b23a2e] dark:text-[#e08a63]" />
-							{/if}
-						</div>
-						<div class="mt-1.5 text-[10px] opacity-60 leading-tight">{m.blurb}</div>
-					</button>
-				{/each}
-			</div>
-		</div>
-
-		<!-- APPEARANCE THEMES -->
-		<div>
-			<label class="mb-1.5 block text-xs font-semibold opacity-70">Appearance Theme</label>
-			<div class="grid grid-cols-3 gap-2">
-				{#each THEMES as t}
-					<button
-						type="button"
-						on:click={() => setTheme(t.id)}
-						class={`flex flex-col items-center rounded-xl border p-2.5 text-center text-xs transition-all duration-200 ${
-							$settings.theme === t.id
-								? 'border-[#b23a2e] ring-2 ring-[#b23a2e]/40 bg-[#b23a2e]/5'
-								: 'border-black/10 hover:border-black/25 dark:border-white/10 dark:hover:border-white/25'
-						}`}
-						use:ripple
-					>
-						<span class={`mb-1 h-3.5 w-3.5 rounded-full border ${t.dot}`}></span>
-						<span class="text-[11px] font-medium">{t.label}</span>
-					</button>
-				{/each}
-			</div>
-		</div>
-
-		<!-- DEFAULT LANGUAGES -->
-		<div class="grid grid-cols-2 gap-3 border-t border-black/10 pt-4 dark:border-white/10">
-			<div>
-				<span class="mb-1 block text-xs font-semibold opacity-60">Default Source</span>
-				<LanguagePicker mode="source" value={$settings.sourceLang} on:change={(e) => updateSourceLang(e.detail)} />
-			</div>
-
-			<div>
-				<span class="mb-1 block text-xs font-semibold opacity-60">Default Target</span>
-				<LanguagePicker value={$settings.targetLang} on:change={(e) => updateTargetLang(e.detail)} />
-			</div>
-		</div>
-	</div>
-
-	<svelte:fragment slot="footer">
-		<Button variant="primary" on:click={() => (settingsOpen = false)}>Done</Button>
-	</svelte:fragment>
-</Modal>
+<SettingsModal bind:open={settingsOpen} />

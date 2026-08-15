@@ -22,3 +22,4 @@ scraper
 pipeline_review.md
 ml/models_staging/
 left_pa.png
+*.timestamp-*.mjs

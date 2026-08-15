@@ -30,9 +30,9 @@ MANIFEST: list[dict] = [
 	},
 	{
 		"name": "lama.onnx",
-		"url": "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
-		"sha256": "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
-		"size": 208_044_816,
+		"url": "https://huggingface.co/ogkalu/lama-manga-onnx-dynamic/resolve/main/lama-manga-dynamic.onnx",
+		"sha256": "de31ffa5ba26916b8ea35319f6c12151ff9654d4261bccf0583a69bb095315f9",
+		"size": 206_291_843,
 	},
 ]
 

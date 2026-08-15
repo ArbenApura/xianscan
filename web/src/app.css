@@ -8,10 +8,30 @@
 @layer base {
 	html {
 		-webkit-text-size-adjust: 100%;
+		font-family: var(--app-font-family, 'CC Wild Words', 'WildWorld', 'Inter', system-ui, sans-serif);
+		font-weight: 600;
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
 	}
 	body {
 		@apply bg-white text-slate-900 antialiased;
+		font-family: var(--app-font-family, 'CC Wild Words', 'WildWorld', 'Inter', system-ui, sans-serif);
+		font-weight: 600;
+		font-synthesis: weight;
 	}
+	button, input, optgroup, select, textarea {
+		font-family: inherit;
+		font-weight: inherit;
+	}
+
+	/* Elevate minimum font weight so WildWorld text remains robust and legible */
+	.font-thin,
+	.font-extralight,
+	.font-light,
+	.font-normal {
+		font-weight: 550;
+	}
+
 
 	/* THEMED SCROLLBARS — TRANSLUCENT THUMBS BLEND OVER WHATEVER THEME BACKGROUND IS ACTIVE
 	   (LIGHT/SEPIA → DARK THUMB, DARK → LIGHT THUMB), SO THEY MATCH EVERY THEME. */

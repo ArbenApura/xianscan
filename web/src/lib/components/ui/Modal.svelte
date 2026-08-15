@@ -24,7 +24,7 @@
 	export let size: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl' | '4xl' | '5xl' | 'full' = 'md';
 	export let closable = true;
 	// PADDING OF THE SCROLLABLE BODY. OVERRIDE (E.G. DROP THE TOP PAD) WHEN THE SLOT HAS ITS OWN STICKY HEADER.
-	export let bodyClass = 'p-5';
+	export let bodyClass = 'p-4 sm:p-5';
 
 	// -- CONSTANTS -- //
 
@@ -32,7 +32,8 @@
 	// UNIQUE ID PER INSTANCE SO aria-labelledby CAN TARGET THE TITLE (THE DIALOG NEEDS AN ACCESSIBLE NAME).
 	const titleId = `modal-title-${++modalTitleSeq}`;
 	const SIZES: Record<string, string> = {
-		sm: 'sm:max-w-sm',
+		xs: 'sm:max-w-sm',
+		sm: 'sm:max-w-md',
 		md: 'sm:max-w-lg',
 		lg: 'sm:max-w-2xl',
 		xl: 'sm:max-w-4xl',
@@ -63,7 +64,7 @@
 	<!-- DIALOG: BOTTOM SHEET ON MOBILE, CENTERED CARD ON DESKTOP. use:scrollLock FREEZES THE PAGE BEHIND. -->
 	<div
 		use:scrollLock
-		class="fixed inset-0 z-50 flex items-end justify-center sm:items-center"
+		class="fixed inset-0 z-50 flex items-end justify-center sm:items-center p-0 sm:p-4"
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby={title ? titleId : undefined}
@@ -88,16 +89,16 @@
 				// MOBILE: A BOTTOM-SHEET DRAWER THAT STOPS WELL SHORT OF FULL HEIGHT (A STRIP OF THE PAGE STAYS
 				// VISIBLE ABOVE IT, SO IT READS AS A DRAWER, NOT A FULL-SCREEN DIALOG). TALLER ON DESKTOP WHERE
 				// IT'S A CENTERED CARD.
-				'max-h-[80vh] sm:max-h-[90vh]',
+				'max-h-[88vh] sm:max-h-[90vh]',
 				SIZES[size],
 			)}
 		>
 			{#if title || $$slots.header}
 				<!-- MODAL HEADER -->
 				<header
-					class={cn('flex shrink-0 items-center justify-between gap-3 border-b px-5 py-3.5', panelBorder)}
+					class={cn('flex shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-5 sm:py-3.5', panelBorder)}
 				>
-					<h2 id={titleId} class="text-base font-semibold">{title}</h2>
+					<h2 id={titleId} class="text-sm sm:text-base font-semibold truncate">{title}</h2>
 					<slot name="header" />
 					{#if closable}
 						<!-- CLOSE BUTTON — TRANSLUCENT HOVER READS ON EVERY THEME PANEL -->
@@ -118,7 +119,7 @@
 			</div>
 			{#if $$slots.footer}
 				<!-- MODAL FOOTER -->
-				<footer class={cn('flex shrink-0 items-center justify-end gap-2 border-t px-5 py-3', panelBorder)}>
+				<footer class={cn('flex shrink-0 items-center justify-end gap-2 border-t px-4 py-2.5 sm:px-5 sm:py-3', panelBorder)}>
 					<slot name="footer" />
 				</footer>
 			{/if}

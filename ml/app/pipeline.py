@@ -778,7 +778,8 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			offset_y = max(0, cy - 2)
 			for c_box, c_txt, c_score in c_lines:
 				clean_t = c_txt.strip()
-				if not clean_t or (len(clean_t) < 2 and not bool(_PUNCT_ONLY.fullmatch(clean_t))) or c_score < 0.60:
+				is_circle_noise = bool(re.fullmatch(r'^[0oO·•\s]{1,6}$', clean_t)) and not bool(detect._CHINESE_RE.search(clean_t))
+				if not clean_t or is_circle_noise or (len(clean_t) < 2 and not bool(_PUNCT_ONLY.fullmatch(clean_t))) or c_score < 0.60:
 					continue
 				shifted_box = c_box.copy()
 				shifted_box[:, 0] += offset_x
@@ -799,7 +800,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 							rapid_lines[idx] = (merged_box, r_txt + clean_t, max(r_sc, c_score), r_ang)
 							merged_tail = True
 							break
-						elif x_overlap >= 0.50 * min(sw, rw) and ry - 20 <= sy <= ry + rh + max(50, int(rw * 2.0)):
+						elif detect.is_vertical_box(r_pts) and x_overlap >= 0.50 * min(sw, rw) and ry - 20 <= sy <= ry + rh + max(50, int(rw * 2.0)):
 							m_y1 = max(ry + rh, sy + sh)
 							m_x0 = min(rx, sx)
 							m_x1 = max(rx + rw, sx + sw)
@@ -1400,7 +1401,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		is_stray_non_chinese = not has_c and not is_punct and (
 			(c_count <= 2 and (r.box.h >= 120 or r.box.w >= 120 or (r.box.h >= 80 and (r.box.h / max(1, r.box.w) >= 2.5 or r.box.w / max(1, r.box.h) >= 2.5))))
 			or (c_count <= 1 and (bool(re.fullmatch(r"[a-zA-Z]", t_strip)) or r.confidence < 0.75))
-			or (c_count <= 4 and bool(re.fullmatch(r"^[0oO·•]+$", t_strip)) and r.box.w <= 70 and r.box.h <= 70)
+			or (c_count <= 6 and bool(re.fullmatch(r"^[0oO·•\s]+$", t_strip)) and r.box.w <= 80 and r.box.h <= 80)
 		)
 		if not t_strip or _IGNORED_NOISE_RE.fullmatch(t_strip) or detect.is_pure_watermark_region(t_strip) or is_stray_non_chinese:
 			continue
@@ -1419,7 +1420,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	)
 
 
-def clean_image(img_bgr: np.ndarray, regions: list[CleanRequestRegion]) -> np.ndarray:
+def clean_image(img_bgr: np.ndarray, regions: list[CleanRequestRegion], mode: str = "patch") -> np.ndarray:
     """ERASE THE ORIGINAL TEXT: FILL THE REGION POLYGONS (BOX FALLBACK) AND INPAINT."""
     page_h, page_w = img_bgr.shape[:2]
     polygons = []
@@ -1431,7 +1432,7 @@ def clean_image(img_bgr: np.ndarray, regions: list[CleanRequestRegion]) -> np.nd
     mask = build_mask(page_h, page_w, polygons)
     if not mask.any():
         return img_bgr
-    return get_inpainter()(img_bgr, mask)
+    return get_inpainter()(img_bgr, mask, mode=mode)
 
 
 def encode_png(img_bgr: np.ndarray) -> bytes:

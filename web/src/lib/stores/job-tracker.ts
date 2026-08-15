@@ -3,6 +3,7 @@ import { writable, derived, get } from 'svelte/store';
 import { browser } from '$app/environment';
 import type { ChapterJobSnapshot, JobEventType, PipelineStep, StepTiming } from '$lib/types';
 import { streamSse, type SseEvent } from '$lib/sse';
+import { settings } from '$lib/stores/settings';
 
 export type ConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'error';
 
@@ -325,7 +326,10 @@ function createJobTrackerStore() {
 				};
 			});
 		} catch (err: any) {
-			if (controller.signal.aborted) return;
+			if (controller.signal.aborted) {
+				return;
+			}
+			console.warn(`[jobTracker] SSE connection failed for chapter ${chapterId}:`, err);
 
 			// CHECK IF JOB STILL RUNNING ON SERVER BEFORE RECONNECTING
 			const latest = await fetchJobStatus(chapterId);
@@ -381,12 +385,22 @@ function createJobTrackerStore() {
 		},
 
 		// TRIGGER TRANSLATION (ALL PENDING PAGES OR TARGETED PAGE IDS)
-		async startTranslation(chapterId: number, opts: { force?: boolean; pageIds?: number[] } = {}): Promise<void> {
+		async startTranslation(
+			chapterId: number,
+			opts: { force?: boolean; pageIds?: number[]; pageConcurrency?: number } = {},
+		): Promise<void> {
 			// Clear any pending timers
 			const timer = reconnectTimers.get(chapterId);
 			if (timer) clearTimeout(timer);
 
 			const hasActiveStream = activeControllers.has(chapterId);
+			const curSettings = get(settings);
+			const reqBody = {
+				force: opts.force ?? false,
+				pageIds: opts.pageIds,
+				inpaintMode: curSettings?.inpaintMode,
+				pageConcurrency: opts.pageConcurrency ?? curSettings?.parallelProcesses,
+			};
 
 			// If a job is already running and we're NOT forcing a supersede, just POST
 			// to queue the new page(s) — keep the existing SSE stream alive so we don't
@@ -395,7 +409,7 @@ function createJobTrackerStore() {
 				const resp = await fetch(`/api/chapters/${chapterId}/translate`, {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ force: false, pageIds: opts.pageIds }),
+					body: JSON.stringify(reqBody),
 				});
 				if (!resp.ok) {
 					const text = await resp.text().catch(() => '');
@@ -406,7 +420,7 @@ function createJobTrackerStore() {
 
 			await connectStream(chapterId, {
 				method: 'POST',
-				body: { force: opts.force ?? false, pageIds: opts.pageIds },
+				body: reqBody,
 			});
 		},
 
