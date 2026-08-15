@@ -494,7 +494,11 @@ def group_paragraphs(
 			# VERTICAL CONTIGUITY: THE NEW LINE SITS AT OR BELOW THE PARAGRAPH'S BOTTOM LINE.
 			gap = y - (ly + lh)
 			is_parenthetical = bool(re.match(r"^[（\(\[【〔*]", txt.strip())) or bool(re.search(r"[）\)\]】〕]$", txt.strip()))
-			is_trailing_tail = (w <= max(60, int(lw * 0.6)) and h <= lh * 1.5) or is_parenthetical
+			is_trailing_tail = (
+				(w <= max(80, int(lw * 0.65)) and h <= lh * 1.75)
+				or (len(txt.strip()) <= 4 and h <= lh * 1.80)
+				or is_parenthetical
+			)
 			gap_multiplier = 2.8 if is_parenthetical else (1.4 if is_trailing_tail else 1.0)
 			max_allowed_gap = gap_factor * gap_multiplier * min(h, lh)
 			if gap > max_allowed_gap or y < ly - 0.35 * min(h, lh):

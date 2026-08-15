@@ -578,6 +578,67 @@ def test_page_58520_separate_bubble_periods():
     assert "听了这么多系统的事" in b3.text and "你现在有何感想" in b3.text, f"System question lines must be unified: {repr(b3.text)}"
 
 
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58617.png").exists(),
+    reason="Page 58617 sample fixture not found",
+)
+def test_page_58617_trailing_line_unification():
+    """Page 58617 regression test:
+    1. The top dialogue bubble contains 3 lines:
+       '虽说婉儿当时性格刁蛮，\\n但妹妹甚至能艳压婉儿\\n一头，'
+       The short 3rd line ('一头，') must be unified with the first two lines into 1 single paragraph.
+    2. The bottom speech bubble ('如果有人能一亲...') must remain a clean unified multi-line paragraph.
+    """
+    img_path = FIXTURES_DIR / "page_58617.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 2, f"Expected exactly 2 dialogue regions on page 58617, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    # Top speech bubble
+    top_bubble = next((r for r in resp.regions if "婉儿" in r.text), None)
+    assert top_bubble is not None, f"Top bubble must be detected. Found: {[r.text for r in resp.regions]}"
+    assert "虽说婉儿当时性格刁蛮" in top_bubble.text, f"Line 1 missing: {repr(top_bubble.text)}"
+    assert "但妹妹甚至能艳压婉儿" in top_bubble.text, f"Line 2 missing: {repr(top_bubble.text)}"
+    assert "一头" in top_bubble.text, f"Line 3 ('一头，') must be unified with top bubble: {repr(top_bubble.text)}"
+
+
+@pytest.mark.skipif(
+    not (FIXTURES_DIR / "page_58623.png").exists(),
+    reason="Page 58623 sample fixture not found",
+)
+def test_page_58623_ei_interjection_detection():
+    """Page 58623 regression test:
+    1. The small oval speech bubble at the bottom ('诶！') must be detected and preserved.
+    2. '诶！' (which OCR rec models often omit due to vocabulary gaps) must not be dropped as pure punctuation.
+    3. The upper bubbles ('樱姐姐。' and '云桃本就是无根之草...') must be cleanly detected.
+    """
+    img_path = FIXTURES_DIR / "page_58623.png"
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+
+    assert len(resp.regions) == 3, f"Expected 3 dialogue regions on page 58623, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+    # 1. '樱姐姐。'
+    r0 = next((r for r in resp.regions if "樱姐姐" in r.text), None)
+    assert r0 is not None, f"'樱姐姐。' missing. Found: {[r.text for r in resp.regions]}"
+
+    # 2. '云桃本就是无根之草...'
+    r1 = next((r for r in resp.regions if "云桃" in r.text), None)
+    assert r1 is not None, f"'云桃本就是无根之草...' missing. Found: {[r.text for r in resp.regions]}"
+
+    # 3. '诶！'
+    r2 = next((r for r in resp.regions if "诶" in r.text or "！" in r.text and r.box.y > 1500), None)
+    assert r2 is not None, f"'诶！' bubble at bottom must be detected. Found: {[r.text for r in resp.regions]}"
+    assert "诶" in r2.text, f"'诶！' must contain '诶', got: {repr(r2.text)}"
+
+
+
+
 
 
 

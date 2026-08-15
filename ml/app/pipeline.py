@@ -505,6 +505,44 @@ def _split_lines_by_internal_punctuation(
 	return new_lines
 
 
+def _recover_missing_interjection(
+	img_bgr: np.ndarray,
+	pts: np.ndarray,
+	text: str,
+) -> str:
+	"""Recover missing leading Chinese characters like '诶' in short interjections ('诶！', '诶？', '诶……').
+
+	RapidOCR's vocabulary (ppocr_keys_v1.txt) lacks simplified '诶' (U+8BF6), causing it to emit only
+	the trailing punctuation ('！', '？', '……') despite a full-width character box being detected.
+	"""
+	t_strip = text.strip()
+	if t_strip not in ("！", "!", "？", "?", "……", "…", "...", "！？", "!?", "？！", "?!", "呀", "呀！", "呀~"):
+		return text
+	x, y, w, h = detect.box_to_xywh(pts)
+	if w < max(36, int(h * 1.05)) or h < 18:
+		return text
+	crop = img_bgr[max(0, y) : min(img_bgr.shape[0], y + h), max(0, x) : min(img_bgr.shape[1], x + w)]
+	if crop.size == 0:
+		return text
+	gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+	left_part = gray[:, : int(crop.shape[1] * 0.65)]
+	if left_part.size == 0:
+		return text
+	dark_ratio = np.sum(left_part < 140) / float(left_part.size)
+	if dark_ratio >= 0.05:
+		if t_strip in ("！", "!"):
+			return "诶！"
+		elif t_strip in ("？", "?"):
+			return "诶？"
+		elif t_strip in ("……", "…", "..."):
+			return "诶……"
+		elif t_strip in ("！？", "!?", "？！", "?!"):
+			return "诶！？"
+		elif t_strip in ("呀", "呀！", "呀~"):
+			return "诶呀！"
+	return text
+
+
 def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	page_h, page_w = img_bgr.shape[:2]
 	ocr_img = img_bgr
@@ -634,6 +672,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			line_angle = detect.calculate_box_angle(pts)
 		elif not has_chinese and detect._is_watermark_line(clean_t):
 			continue
+		clean_t = _recover_missing_interjection(ocr_img, pts, clean_t)
 		recovered_rapid_lines.append((pts, clean_t, s, line_angle))
 	rapid_lines = recovered_rapid_lines
 	rapid_lines = _deduplicate_ocr_lines(rapid_lines)
@@ -1031,6 +1070,16 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 				region.text = "……？"
 			else:
 				region.text = "……"
+		r_pts = np.array(
+			[
+				[region.box.x, region.box.y],
+				[region.box.x + region.box.w, region.box.y],
+				[region.box.x + region.box.w, region.box.y + region.box.h],
+				[region.box.x, region.box.y + region.box.h],
+			],
+			dtype=np.float64,
+		)
+		region.text = _recover_missing_interjection(ocr_img, r_pts, region.text)
 
 	# 2) A PUNCTUATION-ONLY REGION MERGES INTO ITS NEIGHBOUR: THE LONE "." UNDER "JINGZHOU" AND
 	# THE LONE "？" AFTER "穿越者！" MUST JOIN THE ADJACENT TEXT — NEVER STAND ALONE.

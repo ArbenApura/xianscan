@@ -27,6 +27,8 @@ This directory stores permanent, version-controlled image samples used by `pytes
 | [`page_58536.png`](page_58536.png) | 900 × 1162 | Chapter 37 / Page 58536 | **Watermark-Collided Button Text Recovery**: Ensures button text (*"生活人才"*) colliding with watermark stamps (*"ACloudMerge.com"*) is cleanly extracted and colon-terminated prompt labels (*"点将："*) are isolated. |
 | [`page_58539.png`](page_58539.png) | 900 × 1484 | Chapter 37 / Page 58539 | **Stray Artwork Contour Suppression**: Ensures 1-character stray artwork outlines (*"V"*) on full-art pages are bypassed with 0 false regions. |
 | [`page_58544.png`](page_58544.png) | 900 × 1748 | Chapter 37 / Page 58544 | **System Card Multi-Line Unification & Card Box Isolation**: Ensures multi-line cards (*"嘟！获得顶级伐木工..."*) unify repeated lines while distinct card boxes (*"嘟！获得顶级女巫。"* and *"(附赠顶级宠物。)"*) remain isolated. |
+| [`page_58617.png`](page_58617.png) | 900 × 1363 | Chapter 39 / Page 58617 | **Short Trailing Dialogue Line Unification**: Ensures short trailing lines (*"一头，"*) are unified into their parent dialogue paragraph (*"虽说婉儿当时性格刁蛮，\n但妹妹甚至能艳压婉儿\n一头，"*) without being orphaned. |
+| [`page_58623.png`](page_58623.png) | 900 × 2112 | Chapter 39 / Page 58623 | **Missing Vocabulary Interjection Recovery**: Ensures character interjection bubbles (*"诶！"*) are recovered and preserved when OCR recognizers drop the character due to vocabulary gaps. |
 
 ---
 
