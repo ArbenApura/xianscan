@@ -634,7 +634,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		color_wm = watermark_remover.create_bubble_watermark_mask(ocr_img)
 		if np.count_nonzero(color_wm) > 500:
 			clean_wm_img = cv2.inpaint(ocr_img, color_wm, 3, cv2.INPAINT_TELEA)
-			clean_lines = ocr.recognize_full(clean_wm_img)
+			clean_lines = ocr.recognize_full(clean_wm_img, tiled=False)
 			for cpts, ct, cs in clean_lines:
 				clean_text = ct.strip()
 				if detect._CHINESE_RE.search(clean_text) and not detect._is_watermark_line(clean_text):
@@ -673,7 +673,10 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	for pts, t, s in rapid_lines:
 		line_angle = detect.calculate_box_angle(pts)
 		clean_t = t.strip()
-		if re.fullmatch(r'^[A-Za-z]{1,4}[.．…!！?？]{1,}$', clean_t):
+		_lx, _ly, lw, lh = detect.box_to_xywh(pts)
+		if clean_t in ("一", "1", "丨", "I", "l", "|") and lh >= 1.4 * lw:
+			clean_t = "！"
+		elif re.fullmatch(r'^[A-Za-z]{1,4}[.．…!！?？]{1,}$', clean_t):
 			has_bang = "!" in clean_t or "！" in clean_t
 			has_q = "?" in clean_t or "？" in clean_t
 			if has_bang and has_q:
@@ -787,11 +790,20 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					for idx, (r_pts, r_txt, r_sc, r_ang) in enumerate(rapid_lines):
 						rx, ry, rw, rh = detect.box_to_xywh(r_pts)
 						y_overlap = min(sy + sh, ry + rh) - max(sy, ry)
+						x_overlap = min(sx + sw, rx + rw) - max(sx, rx)
 						if y_overlap >= 0.50 * min(sh, rh) and rx - 20 <= sx <= rx + rw + max(50, int(rh * 2.0)):
 							m_x1 = max(rx + rw, sx + sw)
 							m_y0 = min(ry, sy)
 							m_y1 = max(ry + rh, sy + sh)
 							merged_box = np.array([[rx, m_y0], [m_x1, m_y0], [m_x1, m_y1], [rx, m_y1]], dtype=np.float64)
+							rapid_lines[idx] = (merged_box, r_txt + clean_t, max(r_sc, c_score), r_ang)
+							merged_tail = True
+							break
+						elif x_overlap >= 0.50 * min(sw, rw) and ry - 20 <= sy <= ry + rh + max(50, int(rw * 2.0)):
+							m_y1 = max(ry + rh, sy + sh)
+							m_x0 = min(rx, sx)
+							m_x1 = max(rx + rw, sx + sw)
+							merged_box = np.array([[m_x0, ry], [m_x1, ry], [m_x1, m_y1], [m_x0, m_y1]], dtype=np.float64)
 							rapid_lines[idx] = (merged_box, r_txt + clean_t, max(r_sc, c_score), r_ang)
 							merged_tail = True
 							break

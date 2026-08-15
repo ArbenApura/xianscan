@@ -190,8 +190,11 @@ def recognize_crop_lines(
 	return results
 
 
-def recognize_full(img_bgr: np.ndarray) -> list[tuple[np.ndarray, str, float]]:
-	"""FULL-PAGE DET+REC: [(4-POINT BOX IN ORIGINAL PIXELS, TEXT, SCORE), ...]."""
+def recognize_full(img_bgr: np.ndarray, tiled: bool = True) -> list[tuple[np.ndarray, str, float]]:
+	"""RUN FULL-PAGE RAPIDOCR DET+REC (FOR FALLBACK WHEN COMIC MODEL IS ABSENT,
+	OR AS THE UNION'S TEXT-SOURCE & SECOND OPINION).
+	RETURNS [(box, text, score), ...].
+	"""
 	txts, scores, boxes = _run_engine(img_bgr)
 	out = []
 	for box, text, score in zip(boxes, txts, scores):
@@ -202,7 +205,7 @@ def recognize_full(img_bgr: np.ndarray) -> list[tuple[np.ndarray, str, float]]:
 	h, w = img_bgr.shape[:2]
 	# For tall comic strip pages (h >= 1000), run tiled horizontal slice passes
 	# to capture high-resolution sound effects / small text lost by global DBNet downsampling.
-	if h >= 1000:
+	if tiled and h >= 1000:
 		def _overlaps_existing(p1: np.ndarray, p2: np.ndarray) -> bool:
 			xs1, ys1 = p1[:, 0], p1[:, 1]
 			xs2, ys2 = p2[:, 0], p2[:, 1]

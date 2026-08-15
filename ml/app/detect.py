@@ -257,7 +257,7 @@ _WATERMARK_RE = re.compile(
 	r'速漫库|速漫|漫库|qumanku|quman|包子|baozimh|baozi|colamanga|colamanhua|colam|'
 	r'acloudmerge|acloud|loudmer|udmer|merd|oamanhua|'
 	r'merge|cloud|manga|manhua|comic|'
-	r'yumanhua|mangabox|comick|腾讯|微信|公众号|qq群|企鹅群|群号|'
+	r'yumanhua|mangabox|comick|腾讯[动漫慢]*|阅文[集团]*|快看[动漫]*|微信|公众号|qq群|企鹅群|群号|'
 	r'严禁转载|独家|扫图|录入|修图|嵌字|翻译[:：]|翻译组|汉化组|'
 	r'免费漫画|最新免费|漫画网|看漫画|首发|独家首发|漫客[栈拌]|漫客|mkzhan|nga\.com)',
 	re.IGNORECASE,
@@ -615,7 +615,8 @@ def deduplicate_boxes(
 			max_area = max(box_area, karea)
 			overlap_ratio = inter / min_area if min_area > 0 else 0.0
 
-			if iou >= iou_thresh or overlap_ratio >= 0.70 or (overlap_ratio >= 0.60 and max_area / min_area <= 2.5):
+			x_subsumed = (ix >= 0.80 * min(w, kw)) and (iy >= 0.40 * min(h, kh))
+			if iou >= iou_thresh or overlap_ratio >= 0.70 or (overlap_ratio >= 0.60 and max_area / min_area <= 2.5) or x_subsumed:
 				ux0 = min(x0, kx0)
 				uy0 = min(y0, ky0)
 				ux1 = max(x0 + w, kx0 + kw)
