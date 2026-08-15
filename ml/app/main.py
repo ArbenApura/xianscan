@@ -24,17 +24,26 @@ def warmup_models() -> dict[str, bool]:
     """PRE-INITIALIZE AND WARM UP DETECTOR, OCR, AND INPAINTER MODELS ON STARTUP."""
     status: dict[str, bool] = {}
 
+    print("=" * 64)
+    print("  XIANSCAN ML SIDECAR -- HARDWARE ACCELERATION ENGINE")
+    print("=" * 64)
+    print(f"  * Device / Accelerator : {config.DEVICE_LABEL}")
+    print(f"  * Execution Providers  : {', '.join(config.ORT_PROVIDERS)}")
+    print(f"  * Models Directory     : {config.MODELS_DIR}")
+    print("-" * 64)
+
     # 1. ComicTextDetector ONNX
     try:
         if pipeline.detector is not None and pipeline.detector.available():
             pipeline.detector._load()
             status["detector"] = True
-            logger.info("ComicTextDetector initialized.")
+            print("  [+] ComicTextDetector    : Ready (ONNX)")
         else:
             status["detector"] = False
+            print("  [-] ComicTextDetector    : Not Found (Fallback to RapidOCR Det)")
     except Exception as e:
         status["detector"] = False
-        logger.warning("ComicTextDetector warmup skipped: %s", e)
+        print(f"  [!] ComicTextDetector    : Error ({e})")
 
     # 2. RapidOCR Engine
     try:
@@ -42,10 +51,10 @@ def warmup_models() -> dict[str, bool]:
 
         ocr._get_engine()
         status["ocr"] = True
-        logger.info("RapidOCR engine initialized.")
+        print("  [+] RapidOCR Engine      : Ready (PP-OCRv4)")
     except Exception as e:
         status["ocr"] = False
-        logger.warning("RapidOCR warmup skipped: %s", e)
+        print(f"  [!] RapidOCR Engine      : Error ({e})")
 
     # 3. LaMa Inpainter ONNX
     try:
@@ -54,13 +63,15 @@ def warmup_models() -> dict[str, bool]:
         if inpaint.config.LAMA_MODEL_PATH.exists():
             inpaint._get_lama()
             status["inpainter"] = True
-            logger.info("LaMa inpainter initialized.")
+            print("  [+] LaMa Inpainter       : Ready (ONNX Big-LaMa)")
         else:
             status["inpainter"] = False
+            print("  [-] LaMa Inpainter       : Model File Not Found (Solid Infill Fallback)")
     except Exception as e:
         status["inpainter"] = False
-        logger.warning("LaMa inpainter warmup skipped: %s", e)
+        print(f"  [!] LaMa Inpainter       : Error ({e})")
 
+    print("=" * 64)
     return status
 
 
@@ -83,6 +94,8 @@ def health() -> dict:
 
     return {
         "status": "ok",
+        "accelerator": config.DEVICE_LABEL,
+        "providers": config.ORT_PROVIDERS,
         "detector": "comic-ctd" if pipeline.detector.available() else "rapidocr-fallback",
         "inpainter": available_backend(),
         "ocr": "rapidocr",
@@ -142,7 +155,7 @@ def analyze(image: UploadFile = File(...)) -> dict:
                 width=page_w,
                 height=page_h,
                 regions=[],
-                backend="empty-fallback",
+                backend="rapidocr-fallback",
             ).model_dump()
 
 

@@ -681,11 +681,7 @@ class ComicTextDetector:
 		if self._session is None:
 			with self._load_lock:
 				if self._session is None:
-					import onnxruntime as ort
-
-					self._session = ort.InferenceSession(
-						self.model_path, providers=config.ORT_PROVIDERS, sess_options=ort.SessionOptions()
-					)
+					self._session = config.create_session(self.model_path)
 
 	def analyze(self, img_bgr: np.ndarray) -> DetectResult:
 		"""RUN THE FULL PIPELINE ON ONE PAGE (BGR NUMPY IMAGE)."""

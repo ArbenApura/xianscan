@@ -20,11 +20,7 @@ class LamaInpainter:
 		opts = ort.SessionOptions()
 		opts.inter_op_num_threads = 1
 		opts.intra_op_num_threads = 4
-		self.session = ort.InferenceSession(
-			model_path,
-			sess_options=opts,
-			providers=config.ORT_PROVIDERS,
-		)
+		self.session = config.create_session(model_path, session_options=opts)
 		inputs = self.session.get_inputs()
 		self.img_name = inputs[0].name
 		self.mask_name = inputs[1].name
@@ -37,6 +33,18 @@ class LamaInpainter:
 			self.fixed_size: tuple[int, int] | None = (img_shape[3], img_shape[2])  # (W, H)
 		else:
 			self.fixed_size = None
+
+		self.model_path = model_path
+
+	def _run_inference(self, x: np.ndarray, m: np.ndarray) -> list[np.ndarray]:
+		try:
+			return self.session.run(None, {self.img_name: x, self.mask_name: m})
+		except Exception as e:
+			opts = ort.SessionOptions()
+			opts.inter_op_num_threads = 1
+			opts.intra_op_num_threads = 4
+			self.session = ort.InferenceSession(str(self.model_path), providers=["CPUExecutionProvider"], sess_options=opts)
+			return self.session.run(None, {self.img_name: x, self.mask_name: m})
 
 	def __call__(self, img_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
 		if not np.any(mask):
@@ -53,7 +61,7 @@ class LamaInpainter:
 			x = (in_img.transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
 			m = (in_mask > 0).astype(np.float32)[None, None, :, :]
 
-			outputs = self.session.run(None, {self.img_name: x, self.mask_name: m})
+			outputs = self._run_inference(x, m)
 			out = outputs[0][0]
 
 			if out.ndim == 3 and out.shape[0] in (1, 3, 4):
@@ -82,7 +90,7 @@ class LamaInpainter:
 		x = (img_rgb.transpose(2, 0, 1)[None].astype(np.float32) / 255.0)
 		m = mask_bin[None, None, :, :]
 
-		outputs = self.session.run(None, {self.img_name: x, self.mask_name: m})
+		outputs = self._run_inference(x, m)
 		out = outputs[0][0]
 
 		if out.ndim == 3 and out.shape[0] in (1, 3, 4):

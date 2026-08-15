@@ -17,9 +17,12 @@ LAMA_MODEL_PATH = MODELS_DIR / "lama.onnx"
 # THE ONNX DETECTOR'S TRAINED INPUT SIZE (LETTERBOXED TO A SQUARE)
 DETECT_INPUT_SIZE = int(os.environ.get("MT_DETECT_SIZE", "1024"))
 
-# ORT PROVIDERS — CPU IS THE DEFAULT; A GPU MACHINE CAN OVERRIDE VIA MT_DEVICE=cuda
-_DEVICE = os.environ.get("MT_DEVICE", "cpu").lower()
-ORT_PROVIDERS = (["CUDAExecutionProvider", "CPUExecutionProvider"] if _DEVICE == "cuda" else ["CPUExecutionProvider"])
+from . import device
+
+# ORT PROVIDERS — DYNAMIC AUTO-DETECTION (CUDA, DIRECTML, COREML, CPU) WITH OPTIONAL MT_DEVICE OVERRIDE
+ORT_PROVIDERS = device.get_ort_providers()
+DEVICE_LABEL = device.get_device_label()
+create_session = device.create_inference_session
 
 # MINIMUM REGION HEIGHT/WIDTH AFTER UNCLIP (PIXELS, IN THE *MODEL* COORDINATE SPACE) — FILTERS NOISE
 MIN_REGION_SIDE = 5

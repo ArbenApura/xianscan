@@ -35,8 +35,10 @@ def _get_engine():
 		with _engine_lock:
 			if _engine is None:
 				from rapidocr import RapidOCR
+				from . import device
 
-				_engine = RapidOCR()
+				params = device.get_rapidocr_params()
+				_engine = RapidOCR(params=params if params else None)
 	return _engine
 
 
