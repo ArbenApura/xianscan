@@ -469,8 +469,20 @@
 		}
 	}
 
+	$: isBatchActiveForOtherBook = Boolean(
+		$batchTracker.active &&
+		($batchTracker.status === 'running' || $batchTracker.status === 'paused') &&
+		$batchTracker.bookId &&
+		book?.id &&
+		$batchTracker.bookId !== book.id
+	);
+
 	function startBatchFromSelected(force = false) {
 		if (!book) return;
+		if (isBatchActiveForOtherBook) {
+			toast.warning(`Batch translation is currently active for "${$batchTracker.bookTitle || 'another book'}". Please finish or stop it before starting another.`);
+			return;
+		}
 		const targetList = selectedChaptersList.length > 0 ? selectedChaptersList : pendingFilteredChapters;
 		if (targetList.length === 0) {
 			toast.info('No chapters with pages to translate.');
@@ -484,6 +496,10 @@
 
 	function startBatchAllPending() {
 		if (!book) return;
+		if (isBatchActiveForOtherBook) {
+			toast.warning(`Batch translation is currently active for "${$batchTracker.bookTitle || 'another book'}". Please finish or stop it before starting another.`);
+			return;
+		}
 		const pending = chapters
 			.filter((c) => (c.pageCount || 0) > 0 && (c.status !== 'done' || (c.translatedPageCount || 0) < (c.pageCount || 0)))
 			.sort((a, b) => a.seq - b.seq);
@@ -726,9 +742,13 @@
 						<Button
 							variant="secondary"
 							size="md"
-							class="h-9 sm:h-10 px-3 sm:px-3.5 text-xs sm:text-sm font-semibold border-[#b23a2e]/30 bg-[#b23a2e]/10 text-[#b23a2e] hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63] dark:hover:bg-[#e08a63] dark:hover:text-black transition-all shadow-xs"
+							class={`h-9 sm:h-10 px-3 sm:px-3.5 text-xs sm:text-sm font-semibold border-[#b23a2e]/30 bg-[#b23a2e]/10 text-[#b23a2e] hover:bg-[#b23a2e] hover:text-white dark:text-[#e08a63] dark:hover:bg-[#e08a63] dark:hover:text-black transition-all shadow-xs ${
+								isBatchActiveForOtherBook ? 'opacity-80' : ''
+							}`}
 							on:click={startBatchAllPending}
-							title={`Translate all ${pendingChapters} pending chapters sequentially`}
+							title={isBatchActiveForOtherBook
+								? `Batch translation is currently running for "${$batchTracker.bookTitle || 'another book'}"`
+								: `Translate all ${pendingChapters} pending chapters sequentially`}
 						>
 							<Sparkles size={14} class="text-amber-500" />
 							<span>Translate Pending ({pendingChapters})</span>
@@ -1564,6 +1584,9 @@
 				size="sm"
 				class="gap-1.5 font-bold shadow-sm text-xs sm:text-sm h-8 sm:h-9 px-3 sm:px-3.5"
 				on:click={() => startBatchFromSelected(false)}
+				title={isBatchActiveForOtherBook
+					? `Batch translation is currently running for "${$batchTracker.bookTitle || 'another book'}"`
+					: `Translate selected ${selectedChapterIds.size} chapters`}
 			>
 				<Play size={13} class="fill-current" />
 				<span>Translate ({selectedChapterIds.size})</span>
@@ -1574,7 +1597,9 @@
 				size="sm"
 				class="gap-1 text-xs h-8 sm:h-9 px-2.5"
 				on:click={() => startBatchFromSelected(true)}
-				title="Force re-translate all pages in selected chapters"
+				title={isBatchActiveForOtherBook
+					? `Batch translation is currently running for "${$batchTracker.bookTitle || 'another book'}"`
+					: "Force re-translate all pages in selected chapters"}
 			>
 				<RotateCw size={12} />
 				<span class="hidden md:inline">Force All</span>

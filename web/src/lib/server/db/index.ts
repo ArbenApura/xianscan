@@ -59,6 +59,12 @@ if (!globalThis.__mtSqlite) {
 	migrate(drizzle(sqlite, { schema }), { migrationsFolder: MIGRATIONS_DIR });
 	// AUTO-SYNC CHAPTER STATUSES FOR CHAPTERS WHOSE PAGES HAVE FINISHED TRANSLATING
 	try {
+		// Reset any orphan in-flight rows from prior server crashes/restarts
+		sqlite.exec(`
+			UPDATE pages SET status = 'pending', error = NULL WHERE status = 'processing';
+			UPDATE chapters SET status = 'pending' WHERE status = 'processing';
+		`);
+
 		sqlite.exec(`
 			UPDATE chapters 
 			SET status = 'done' 

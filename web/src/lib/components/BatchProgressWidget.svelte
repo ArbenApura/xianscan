@@ -19,7 +19,6 @@
 	import ExternalLink from 'lucide-svelte/icons/external-link';
 	import Layers from 'lucide-svelte/icons/layers';
 	import Clock from 'lucide-svelte/icons/clock';
-	import DollarSign from 'lucide-svelte/icons/dollar-sign';
 	import Zap from 'lucide-svelte/icons/zap';
 	import BookOpen from 'lucide-svelte/icons/book-open';
 
@@ -75,10 +74,14 @@
 
 	function formatDuration(ms: number | undefined | null): string {
 		if (ms === undefined || ms === null || ms <= 0) return '-';
-		const sec = ms / 1000;
-		if (sec < 60) return `${Math.round(sec)}s`;
-		const min = Math.floor(sec / 60);
-		const remSec = Math.round(sec % 60);
+		const totalSec = Math.round(ms / 1000);
+		if (totalSec < 60) return `${totalSec}s`;
+		const hours = Math.floor(totalSec / 3600);
+		const min = Math.floor((totalSec % 3600) / 60);
+		const remSec = totalSec % 60;
+		if (hours > 0) {
+			return `${hours}h ${min}m ${remSec}s`;
+		}
 		return `${min}m ${remSec}s`;
 	}
 
@@ -176,43 +179,43 @@
 				</button>
 
 				<!-- RIGHT: QUICK CONTROLS & EXPAND/CLOSE -->
-				<div class="flex items-center gap-1 shrink-0">
+				<div class="flex items-center gap-1.5 shrink-0">
 					{#if isRunning}
 						<button
 							type="button"
 							on:click={() => batchTracker.pauseBatch()}
-							class="flex h-7.5 w-7.5 items-center justify-center rounded-lg border border-black/10 bg-black/5 text-current hover:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10 transition"
+							class="flex h-8.5 w-8.5 sm:h-9 sm:w-9 items-center justify-center rounded-xl border border-black/10 bg-black/5 text-current hover:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10 transition active:scale-95 shadow-2xs"
 							title="Pause Batch Translation"
 							aria-label="Pause batch"
 							use:ripple
 						>
-							<Pause size={13} />
+							<Pause size={15} />
 						</button>
 					{:else if isPaused}
 						<button
 							type="button"
 							on:click={() => batchTracker.resumeBatch()}
-							class="flex h-7.5 w-7.5 items-center justify-center rounded-lg bg-[#b23a2e] text-white hover:opacity-90 transition"
+							class="flex h-8.5 w-8.5 sm:h-9 sm:w-9 items-center justify-center rounded-xl bg-[#b23a2e] text-white hover:opacity-90 transition active:scale-95 shadow-2xs"
 							title="Resume Batch Translation"
 							aria-label="Resume batch"
 							use:ripple
 						>
-							<Play size={13} class="fill-current" />
+							<Play size={15} class="fill-current" />
 						</button>
 					{/if}
 
 					<button
 						type="button"
 						on:click={() => (expanded = !expanded)}
-						class="flex h-7.5 w-7.5 items-center justify-center rounded-lg border border-black/10 bg-black/5 text-current hover:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10 transition"
+						class="flex h-8.5 w-8.5 sm:h-9 sm:w-9 items-center justify-center rounded-xl border border-black/10 bg-black/5 text-current hover:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10 transition active:scale-95 shadow-2xs"
 						title={expanded ? 'Minimize Details' : 'Expand Details'}
 						aria-label={expanded ? 'Minimize details' : 'Expand details'}
 						use:ripple
 					>
 						{#if expanded}
-							<ChevronDown size={14} />
+							<ChevronDown size={16} />
 						{:else}
-							<ChevronUp size={14} />
+							<ChevronUp size={16} />
 						{/if}
 					</button>
 
@@ -220,12 +223,12 @@
 						<button
 							type="button"
 							on:click={() => batchTracker.clearBatch()}
-							class="flex h-7.5 w-7.5 items-center justify-center rounded-lg border border-black/10 bg-black/5 text-current hover:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10 transition opacity-70 hover:opacity-100"
+							class="flex h-8.5 w-8.5 sm:h-9 sm:w-9 items-center justify-center rounded-xl border border-black/10 bg-black/5 text-current hover:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10 transition active:scale-95 shadow-2xs opacity-70 hover:opacity-100"
 							title="Dismiss Batch"
 							aria-label="Dismiss batch"
 							use:ripple
 						>
-							<X size={14} />
+							<X size={15} />
 						</button>
 					{/if}
 				</div>
@@ -316,19 +319,15 @@
 						</div>
 					{/if}
 
-					<!-- STATS STRIP: TIME, REMAINING, COST -->
-					<div class="grid grid-cols-3 gap-2 rounded-xl bg-black/[0.03] p-2 dark:bg-white/[0.03] text-center text-xs">
+					<!-- STATS STRIP: TIME, REMAINING -->
+					<div class="grid grid-cols-2 gap-2 rounded-xl bg-black/[0.03] p-2.5 dark:bg-white/[0.03] text-center text-xs">
 						<div class="flex flex-col items-center">
-							<span class="text-[10px] opacity-60 flex items-center gap-1"><Clock size={10} /> Elapsed</span>
-							<span class="font-mono font-bold text-[11px] mt-0.5">{formatDuration(elapsedMs)}</span>
+							<span class="text-[10px] opacity-60 flex items-center gap-1"><Clock size={11} /> Elapsed</span>
+							<span class="font-mono font-bold text-xs mt-0.5">{formatDuration(elapsedMs)}</span>
 						</div>
 						<div class="flex flex-col items-center">
-							<span class="text-[10px] opacity-60 flex items-center gap-1"><Zap size={10} /> Remaining</span>
-							<span class="font-mono font-bold text-[11px] mt-0.5">{isRunning ? formatDuration(estimatedRemainingMs) : '-'}</span>
-						</div>
-						<div class="flex flex-col items-center">
-							<span class="text-[10px] opacity-60 flex items-center gap-1"><DollarSign size={10} /> Total Cost</span>
-							<span class="font-mono font-bold text-[11px] mt-0.5">${$batchTracker.totalCostUsd.toFixed(4)}</span>
+							<span class="text-[10px] opacity-60 flex items-center gap-1"><Zap size={11} /> Remaining</span>
+							<span class="font-mono font-bold text-xs mt-0.5">{isRunning ? formatDuration(estimatedRemainingMs) : '-'}</span>
 						</div>
 					</div>
 
@@ -366,6 +365,8 @@
 											<span class="text-[10px] font-mono font-bold text-red-500">✕ Error</span>
 										{:else if item.status === 'skipped'}
 											<span class="text-[10px] font-mono opacity-50">Skipped</span>
+										{:else if item.status === 'cancelled'}
+											<span class="text-[10px] font-mono opacity-50">Cancelled</span>
 										{:else}
 											<span class="text-[10px] font-mono opacity-60">{item.pageCount} pgs</span>
 										{/if}

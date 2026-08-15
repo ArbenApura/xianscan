@@ -453,6 +453,22 @@ function createBatchTrackerStore() {
 		) {
 			if (chapters.length === 0) return;
 
+			// GUARD: PREVENT RUNNING BATCH ON ANOTHER BOOK WHILE A BATCH IS ALREADY ACTIVE
+			const currentState = get({ subscribe });
+			if (
+				currentState.active &&
+				(currentState.status === 'running' || currentState.status === 'paused') &&
+				currentState.bookId &&
+				currentState.bookId !== bookId
+			) {
+				const activeBook = currentState.bookTitle || 'another book';
+				toast.warning(
+					`Batch translation is currently active for "${activeBook}". Please wait for it to finish or stop it before starting another.`,
+					{ duration: 5000 },
+				);
+				return;
+			}
+
 			attachJobWatcher();
 
 			const queue: BatchChapterItem[] = chapters.map((ch) => ({
@@ -565,7 +581,7 @@ function createBatchTrackerStore() {
 
 			const state = get({ subscribe });
 			const current = state.queue[state.currentIndex];
-			if (current && current.status === 'processing') {
+			if (current && (current.status === 'processing' || current.status === 'reslicing')) {
 				try {
 					await jobTracker.cancelTranslation(current.id);
 				} catch {
@@ -574,8 +590,29 @@ function createBatchTrackerStore() {
 			}
 
 			update((s) => {
+				const updatedQueue = s.queue.map((item, idx) => {
+					if (idx === s.currentIndex && (item.status === 'processing' || item.status === 'reslicing')) {
+						return {
+							...item,
+							status: 'cancelled' as const,
+							error: 'Cancelled by user',
+							resliceMessage: null,
+						};
+					}
+					if (item.status === 'queued') {
+						return {
+							...item,
+							status: 'cancelled' as const,
+							error: 'Batch cancelled',
+							resliceMessage: null,
+						};
+					}
+					return item;
+				});
+
 				const next: BatchTranslationState = {
 					...s,
+					queue: updatedQueue,
 					status: 'cancelled',
 					currentPhase: undefined,
 					completedAt: Date.now(),

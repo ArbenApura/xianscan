@@ -196,7 +196,7 @@ export interface BatchChapterItem {
 	title: string;
 	titleTarget?: string | null;
 	pageCount: number;
-	status: 'queued' | 'reslicing' | 'processing' | 'done' | 'error' | 'skipped';
+	status: 'queued' | 'reslicing' | 'processing' | 'done' | 'error' | 'skipped' | 'cancelled';
 	error?: string | null;
 	translatedPages?: number;
 	totalPages?: number;

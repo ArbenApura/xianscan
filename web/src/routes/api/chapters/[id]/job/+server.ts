@@ -2,7 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { assertChapterExists } from '$lib/server/chapters';
 import { getChapterJobSnapshot, getChapterJob, abortChapterJob } from '$lib/server/translation-service';
 import { db } from '$lib/server/db';
-import { pages } from '$lib/server/db/schema';
+import { pages, chapters } from '$lib/server/db/schema';
 import { and, eq } from 'drizzle-orm';
 import type { RequestHandler } from './$types';
 
@@ -28,11 +28,25 @@ export const DELETE: RequestHandler = async ({ params }) => {
 
 	const aborted = abortChapterJob(chapterId);
 	db.update(pages)
-		.set({ status: 'pending' })
+		.set({ status: 'pending', error: null })
 		.where(and(eq(pages.chapterId, chapterId), eq(pages.status, 'processing')))
 		.run();
 
-	return json({ ok: true, aborted });
+	const allPages = db
+		.select({ status: pages.status, outputPath: pages.outputPath })
+		.from(pages)
+		.where(eq(pages.chapterId, chapterId))
+		.all();
+	const allDone = allPages.length > 0 && allPages.every((p) => p.status === 'done' || Boolean(p.outputPath));
+	const anyError = allPages.some((p) => p.status === 'error');
+	const nextStatus = allDone ? 'done' : anyError ? 'error' : 'pending';
+
+	db.update(chapters)
+		.set({ status: nextStatus })
+		.where(eq(chapters.id, chapterId))
+		.run();
+
+	return json({ ok: true, aborted, status: nextStatus });
 };
 
 
