@@ -179,15 +179,18 @@
 					targetLang,
 				}),
 			});
-			if (!resp.ok) throw new Error('create failed');
+			if (!resp.ok) {
+				const errData = await resp.json().catch(() => ({}));
+				throw new Error(errData.message || 'Could not create the book.');
+			}
 			const { id } = await resp.json();
 			toast.success('Book created.');
 			createModalOpen = false;
 			title = '';
 			titleTarget = '';
 			goto(`/app/books/${id}/`);
-		} catch {
-			toast.error('Could not create the book.');
+		} catch (err: any) {
+			toast.error(err?.message || 'Could not create the book.');
 		} finally {
 			creating = false;
 		}
@@ -222,15 +225,18 @@
 					archived: editArchived,
 				}),
 			});
-			if (!resp.ok) throw new Error('Update failed');
+			if (!resp.ok) {
+				const errData = await resp.json().catch(() => ({}));
+				throw new Error(errData.message || 'Could not update the book.');
+			}
 			const data = await resp.json();
 			const updated = data.book;
 			books = books.map((b) => (b.id === updated.id ? { ...b, ...updated } : b));
 			toast.success('Book updated.');
 			editModalOpen = false;
 			editingBook = null;
-		} catch {
-			toast.error('Could not update the book.');
+		} catch (err: any) {
+			toast.error(err?.message || 'Could not update the book.');
 		} finally {
 			updating = false;
 		}

@@ -25,10 +25,17 @@ export const GET: RequestHandler = async () => {
 
 export const POST: RequestHandler = async ({ request }) => {
 	const parsed = PostBody.safeParse(await request.json().catch(() => null));
-	if (!parsed.success) throw error(400, 'Invalid book.');
+	if (!parsed.success) throw error(400, 'Invalid book details.');
 	const rawSource = parsed.data.sourceLang || DEFAULT_SOURCE_LANG;
-	const sourceLang = rawSource === 'auto' ? detectSourceLanguage(parsed.data.title) : rawSource;
+	const detectedSource = rawSource === 'auto' ? detectSourceLanguage(parsed.data.title) : rawSource;
 	const targetLang = parsed.data.targetLang || DEFAULT_TARGET_LANG;
+
+	// When rawSource was 'auto' and detected language equals targetLang (e.g. English title with English target),
+	// fallback to default source language ('zh-Hans') instead of rejecting with 400.
+	const sourceLang =
+		rawSource === 'auto' && detectedSource === targetLang
+			? (targetLang === 'zh-Hans' ? 'en' : 'zh-Hans')
+			: detectedSource;
 
 	if (sourceLang === targetLang) {
 		throw error(400, 'Target translation language must be different from source language.');
