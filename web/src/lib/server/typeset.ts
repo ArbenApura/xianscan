@@ -189,13 +189,26 @@ export function isSfxOrShout(text: string): boolean {
 	const trimmed = text.trim();
 	if (!trimmed) return false;
 	if (trimmed.includes('\n')) return false;
+	if (trimmed.includes('?') || trimmed.includes('？') || trimmed.includes(',') || trimmed.includes('，')) return false;
 
 	const words = trimmed.split(/\s+/);
 	// Single standalone token (e.g. "WEI!", "NIAN!", "BOOM!", "SLASH!", "咻")
 	if (words.length === 1) return true;
 	// Short 2-word sound effect (e.g. "CLANG CLANG!", "HEH HEH", "THUMP THUMP")
 	if (words.length === 2 && trimmed.length <= 15) {
-		return true;
+		const w1 = words[0].replace(/[^a-zA-Z]/g, '').toLowerCase();
+		const w2 = words[1].replace(/[^a-zA-Z]/g, '').toLowerCase();
+		if (w1 && w2 && (w1 === w2 || trimmed.endsWith('!') || trimmed.endsWith('！'))) {
+			const commonDialogue = new Set([
+				'lets', 'let', 'thank', 'thanks', 'help', 'stop', 'come', 'get', 'look',
+				'wait', 'shut', 'dont', 'you', 'i', 'we', 'they', 'he', 'she', 'who', 'what',
+				'where', 'when', 'why', 'how',
+			]);
+			if (commonDialogue.has(w1) || commonDialogue.has(w2)) {
+				return false;
+			}
+			return true;
+		}
 	}
 	return false;
 }
@@ -343,7 +356,7 @@ export function balancedWrapText(
 	const minW = Math.max(...allWords.map((w) => ctx.measureText(w).width));
 
 	// Binary search for the minimum target width that still wraps into N lines
-	let lo = Math.ceil(minW);
+	let lo = Math.min(maxWidth, Math.ceil(minW));
 	let hi = maxWidth;
 	while (lo < hi - 1) {
 		const mid = Math.floor((lo + hi) / 2);
@@ -663,7 +676,28 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 	const ctx = canvas.getContext('2d');
 	ctx.drawImage(img, 0, 0);
 
-	const decollided = decollideRegions(regions);
+	const adjustedRegions = regions.map((r) => {
+		const rawText = sanitizeForFont(r.text.trim());
+		const isVerticalDialogue =
+			(r.vertical || (r.box.h / r.box.w >= 1.6 && r.box.h >= 60)) &&
+			!CJK_REGEX.test(rawText) &&
+			!isSfxOrShout(rawText);
+		if (isVerticalDialogue) {
+			const renderW = Math.min(img.width, Math.max(r.box.w, Math.min(Math.round(r.box.h * 0.75), Math.round(r.box.w * 2.5), 160)));
+			const renderX = Math.max(0, Math.min(img.width - renderW, Math.round(r.box.x + r.box.w / 2 - renderW / 2)));
+			return {
+				...r,
+				box: {
+					...r.box,
+					x: renderX,
+					w: renderW,
+				},
+			};
+		}
+		return r;
+	});
+
+	const decollided = decollideRegions(adjustedRegions);
 
 	for (const r of decollided) {
 		const rawText = sanitizeForFont(r.text.trim());

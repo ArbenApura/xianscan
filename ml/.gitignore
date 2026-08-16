@@ -4,4 +4,6 @@ ml/models/
 ml/__pycache__/
 ml/**/__pycache__/
 ml/.pytest_cache/
+ml/tests/.cache/
+tests/.cache/
 verify-out/

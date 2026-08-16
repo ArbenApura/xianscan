@@ -40,6 +40,9 @@ This directory stores permanent, version-controlled image samples used by `pytes
 | [`page_58976.png`](page_58976.png) | 900 × 1734 | Chapter 47 / Page 58976 | **Flashback Scene Bubble Grouping & Distinct Bubble Separation**: Ensures 5-line flashback bubbles (*"生死爱恨..."*) capture all lines completely without vertical overlap dropping, and diagonally-adjacent speech bubbles (*"不过……她\n不重要。"* vs *"我真正想找的人\n……是你。"*) stay strictly separated. |
 | [`page_58994.png`](page_58994.png) | 900 × 1264 | Chapter 48 / Page 58994 | **Short 1-Character Trailing Line Angle Stability**: Ensures dialogue bubbles ending with 1-character trailing lines (*"前，"*) snap subpixel baseline noise to `angle = 0.0` without tilting translated text. |
 | [`page_63517.png`](page_63517.png) | 900 × 1981 | Chapter 52 / Page 63517 | **Trailing Ellipsis Detection & Full-Dot Coverage**: Ensures trailing horizontal ellipsis dots (*"龙字军夜袭“黑风寨”……"* after closing quotes and *"鱼字军剿灭……"*) are extracted via mask growth and expanded to 2 ems (`x >= 820` / `x >= 850`) to cleanly inpaint all 6 dots without residue. |
+| [`page_63596.png`](page_63596.png) | 800 × 1307 | Page 63596 | **Vertical Skill Callout Exclamation Mark Recovery**: Ensures trailing exclamation marks (*"！"*) below vertical action text (*"『潜伏』！"*) are recognized and unified into the vertical bounding box, cleanly covering the exclamation mark down to $y \ge 1050$. |
+| [`page_63602.png`](page_63602.png) | 900 × 1694 | Page 63602 | **SFX Trail Retention & Drawing Noise Suppression**: Ensures low-confidence single-glyph false positives (*"小"*) on tremor lines are filtered while preserving all 3 panel SFX sound effects (*"沙—"*) without hallucinated ellipsis dots (*"……"*). |
+| [`page_63603.png`](page_63603.png) | 900 × 2246 | Page 63603 | **Action Blood Spray SFX & Exclamation Retention**: Tests detection of consecutive sound effects (*"咳！"*, *"咳！"*, *"咳！"*) along blood spray without punctuation loss, and high-contrast splash SFX (*"噗"*). |
 
 ---
 
@@ -78,3 +81,7 @@ When fixing a new detection, segmentation, inpainting, or OCR regression:
 
 3. **Commit the Fixture to Git**:
    * Unlike `web/data/uploads/` (which is git-ignored runtime data), `ml/tests/fixtures/` is tracked by Git so that CI and other developers can immediately run the full test suite.
+
+4. **Model Inference Cache Auto-Generation**:
+   * On the first run of a new sample fixture, raw ONNX model outputs (`ComicTextDetector`, `RapidOCR`, `LaMa`) will automatically be evaluated and cached to `ml/tests/.cache/`.
+   * If you need to re-generate or bypass cached outputs when testing raw model changes, run with `--refresh-model-cache` or `--no-model-cache`.

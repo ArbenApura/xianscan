@@ -4,10 +4,38 @@
 # GOOD ENOUGH FOR MASK/CROP/INPAINT MATH AND FOR THE FAKE DETECTOR TESTS TO EXERCISE REAL GEOMETRY.
 from __future__ import annotations
 
+import os
 import numpy as np
 import pytest
 
+from tests import cache_utils
+
 PAGE_W, PAGE_H = 800, 1200
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--no-model-cache",
+        action="store_true",
+        default=False,
+        help="Disable model inference cache and run live ONNX models",
+    )
+    parser.addoption(
+        "--refresh-model-cache",
+        action="store_true",
+        default=False,
+        help="Force re-computation and overwrite existing model inference cache entries",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    if config.getoption("--no-model-cache"):
+        os.environ["PYTEST_NO_MODEL_CACHE"] = "1"
+    if config.getoption("--refresh-model-cache"):
+        os.environ["PYTEST_REFRESH_MODEL_CACHE"] = "1"
+
+    # Patch detector, OCR, and inpainter with content-addressed cache
+    cache_utils.patch_all_models()
 
 
 def make_synthetic_page() -> np.ndarray:

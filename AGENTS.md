@@ -23,3 +23,29 @@ When troubleshooting specific edge-case samples (e.g. staff credit pages, title 
 5. **Skip Python Tests If No Python Files Touched:**
    - Do **NOT** execute Python/ML tests (`pytest`) if Python files in `ml/` were not modified, as the test suite is extensive and takes significant time. Only run `web` tests (`npm run test`) for web/frontend/TS changes.
 
+6. **Pytest Model Inference Cache Awareness:**
+   - The ML test suite uses a content-addressed inference cache in `ml/tests/.cache/` (`cache_utils.py`) for raw ONNX model outputs (`ComicTextDetector`, `RapidOCR`, `LamaInpainter`) to keep full pytest runs under 10 seconds.
+   - Downstream Python heuristics (`group_paragraphs`, `merge_text_lines`, `_split_lines_by_internal_punctuation`, angle math) **always execute live**.
+   - When adding new test image fixtures or troubleshooting raw model perception issues, use `--refresh-model-cache` to force re-inference and update the cache, or `--no-model-cache` to bypass the cache completely.
+
+## Core Architectural Insights & Robustness Rules
+
+1. **Strict Regex Gating for Single-Glyph / Punctuation OCR Fallbacks:**
+   - RapidOCR's internal detector (`use_det=True`) regularly fails on compact single-glyph crops ($w \le 45\text{px}$ or $h \le 45\text{px}$, e.g. standalone vertical `！` or `？`).
+   - Direct recognition (`use_det=False` / `recognize_line`) can recognize them, but **will hallucinate characters** (e.g. misinterpreting ellipsis dots as `'1'`, or texture as Chinese characters) if fed background noise.
+   - **Rule:** Any direct recognition fallback on failed crops must be strictly gated by `_PUNCT_ONLY = re.compile(r"^[.．…·!！?？~～]{1,2}$")` to avoid rogue OCR detections.
+
+2. **Empty Detector Boxes Must Not Inflate Text Line Heights:**
+   - Detector boxes without OCR text (padding or trailing boxes) merged horizontally with genuine OCR lines must **never** expand vertical line bounds $[y_0, y_1]$.
+   - Expanding vertical bounds inflates line height, breaking downstream font-similarity ratios ($h_1 / h_2 > 1.4$) in `group_paragraphs()` and fragmenting multi-line bubbles into separate regions.
+   - **Rule:** Empty detector boxes may only widen horizontal span $[x_0, x_1]$, preserving the genuine text's vertical height $[y_0, y_1]$.
+
+3. **Color Watermark Mask State Independence:**
+   - `create_bubble_watermark_mask()` must **always** run on `img_bgr` (the raw original image), never on `ocr_img` (which has already been cleaned and has its chromatic pixels zeroed out).
+   - Calling mask generators on cleaned images produces empty masks ($0$ pixels), causing downstream watermark filters to be silently bypassed.
+
+4. **Font-Size Ratio Tolerance for Same-Bubble Pairs:**
+   - Standard comic typesetting can have font scale variations up to $1.75\times$ within the same bubble (e.g. bold line followed by subtitle).
+   - When vertical gap is small ($\le 0.35 \times \text{line height}$) and horizontal overlap is high ($\ge 50\%$), allow `height_ratio` up to $1.75$ in `group_paragraphs()`.
+
+

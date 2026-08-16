@@ -205,7 +205,7 @@
 				<!-- ML SIDECAR STATUS PILL (RESPONSIVE: COMPACT ON MOBILE, EXPANDED ON TABLET/DESKTOP) -->
 				<button
 					type="button"
-					on:click={() => openSettings('ai')}
+					on:click={() => openSettings('compute')}
 					class={`flex h-8 sm:h-9 items-center gap-1.5 rounded-xl border px-2 sm:px-2.5 text-xs font-semibold shadow-2xs backdrop-blur transition-all duration-200 active:scale-95 ${
 						$mlStatus.online
 							? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:border-emerald-500/50 hover:bg-emerald-500/15 dark:text-emerald-400 dark:bg-emerald-500/10 dark:hover:bg-emerald-500/20'
@@ -214,10 +214,10 @@
 								: 'border-red-500/30 bg-red-500/10 text-red-600 hover:border-red-500/50 hover:bg-red-500/15 dark:text-red-400 dark:bg-red-500/10 dark:hover:bg-red-500/20'
 					}`}
 					title={$mlStatus.online
-						? `ML Sidecar: Online (${$mlStatus.deviceLabel}) — Click to configure AI & Providers`
+						? `ML Sidecar: Online (${$mlStatus.deviceLabel}) — Click to configure Compute & Speed`
 						: $mlStatus.loading
 							? 'Connecting to ML Sidecar service...'
-							: `ML Sidecar: Offline (${$mlStatus.error || 'Unreachable'}) — Click to configure AI & Providers`}
+							: `ML Sidecar: Offline (${$mlStatus.error || 'Unreachable'}) — Click to configure Compute & Speed`}
 					aria-label="ML Sidecar Status"
 					use:ripple
 				>

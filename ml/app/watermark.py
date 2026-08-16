@@ -74,10 +74,10 @@ class WatermarkRemover:
     def create_bubble_watermark_mask(
         self,
         img_bgr: np.ndarray,
-        bubble_thresh: int = 220,
-        min_sat: int = 25,
-        min_val: int = 40,
-        min_color_diff: int = 20,
+        bubble_thresh: int = 210,
+        min_sat: int = 20,
+        min_val: int = 35,
+        min_color_diff: int = 15,
     ) -> np.ndarray:
         """GENERATE A BINARY MASK FOR CHROMATIC WATERMARKS / LOGO OVERLAYS COLLIDING WITH WHITE SPEECH BUBBLES."""
         h, w = img_bgr.shape[:2]
@@ -89,28 +89,32 @@ class WatermarkRemover:
         sat = hsv[:, :, 1]
         val = hsv[:, :, 2]
 
-        bright_mask = ((gray >= bubble_thresh) & (sat <= 30)).astype(np.uint8) * 255
+        bright_mask = ((gray >= bubble_thresh) & (sat <= 35)).astype(np.uint8) * 255
 
         # FIND BUBBLE REGIONS (REJECT OVERSIZED BACKGROUNDS LIKE DESERTS/SKIES)
         bubble_mask = np.zeros((h, w), dtype=np.uint8)
         contours, _ = cv2.findContours(bright_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if 500 <= area <= max(120000, int(0.50 * page_area)):
+            if 400 <= area <= max(120000, int(0.50 * page_area)):
                 hull = cv2.convexHull(cnt)
                 cv2.drawContours(bubble_mask, [hull], -1, 255, -1)
 
         bubble_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
         bubble_candidates = cv2.morphologyEx(bubble_mask, cv2.MORPH_CLOSE, bubble_kernel)
 
-        # 2. DETECT CHROMATIC WATERMARK PIXELS
+        # 2. DETECT CHROMATIC WATERMARK PIXELS (RED, BROWN/ORANGE, BLUE, CYAN, PURPLE)
         b, g, r = img_bgr[:, :, 0], img_bgr[:, :, 1], img_bgr[:, :, 2]
         max_c = np.maximum(np.maximum(r, g), b)
         min_c = np.minimum(np.minimum(r, g), b)
         color_diff = max_c - min_c
 
-        chromatic = ((sat >= min_sat) | (color_diff >= min_color_diff)) & (val >= min_val)
-        colliding = (chromatic & (bubble_candidates > 0)).astype(np.uint8) * 255
+        red_wm = (((hsv[:, :, 0] < 15) | (hsv[:, :, 0] > 165)) & (sat >= min_sat) & (val >= min_val)).astype(np.uint8) * 255
+        brown_wm = ((hsv[:, :, 0] >= 15) & (hsv[:, :, 0] <= 45) & (sat >= min_sat) & (val >= min_val)).astype(np.uint8) * 255
+        blue_wm = ((hsv[:, :, 0] >= 85) & (hsv[:, :, 0] <= 135) & (sat >= min_sat) & (val >= min_val)).astype(np.uint8) * 255
+        other_chromatic = (((sat >= max(25, min_sat)) | (color_diff >= max(20, min_color_diff))) & (val >= max(75, min_val))).astype(np.uint8) * 255
+        chromatic_mask = cv2.bitwise_or(cv2.bitwise_or(cv2.bitwise_or(red_wm, brown_wm), blue_wm), other_chromatic)
+        colliding = (chromatic_mask & (bubble_candidates > 0)).astype(np.uint8) * 255
 
         # 3. FILTER CONNECTED COMPONENTS (WATERMARK TEXT STROKES ONLY, NEVER CHARACTER ART)
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(colliding, connectivity=8)
@@ -119,23 +123,51 @@ class WatermarkRemover:
             area = stats[i, cv2.CC_STAT_AREA]
             cw = stats[i, cv2.CC_STAT_WIDTH]
             ch = stats[i, cv2.CC_STAT_HEIGHT]
-            if 8 <= area <= 10000 and (cw <= 400 or ch <= 150):
+            if 6 <= area <= 15000 and (cw <= 500 or ch <= 200):
                 mask[labels == i] = 255
 
         if np.any(mask):
-            dilate_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-            mask = cv2.dilate(mask, dilate_kernel, iterations=1)
+            # Protect achromatic dark Chinese text strokes from being inpainted
+            is_black_text = (max_c < 75) & (color_diff < 15)
+            mask[is_black_text] = 0
 
         return mask
+
+    def clean_bubble_crop(self, crop_bgr: np.ndarray) -> np.ndarray:
+        """CLEAN CHROMATIC WATERMARK NOISE WITHIN A SINGLE CROPPED BUBBLE/LINE ROI."""
+        if crop_bgr is None or crop_bgr.size == 0:
+            return crop_bgr
+        gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
+        sat = hsv[:, :, 1]
+        val = hsv[:, :, 2]
+        b, g, r = crop_bgr[:, :, 0], crop_bgr[:, :, 1], crop_bgr[:, :, 2]
+        max_c = np.maximum(np.maximum(r, g), b)
+        min_c = np.minimum(np.minimum(r, g), b)
+        color_diff = max_c - min_c
+
+        # In a mostly white/light crop, chromatic strokes are watermarks
+        white_bg_ratio = np.mean(gray >= 195)
+        if white_bg_ratio >= 0.30:
+            red_wm = (((hsv[:, :, 0] < 15) | (hsv[:, :, 0] > 165)) & (sat >= 30) & (val >= 80)).astype(np.uint8) * 255
+            brown_wm = ((hsv[:, :, 0] >= 15) & (hsv[:, :, 0] <= 45) & (sat >= 30) & (val >= 80)).astype(np.uint8) * 255
+            blue_wm = ((hsv[:, :, 0] >= 85) & (hsv[:, :, 0] <= 135) & (sat >= 30) & (val >= 80)).astype(np.uint8) * 255
+            chromatic = cv2.bitwise_or(cv2.bitwise_or(red_wm, brown_wm), blue_wm)
+            if np.count_nonzero(chromatic) >= 10:
+                mask = chromatic.copy()
+                is_black_text = (max_c < 75) & (color_diff < 15)
+                mask[is_black_text] = 0
+                return cv2.inpaint(crop_bgr, mask, 3, cv2.INPAINT_TELEA)
+        return crop_bgr
 
     def remove_colliding_watermarks(
         self,
         img_bgr: np.ndarray,
-        bubble_thresh: int = 220,
+        bubble_thresh: int = 210,
     ) -> tuple[np.ndarray, bool]:
         """FORCEFULLY INPAINT CHROMATIC WATERMARKS COLLIDING WITH SPEECH BUBBLES BEFORE OCR."""
         mask = self.create_bubble_watermark_mask(img_bgr, bubble_thresh=bubble_thresh)
-        if np.count_nonzero(mask) < 30:
+        if np.count_nonzero(mask) < 20:
             return img_bgr, False
 
         # INPAINT CHROMATIC OVERLAY USING FAST-MARCHING / TELEA RESTORING LOCAL WHITE BUBBLE CONTEXT

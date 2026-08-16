@@ -5,11 +5,14 @@
 # RapidOCR v3 RETURNS A `RapidOCROutput` OBJECT WITH .txts/.scores/.boxes LISTS — NOT THE v1 TUPLE.
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
+
+_PUNCT_ONLY = re.compile(r"^[.．…·!！?？~～]{1,2}$")
 
 # -- TYPES -- #
 
@@ -92,6 +95,16 @@ def recognize_crop(img_bgr: np.ndarray) -> OcrResult | None:
 		pad_top = 0
 		pad_left = 0
 	if not txts:
+		# Fall back to direct line recognition for compact / narrow punctuation crops (e.g. single vertical exclamation mark)
+		if w <= 60 or h <= 60 or (h >= 2.0 * w and w <= 80):
+			line_res = recognize_line(img_bgr)
+			if line_res and line_res.text and bool(_PUNCT_ONLY.fullmatch(line_res.text)):
+				line_box = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float64)
+				return OcrResult(
+					text=line_res.text,
+					score=line_res.score,
+					lines=[(line_box, line_res.text, line_res.score)],
+				)
 		return None
 	# ORDER BY (TOP EDGE, LEFT EDGE) — READING ORDER WITHIN THE CROP
 	order = sorted(
@@ -203,10 +216,10 @@ def recognize_full(img_bgr: np.ndarray, tiled: bool = True) -> list[tuple[np.nda
 			out.append((box, t, float(score)))
 
 	h, w = img_bgr.shape[:2]
-	# For tall comic strip pages (h >= 1000), run tiled horizontal slice passes
+	# For tall comic strip pages (h >= 1000), run tiled slice passes
 	# to capture high-resolution sound effects / small text lost by global DBNet downsampling.
 	if tiled and h >= 1000:
-		def _overlaps_existing(p1: np.ndarray, p2: np.ndarray) -> bool:
+		def _overlaps_existing(p1: np.ndarray, p2: np.ndarray) -> tuple[bool, float, float]:
 			xs1, ys1 = p1[:, 0], p1[:, 1]
 			xs2, ys2 = p2[:, 0], p2[:, 1]
 			x0 = max(float(xs1.min()), float(xs2.min()))
@@ -217,26 +230,53 @@ def recognize_full(img_bgr: np.ndarray, tiled: bool = True) -> list[tuple[np.nda
 			a1 = max(1.0, float((xs1.max() - xs1.min()) * (ys1.max() - ys1.min())))
 			a2 = max(1.0, float((xs2.max() - xs2.min()) * (ys2.max() - ys2.min())))
 			iou = inter / max(1.0, a1 + a2 - inter)
-			return iou >= 0.30 or (inter / a1 >= 0.40)
+			ovr = inter / a1
+			return (iou >= 0.30 or ovr >= 0.40), iou, ovr
 
 		slice_h = 500
-		step = 350
+		step_y = 300
+		x_steps = [(0, w)]
+		if w >= 600:
+			half_w = int(w * 0.52)
+			step_w = int(w * 0.48)
+			x_steps.extend([(0, half_w), (step_w, w)])
+
+		_CHINESE_CHAR_RE = re.compile(r'[\u4e00-\u9fa5]')
+
 		y = 0
 		while y < h:
 			y_end = min(h, y + slice_h)
-			crop = img_bgr[y:y_end, 0:w]
-			c_txts, c_scores, c_boxes = _run_engine(crop)
-			for b, t, s in zip(c_boxes, c_txts, c_scores):
-				t_str = str(t).strip()
-				if not t_str or float(s) < 0.65:
-					continue
-				shifted = b.copy()
-				shifted[:, 1] += y
-				if not any(_overlaps_existing(shifted, existing_b) for existing_b, _, _ in out):
-					out.append((shifted, t_str, float(s)))
+			for cx0, cx1 in x_steps:
+				crop = img_bgr[y:y_end, cx0:cx1]
+				c_txts, c_scores, c_boxes = _run_engine(crop)
+				for b, t, s in zip(c_boxes, c_txts, c_scores):
+					t_str = str(t).strip()
+					s_flt = float(s)
+					has_cn = bool(_CHINESE_CHAR_RE.search(t_str))
+					min_score = 0.50 if has_cn else 0.70
+					if not t_str or s_flt < min_score:
+						continue
+					shifted = b.copy()
+					shifted[:, 0] += cx0
+					shifted[:, 1] += y
+
+					matched_idx = -1
+					for idx, (existing_b, existing_t, existing_s) in enumerate(out):
+						overlaps, _, _ = _overlaps_existing(shifted, existing_b)
+						if overlaps:
+							matched_idx = idx
+							break
+
+					if matched_idx == -1:
+						out.append((shifted, t_str, s_flt))
+					else:
+						existing_b, existing_t, existing_s = out[matched_idx]
+						has_cn_old = bool(_CHINESE_CHAR_RE.search(existing_t))
+						if (has_cn and not has_cn_old) or (s_flt > existing_s + 0.05) or (has_cn and s_flt >= 0.70 and existing_s < 0.70):
+							out[matched_idx] = (shifted, t_str, max(s_flt, existing_s))
 			if y_end >= h:
 				break
-			y += step
+			y += step_y
 
 	return out
 

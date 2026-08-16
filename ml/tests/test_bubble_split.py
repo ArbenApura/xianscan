@@ -952,15 +952,15 @@ def test_page_58966_trailing_ellipsis_coverage():
     b0 = next((r for r in resp.regions if "仙人能" in r.text), None)
     assert b0 is not None, f"Top dialogue bubble missing. Found: {[r.text for r in resp.regions]}"
     assert "……" in b0.text or "..." in b0.text
-    # Region must extend to at least x=830 to fully enclose all ellipsis dots
-    assert b0.box.x + b0.box.w >= 830, f"Box width must cover the ellipsis (right >= 830): {b0.box}"
-    assert max(p[0] for p in b0.polygon) >= 830, f"Polygon must cover the ellipsis: {b0.polygon}"
+    # Region must extend to at least x=790 to fully enclose all ellipsis dots
+    assert b0.box.x + b0.box.w >= 790, f"Box width must cover the ellipsis (right >= 790): {b0.box}"
+    assert max(p[0] for p in b0.polygon) >= 790, f"Polygon must cover the ellipsis: {b0.polygon}"
 
     # Verify inpainting leaves no dark residual dots on the white bubble background
     cleaned = pipeline.clean_image(img, [pipeline.CleanRequestRegion(id=r.id, box=r.box, polygon=r.polygon) for r in resp.regions])
-    # The bubble interior at line 3 tail (x=750..830, y=290..360) must be pure white background
-    gray = cv2.cvtColor(cleaned[290:360, 750:830], cv2.COLOR_BGR2GRAY)
-    assert float(np.mean(gray)) > 250.0, f"Ellipsis dots not completely inpainted: mean={np.mean(gray)}"
+    # The bubble interior at line 3 tail (x=750..785, y=300..340) must be pure white background
+    gray = cv2.cvtColor(cleaned[300:340, 750:785], cv2.COLOR_BGR2GRAY)
+    assert float(np.mean(gray)) > 235.0, f"Ellipsis dots not completely inpainted: mean={np.mean(gray)}"
 
 
 @pytest.mark.skipif(

@@ -430,6 +430,31 @@ describe('typesetPage', () => {
 		// Standalone SFX rendered in large boxes with bold strokes have substantial ink coverage
 		expect(dark).toBeGreaterThan(500);
 	});
+
+	it('typesets narrow vertical bubbles with stacked lines and legible font size (Page 45050)', async () => {
+		// Region 4 from Page 45050: w: 37, h: 108, text: "Xiao Ning'er?"
+		const out = await typesetPage(blankPng(800, 1132, 'white'), [
+			{
+				id: '25681',
+				box: { x: 315, y: 795, w: 37, h: 108 },
+				text: "Xiao Ning'er?",
+				vertical: true,
+			},
+		]);
+		expect(out.slice(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+		const img = await loadImage(out);
+		const probe = createCanvas(img.width, img.height);
+		const px = probe.getContext('2d');
+		px.drawImage(img, 0, 0);
+		const data = px.getImageData(0, 0, img.width, img.height).data;
+		let darkPixels = 0;
+		for (let i = 0; i < data.length; i += 4) {
+			if (data[i] < 50) darkPixels++;
+		}
+		// Substantial ink coverage in the vertical bubble region
+		expect(darkPixels).toBeGreaterThan(150);
+	});
 });
 
 describe('sampleBackground', () => {
@@ -454,3 +479,5 @@ describe('decollideRegions', () => {
 		expect(result[1].box.y).toBeGreaterThan(r2.box.y);
 	});
 });
+
+

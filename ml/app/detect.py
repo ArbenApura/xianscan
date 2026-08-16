@@ -272,6 +272,8 @@ def _is_watermark_line(text: str | None) -> bool:
 		return False
 	if _WATERMARK_RE.search(trimmed):
 		return True
+	if not bool(_CHINESE_RE.search(trimmed)) and re.search(r'\b(?:com|net|org|cn|cc|xyz|top|me|tv|app|http|https|www)\b', trimmed, re.IGNORECASE):
+		return True
 	return False
 
 
@@ -282,6 +284,8 @@ def is_pure_watermark_region(text: str | None) -> bool:
 	trimmed = text.strip()
 	if not trimmed:
 		return False
+	if re.fullmatch(r"^(?:200|300|000|[0oO·•]{2,4})$", trimmed):
+		return True
 	if _WATERMARK_RE.search(trimmed):
 		cleaned = _WATERMARK_RE.sub('', trimmed)
 		cleaned = _WATERMARK_RE.sub('', cleaned)
@@ -372,6 +376,14 @@ def merge_text_lines(
 				and (h <= 0.65 * lh or w <= 160 or not txt.strip() or bool(_PUNCT_ONLY.fullmatch(txt.strip()) or _ALL_ELLIPSIS.fullmatch(txt.strip())))
 			)
 
+			# DISTINCT MULTI-CHARACTER CLAUSE GUARD:
+			# TWO DISTINCT FULL-TEXT CLAUSES (>= 3 CHINESE CHARACTERS EACH) SEPARATED BY A POSITIVE GAP
+			# BELONG TO SEPARATE ADJACENT SPEECH BUBBLES SITTING ON THE SAME ROW.
+			has_words_l = bool(l_txt.strip() and _CHINESE_RE.search(l_txt) and len(l_txt.strip()) >= 3)
+			has_words_r = bool(txt.strip() and _CHINESE_RE.search(txt) and len(txt.strip()) >= 3)
+			if has_words_l and has_words_r and gap >= max(8.0, 0.25 * max(h, lh)):
+				continue
+
 			if not is_same_line_detection and not is_trailing_segment and max(h, lh) / max(1.0, float(min_h)) > height_sim_max:
 				continue
 			# SUSPICIOUS X-OVERLAP GUARD: WHEN TWO BOXES OVERLAP IN X BY MORE THAN
@@ -391,9 +403,13 @@ def merge_text_lines(
 			# AND THEY ARE SEPARATE UTTERANCES (NOT A NEAR-IDENTICAL DUPLICATE DETECTION OF THE SAME LINE),
 			# IT IS A FINISHED SENTENCE IN ANOTHER BUBBLE.
 			if l_txt and l_txt.rstrip().endswith(_TERMINAL_PUNCTUATION) and gap >= -max(h, lh) * 0.40:
-				union_w = max(x1, lx1) - min(x, lx0)
-				if union_w > max(w, lx1 - lx0) * 1.20:
-					continue  # DIFFERENT SPEECH BUBBLES -- DO NOT HORIZONTALLY MERGE
+				is_ui_prefix = bool(re.search(r"^(?:嘟|叮|提示|系统|注意)[!！:：]?$", l_txt.strip()))
+				if is_ui_prefix and gap <= 1.2 * max(h, lh):
+					pass  # ALLOW SYSTEM UI CARD / ONOMATOPOEIA PREFIX MERGING ON SAME ROW
+				else:
+					union_w = max(x1, lx1) - min(x, lx0)
+					if union_w > max(w, lx1 - lx0) * 1.20:
+						continue  # DIFFERENT SPEECH BUBBLES -- DO NOT HORIZONTALLY MERGE
 
 			ln[0] = min(lx0, x)
 			ln[1] = min(ly0, y)
@@ -502,7 +518,7 @@ def group_paragraphs(
 				or (len(txt.strip()) > 0 and len(txt.strip()) <= 3 and not txt.strip().endswith(("，", ",", "、", ":", "：")) and eff_h <= eff_lh * 1.80)
 				or is_parenthetical
 			)
-			gap_multiplier = 2.8 if is_parenthetical else (1.4 if is_trailing_tail else 1.0)
+			gap_multiplier = 2.8 if is_parenthetical else (1.8 if is_trailing_tail else 1.0)
 			max_allowed_gap = gap_factor * gap_multiplier * min_eff_h
 			if gap > max_allowed_gap or y < ly - 0.35 * min_eff_h:
 				continue
@@ -541,7 +557,8 @@ def group_paragraphs(
 				if height_ratio > 2.5:
 					continue
 			else:
-				max_allowed_ratio = 2.0 if (cand_line_count > 1 or last_line_count > 1) else height_sim_max
+				is_tight_bubble_pair = gap <= 0.35 * min_eff_h and overlap >= 0.50 * min(w, lw) and (is_left_aligned or is_right_aligned or abs(new_cx - para_mean_cx) <= 0.30 * min(w, lw))
+				max_allowed_ratio = 2.0 if (cand_line_count > 1 or last_line_count > 1) else (1.75 if is_tight_bubble_pair else height_sim_max)
 				if height_ratio > max_allowed_ratio:
 					continue
 
