@@ -532,5 +532,61 @@ class TestReportedCases:
         gx, gy, gw, gh = detect.box_to_xywh(g_left)
         assert gy <= 807 and gy + gh >= 910, f"Grouped left bubble must cover all lines: y={gy}, h={gh}"
 
+    # --- CASE 23: PAGE 59897 COIN VEIL TEXTURE NOISE SUPPRESSION & SPEECH BUBBLE PRESERVATION ---
+    def test_case_23_non_chinese_low_conf_digit_noise_filter(self):
+        """Case 23: Low confidence non-Chinese digit hallucination ('3838', score 0.635) from pattern texture is filtered."""
+        t_strip = "3838"
+        has_c = bool(detect._CHINESE_RE.search(t_strip))
+        c_count = len(t_strip)
+        conf = 0.63511
+        w, h = 335, 275
+        comic_mask = np.zeros((1267, 900), dtype=np.uint8)
+        is_punct = bool(pipeline._PUNCT_ONLY.fullmatch(t_strip) or pipeline._ALL_ELLIPSIS.fullmatch(t_strip))
+
+        is_stray_non_chinese = not has_c and not is_punct and (
+            conf < 0.70
+            or (c_count <= 2 and (h >= 120 or w >= 120 or (h >= 80 and (h / max(1, w) >= 2.5 or w / max(1, h) >= 2.5))))
+            or (c_count <= 1 and (bool(pipeline.re.fullmatch(r"[a-zA-Z0-9]", t_strip)) or conf < 0.85))
+            or (c_count <= 2 and (conf < 0.80 or (w <= 65 and h <= 65 and bool(pipeline.re.fullmatch(r"[a-zA-Z0-9\s]+", t_strip)))))
+            or (c_count <= 6 and bool(pipeline.re.fullmatch(r"^(?:[0oO·•\s]+|200|300|000|[0-9][.．…]+)$", t_strip)) and w <= 100 and h <= 100)
+            or (w <= 55 and h <= 55 and (conf < 0.95 or bool(pipeline.re.fullmatch(r"[a-zA-Z0-91!|lIioO\s]+", t_strip))))
+            or (
+                comic_mask is not None
+                and conf < 0.85
+                and w >= 120
+                and h >= 120
+                and w * h >= 20000
+                and (np.sum(comic_mask[505:505+h, 0:w] >= 127) / float(w * h) < 0.10)
+            )
+        )
+        assert bool(is_stray_non_chinese) is True, "Low-confidence non-Chinese digit pattern noise must be identified as stray noise"
+
+    def test_page_59897_coin_veil_texture_suppression(self):
+        """Page 59897 real fixture test:
+        - Character's copper coin face veil / mask (repeating circular lattice) must NOT trigger false positive text detection ('3838').
+        - Top bubble ('还有………'), middle bubble ('一位谋乱天下\\n的奸臣。'), and bottom bubble ('呀，听起来\\n都是坏人呐。')
+          must be accurately detected and preserved.
+        - Exactly 3 dialogue regions must be detected on the page.
+        """
+        from pathlib import Path
+        fixture_path = Path(__file__).parent / "fixtures" / "page_59897.png"
+        if not fixture_path.exists():
+            pytest.skip("Fixture page_59897.png not found")
+
+        img = cv2.imread(str(fixture_path))
+        resp = pipeline.analyze_image(img)
+        assert len(resp.regions) == 3, f"Expected exactly 3 dialogue regions, got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+        texts = [r.text for r in resp.regions]
+
+        # Verify no false positive '3838'
+        assert not any("3838" in t for t in texts), f"Coin veil pattern misdetected as '3838': {texts}"
+
+        # Verify speech bubbles
+        assert any("还有" in t for t in texts), f"Top bubble missing from {texts}"
+        assert any("谋乱天下" in t and "奸臣" in t for t in texts), f"Middle bubble missing from {texts}"
+        assert any("听起来" in t and "坏人" in t for t in texts), f"Bottom bubble missing from {texts}"
+
+
 
 

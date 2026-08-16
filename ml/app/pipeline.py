@@ -1612,11 +1612,20 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		c_count = len(re.sub(r"\s+", "", t_strip))
 		is_punct = bool(_PUNCT_ONLY.fullmatch(t_strip) or _ALL_ELLIPSIS.fullmatch(t_strip))
 		is_stray_non_chinese = not has_c and not is_punct and (
-			(c_count <= 2 and (r.box.h >= 120 or r.box.w >= 120 or (r.box.h >= 80 and (r.box.h / max(1, r.box.w) >= 2.5 or r.box.w / max(1, r.box.h) >= 2.5))))
+			r.confidence < 0.70
+			or (c_count <= 2 and (r.box.h >= 120 or r.box.w >= 120 or (r.box.h >= 80 and (r.box.h / max(1, r.box.w) >= 2.5 or r.box.w / max(1, r.box.h) >= 2.5))))
 			or (c_count <= 1 and (bool(re.fullmatch(r"[a-zA-Z0-9]", t_strip)) or r.confidence < 0.85))
 			or (c_count <= 2 and (r.confidence < 0.80 or (r.box.w <= 65 and r.box.h <= 65 and bool(re.fullmatch(r"[a-zA-Z0-9\s]+", t_strip)))))
 			or (c_count <= 6 and bool(re.fullmatch(r"^(?:[0oO·•\s]+|200|300|000|[0-9][.．…]+)$", t_strip)) and r.box.w <= 100 and r.box.h <= 100)
 			or (r.box.w <= 55 and r.box.h <= 55 and (r.confidence < 0.95 or bool(re.fullmatch(r"[a-zA-Z0-91!|lIioO\s]+", t_strip))))
+			or (
+				comic_mask is not None
+				and r.confidence < 0.85
+				and r.box.w >= 120
+				and r.box.h >= 120
+				and r.box.w * r.box.h >= 20000
+				and (np.sum(comic_mask[max(0, r.box.y):min(page_h, r.box.y + r.box.h), max(0, r.box.x):min(page_w, r.box.x + r.box.w)] >= 127) / float(r.box.w * r.box.h) < 0.10)
+			)
 		)
 		is_unsupported_char_noise = (
 			c_count == 1
