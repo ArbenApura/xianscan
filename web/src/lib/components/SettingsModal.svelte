@@ -52,7 +52,11 @@
 		available_providers: string[];
 		has_cuda: boolean;
 		has_directml: boolean;
+		has_directml_raw?: boolean;
 		has_coreml: boolean;
+		has_dedicated_gpu?: boolean;
+		detected_gpus?: Array<{ device_id: number; name: string; vram_mb: number; is_dedicated: boolean; is_integrated: boolean }>;
+		gpu_warning?: string | null;
 	}
 
 	interface ProviderInfo {
@@ -195,8 +199,14 @@
 
 	function getDeviceAvailabilityReason(devId: ExecutionDevice): string | null {
 		if (!hardwareInfo) return null;
-		if (devId === 'cuda' && !hardwareInfo.has_cuda) return 'CUDA / GPU provider not detected';
-		if (devId === 'dml' && !hardwareInfo.has_directml) return 'DirectML DirectX 12 provider not detected';
+		if (devId === 'cuda' && !hardwareInfo.has_cuda) return 'Dedicated NVIDIA CUDA GPU not detected';
+		if (devId === 'dml' && !hardwareInfo.has_directml) {
+			if (hardwareInfo.detected_gpus && hardwareInfo.detected_gpus.some((g) => g.is_integrated)) {
+				const igpuName = hardwareInfo.detected_gpus.find((g) => g.is_integrated)?.name || 'Integrated GPU';
+				return `Only ${igpuName} detected. DirectML disabled to protect system against freezing and driver TDR crashes.`;
+			}
+			return 'Dedicated GPU for DirectML not detected';
+		}
 		return null;
 	}
 
@@ -219,6 +229,7 @@
 			});
 			if (res.ok) {
 				hardwareInfo = (await res.json()) as HardwareInfo;
+				void mlStatus.checkHealth();
 			}
 		} catch {
 			// Ignore offline
@@ -828,6 +839,16 @@
 							</button>
 						{/each}
 					</div>
+
+					{#if hardwareInfo?.gpu_warning}
+						<div class="mt-3 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-800 dark:text-amber-300 text-[11px] leading-relaxed">
+							<Activity size={14} class="shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+							<div>
+								<span class="font-bold">Integrated GPU Protected:</span>
+								<span>{hardwareInfo.gpu_warning}</span>
+							</div>
+						</div>
+					{/if}
 				</div>
 
 				<!-- SMART PRE-RESLICING TOGGLE -->

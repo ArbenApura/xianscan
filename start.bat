@@ -36,7 +36,7 @@ if not exist "ml\models\comictextdetector.pt.onnx" (
     ml\.venv\Scripts\python.exe ml\scripts\download_models.py
 )
 
-:: 4. SETUP WEB ENVIRONMENT
+:: 4. SETUP WEB ENVIRONMENT & BUILD
 if not exist "web\node_modules" (
     echo [*] Installing web application dependencies...
     cd web
@@ -44,15 +44,30 @@ if not exist "web\node_modules" (
     cd ..
 )
 
+if not exist "web\build\index.js" (
+    echo [*] Production build not found. Building web application...
+    cd web
+    call npm run build
+    cd ..
+)
+
+:: 5. FREE PORTS IF OLD INSTANCES ARE LINGERING
+for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":8123" ^| findstr "LISTENING"') do (
+    taskkill /F /PID %%a >nul 2>nul
+)
+for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":8124" ^| findstr "LISTENING"') do (
+    taskkill /F /PID %%a >nul 2>nul
+)
+
 echo.
 echo ================================================================
-echo   [+] Starting ML Sidecar on http://127.0.0.1:8001
-echo   [+] Starting Web App on    http://localhost:5173
+echo   [+] Starting ML Sidecar on http://127.0.0.1:8123
+echo   [+] Starting Web App on    http://localhost:8124
 echo ================================================================
 echo.
 
 :: Launch ML Sidecar in background window and Web App in foreground
-start "XianScan ML Backend" cmd /k "cd /d "%~dp0ml" && ..\ml\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload"
+start "XianScan ML Backend" cmd /k "cd /d "%~dp0ml" && ..\ml\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8123 --reload"
 
 cd /d "%~dp0web"
-call npm run dev
+call npm run preview

@@ -29,16 +29,21 @@ if [ ! -f "ml/models/comictextdetector.pt.onnx" ]; then
     ml/.venv/bin/python ml/scripts/download_models.py
 fi
 
-# 4. SETUP WEB ENVIRONMENT
+# 4. SETUP WEB ENVIRONMENT & BUILD
 if [ ! -d "web/node_modules" ]; then
     echo "[*] Installing web application dependencies..."
     cd web && npm install && cd ..
 fi
 
+if [ ! -f "web/build/index.js" ]; then
+    echo "[*] Production build not found. Building web application..."
+    cd web && npm run build && cd ..
+fi
+
 echo ""
 echo "================================================================"
-echo "  [+] Starting ML Sidecar on http://127.0.0.1:8001"
-echo "  [+] Starting Web App on    http://localhost:5173"
+echo "  [+] Starting ML Sidecar on http://127.0.0.1:8123"
+echo "  [+] Starting Web App on    http://localhost:8124"
 echo "================================================================"
 echo ""
 
@@ -51,7 +56,7 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-(cd ml && .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8001) &
-(cd web && npm run dev) &
+(cd ml && .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8123) &
+(cd web && npm run preview) &
 
 wait

@@ -129,7 +129,7 @@ pip install -r requirements.txt
 python scripts/download_models.py
 
 # Start ML sidecar
-uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
+uvicorn app.main:app --host 127.0.0.1 --port 8123 --reload
 ```
 
 ### 3. Setup Web Application
@@ -153,7 +153,7 @@ npm run db:migrate
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser!
+Open [http://localhost:8124](http://localhost:8124) in your browser!
 
 ---
 
@@ -180,7 +180,7 @@ Xianscan is built with **zero-configuration hardware auto-detection**. You never
 | `DEEPSEEK_API_KEY` | *None* | DeepSeek API key for LLM translations. |
 | `DEEPSEEK_BASE_URL`| `https://api.deepseek.com` | Custom OpenAI-compatible LLM endpoint. |
 | `DEEPSEEK_MODEL`   | `deepseek-v4-flash` | Translation model (`deepseek-v4-flash` or `deepseek-v4-pro`). |
-| `ML_BASE_URL`      | `http://127.0.0.1:8001` | URL of the Python ML sidecar service. |
+| `ML_BASE_URL`      | `http://127.0.0.1:8123` | URL of the Python ML sidecar service. |
 | `DATABASE_URL`     | `data/manua.db` | SQLite database storage path. |
 | `PIPELINE_PAGE_CONCURRENCY` | `3` | Number of pages processed in parallel per pipeline phase. |
 

@@ -11,6 +11,8 @@ export interface MLStatusState {
 	hasCuda: boolean;
 	hasDirectMl: boolean;
 	hasCoreMl: boolean;
+	hasDedicatedGpu: boolean;
+	gpuWarning: string | null;
 	loading: boolean;
 	lastChecked: number | null;
 	error: string | null;
@@ -23,6 +25,8 @@ const initialState: MLStatusState = {
 	hasCuda: false,
 	hasDirectMl: false,
 	hasCoreMl: false,
+	hasDedicatedGpu: false,
+	gpuWarning: null,
 	loading: true,
 	lastChecked: null,
 	error: null,
@@ -62,6 +66,8 @@ function createMLStatusStore() {
 				hasCuda: Boolean(data.has_cuda),
 				hasDirectMl: Boolean(data.has_directml),
 				hasCoreMl: Boolean(data.has_coreml),
+				hasDedicatedGpu: Boolean(data.has_dedicated_gpu),
+				gpuWarning: data.gpu_warning || null,
 				loading: false,
 				lastChecked: Date.now(),
 				error: data.error || null,

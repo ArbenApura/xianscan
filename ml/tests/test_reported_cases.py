@@ -587,6 +587,37 @@ class TestReportedCases:
         assert any("谋乱天下" in t and "奸臣" in t for t in texts), f"Middle bubble missing from {texts}"
         assert any("听起来" in t and "坏人" in t for t in texts), f"Bottom bubble missing from {texts}"
 
+    # --- CASE 24: PAGE 58995 DIALOGUE BOUNDARY CLAMPING & SFX RECOVERY ---
+    def test_page_58995_dialogue_boundary_and_sfx_detection(self):
+        """Page 58995 real fixture test:
+        - Top speech bubble ('这里被称为“南蛮之地”，\\n野兽毒虫肆虐，人口\\n稀少，与世隔绝，')
+          must NOT expand boundary rightward into watermark margins (w <= 485px, x+w <= 545px).
+        - Bottom sound effect ('哒' hooves SFX) at y >= 1200 must be detected and captured.
+        - Exactly 2 regions (1 dialogue + 1 SFX) must be detected on the page.
+        """
+        from pathlib import Path
+        fixture_path = Path(__file__).parent / "fixtures" / "page_58995.png"
+        if not fixture_path.exists():
+            pytest.skip("Fixture page_58995.png not found")
+
+        img = cv2.imread(str(fixture_path))
+        resp = pipeline.analyze_image(img)
+        assert len(resp.regions) == 2, f"Expected 2 regions (1 dialogue + 1 SFX), got {len(resp.regions)}: {[r.text for r in resp.regions]}"
+
+        # Check dialogue bubble boundary
+        dialogue = next((r for r in resp.regions if "南蛮之地" in r.text), None)
+        assert dialogue is not None, "Top dialogue bubble missing"
+        assert "野兽毒虫" in dialogue.text
+        assert "与世隔绝" in dialogue.text
+        assert dialogue.box.w <= 485, f"Dialogue bubble over-expanded rightward: w={dialogue.box.w}"
+        assert dialogue.box.x + dialogue.box.w <= 545, f"Dialogue bubble exceeds right text boundary: x+w={dialogue.box.x + dialogue.box.w}"
+
+        # Check bottom SFX
+        sfx = next((r for r in resp.regions if "哒" in r.text or "啦" in r.text), None)
+        assert sfx is not None, f"Bottom hooves SFX missing: {[r.text for r in resp.regions]}"
+        assert sfx.box.y >= 1150, f"SFX box y-position unexpected: {sfx.box}"
+        assert sfx.angle > 5.0, f"SFX should have detected slanted angle (>5.0 deg): angle={sfx.angle}"
+
 
 
 

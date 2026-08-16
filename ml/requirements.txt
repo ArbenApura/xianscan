@@ -1,9 +1,8 @@
 # ML SIDECAR RUNTIME DEPENDENCIES — `pip install -r requirements.txt` INTO THE VENV.
 fastapi>=0.115
 uvicorn[standard]>=0.30
-# AUTO-ACCELERATION: DirectML on Windows (AMD/Intel/NVIDIA GPU + CPU fallback), Standard CPU on Linux/macOS
-onnxruntime-directml>=1.19; sys_platform == 'win32'
-onnxruntime>=1.19; sys_platform != 'win32'
+# Universal high-performance multi-threaded CPU ONNX runtime (AVX2/SIMD)
+onnxruntime>=1.19
 rapidocr>=3.0
 opencv-python-headless>=4.10
 numpy>=1.26

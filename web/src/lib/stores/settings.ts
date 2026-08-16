@@ -69,10 +69,10 @@ export const INPAINT_MODES: { id: InpaintMode; label: string; tag: string; badge
 ];
 
 export const EXECUTION_DEVICES: { id: ExecutionDevice; label: string; blurb: string }[] = [
-	{ id: 'auto', label: 'Auto Detect', blurb: 'Automatically selects fastest available accelerator' },
-	{ id: 'cuda', label: 'NVIDIA Dedicated GPU (CUDA)', blurb: 'High-performance tensor acceleration on NVIDIA GPUs' },
-	{ id: 'dml', label: 'DirectML / Integrated GPU', blurb: 'DirectX 12 acceleration on Intel, AMD, or Qualcomm GPUs' },
-	{ id: 'cpu', label: 'CPU Multi-threaded', blurb: 'Universal safe execution on multi-core CPU' },
+	{ id: 'auto', label: 'Auto Detect', blurb: 'Automatically selects Dedicated GPU or CPU Multi-threaded (safely avoids iGPU)' },
+	{ id: 'cuda', label: 'NVIDIA Dedicated GPU (CUDA)', blurb: 'High-performance tensor acceleration on NVIDIA GeForce/RTX GPUs' },
+	{ id: 'dml', label: 'DirectML (Dedicated GPU)', blurb: 'DirectX 12 acceleration on dedicated AMD Radeon RX, Intel Arc, or NVIDIA GPUs' },
+	{ id: 'cpu', label: 'CPU Multi-threaded', blurb: 'Fast, crash-free execution on multi-core CPU (recommended for non-dGPU)' },
 ];
 
 export const APP_FONTS: { id: AppFont; label: string; sample: string; blurb: string; stack: string }[] = [

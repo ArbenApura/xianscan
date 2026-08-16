@@ -450,6 +450,8 @@ def _apply_mask_growth(
 	page_h: int = 0,
 	other_boxes: list[np.ndarray] | None = None,
 	ocr_img: np.ndarray | None = None,
+	color_wm: np.ndarray | None = None,
+	watermark_boxes: list[np.ndarray] | None = None,
 ) -> None:
 	try:
 		if comic_mask is None or not region.polygon or detect._is_watermark_line(region.text):
@@ -459,11 +461,18 @@ def _apply_mask_growth(
 		prev_right = max(p[0] for p in orig_polygon)
 
 		growth_mask = comic_mask
-		if other_boxes:
+		if other_boxes or watermark_boxes or (color_wm is not None and np.count_nonzero(color_wm) > 0):
 			growth_mask = comic_mask.copy()
-			for ob in other_boxes:
-				ox, oy, ow, oh = detect.box_to_xywh(ob)
-				growth_mask[max(0, oy) : min(growth_mask.shape[0], oy + oh), max(0, ox) : min(growth_mask.shape[1], ox + ow)] = 0
+			if other_boxes:
+				for ob in other_boxes:
+					ox, oy, ow, oh = detect.box_to_xywh(ob)
+					growth_mask[max(0, oy) : min(growth_mask.shape[0], oy + oh), max(0, ox) : min(growth_mask.shape[1], ox + ow)] = 0
+			if watermark_boxes:
+				for wb in watermark_boxes:
+					wx, wy, ww, wh = detect.box_to_xywh(wb)
+					growth_mask[max(0, wy) : min(growth_mask.shape[0], wy + wh), max(0, wx) : min(growth_mask.shape[1], wx + ww)] = 0
+			if color_wm is not None and np.count_nonzero(color_wm) > 0:
+				growth_mask[color_wm > 0] = 0
 
 		grown = _grow_polygon_by_mask(orig_polygon, growth_mask)
 		if grown is not None and grown != orig_polygon:
@@ -827,16 +836,17 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 	# ALSO DROP GIANT ARTWORK BOXES (h >= 150 and w >= 250) THAT CONTAIN ONLY A FEW LATIN / NON-CHINESE CHARACTERS.
 	clean_rapid_lines = []
 	for pts, t, s, line_angle in normalized_rapid_lines:
+		clean_t = t.strip()
 		_lx, _ly, lw, lh = detect.box_to_xywh(pts)
 		char_count = max(1, len(re.sub(r'\s+', '', t)))
 		has_chinese = bool(detect._CHINESE_RE.search(t))
-		is_circle_noise = bool(re.fullmatch(r'^[0oO·•\s]{1,6}$', t.strip())) and not has_chinese
+		is_circle_noise = bool(re.fullmatch(r'^[0oO·•\s]{1,6}$', clean_t)) and not has_chinese
 		is_in_bubble = bool(comic_boxes and any(detect.line_center_inside(pts, cb) for cb in comic_boxes))
 		is_sfx_tail = bool(re.search(r"[-—―_~～·.．…!！?？]", t))
-		is_sfx_glyph = any(k in clean_t for k in ("噗", "轰", "咚", "咳", "啪", "砰", "咔", "唰", "嘭", "哇", "嗷", "嘶", "呜", "呼", "哈", "！", "!"))
+		is_sfx_glyph = any(k in clean_t for k in ("噗", "轰", "咚", "咳", "啪", "砰", "咔", "唰", "嘭", "哇", "嗷", "嘶", "呜", "呼", "哈", "哒", "嗒", "踏", "铛", "铮", "刷", "咻", "嗖", "哧", "嚓", "哐", "咕", "嗡", "吼", "鸣", "飒", "吱", "咯", "嘎", "喳", "沙", "！", "!"))
 		is_giant_artwork = (
 			is_circle_noise
-			or (not is_in_bubble and not is_sfx_tail and char_count >= 2 and lh >= 100 and (lw / char_count) >= 90 and s < 0.85)
+			or (not is_in_bubble and not is_sfx_tail and not is_sfx_glyph and char_count >= 2 and lh >= 100 and (lw / char_count) >= 90 and s < 0.85)
 			or (not is_in_bubble and not is_sfx_tail and not is_sfx_glyph and char_count <= 2 and lh >= 100 and lw >= 140)
 			or (not is_in_bubble and not has_chinese and lh >= 100 and (lw / char_count) >= 90 and s < 0.85)
 			or (lh >= 180 and lw >= 350 and not has_chinese)
@@ -851,6 +861,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 	# RECOVER CHINESE TEXT FUSED WITH TRAILING/LEADING WATERMARK DOMAINS (e.g. "生活人ugMerge.com" -> "生活人才")
 	recovered_rapid_lines = []
+	detected_watermark_boxes = []
 	for pts, t, s, line_angle in clean_rapid_lines:
 		clean_t = t.strip()
 		x, y, w, h = detect.box_to_xywh(pts)
@@ -876,9 +887,11 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 				chinese_part = clean_t[:wm_match.start()].rstrip(" ,.:;-_")
 				if chinese_part:
 					clean_t = chinese_part + ("，" if ("，" in clean_t or "," in clean_t) and not chinese_part.endswith(("，", ",")) else "")
+			detected_watermark_boxes.append(np.array([[x + clipped_w, y], [x + w, y], [x + w, y + h], [x + clipped_w, y + h]], dtype=np.float64))
 			pts = np.array([[x, y], [x + clipped_w, y], [x + clipped_w, y + h], [x, y + h]], dtype=np.float64)
 			line_angle = detect.calculate_box_angle(pts)
 		elif not has_chinese and detect._is_watermark_line(clean_t):
+			detected_watermark_boxes.append(pts)
 			continue
 		clean_t = _recover_missing_interjection(ocr_img, pts, clean_t)
 		recovered_rapid_lines.append((pts, clean_t, s, line_angle))
@@ -1304,7 +1317,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 											if widened != cg_reg.polygon:
 												cg_reg.polygon = widened
 												bx, by, bw, bh = _polygon_bounds(cg_reg.polygon)
-										_apply_mask_growth(cg_reg, comic_mask, cg_poly, len(cg_matched), box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img)
+										_apply_mask_growth(cg_reg, comic_mask, cg_poly, len(cg_matched), box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img, color_wm=color_wm, watermark_boxes=detected_watermark_boxes)
 										regions.append(cg_reg)
 									continue
 								else:
@@ -1375,7 +1388,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 				# MASK-GUIDED GROWTH FOR s_region (EXCLUDING OTHER LINES TO PREVENT INVADING NEIGHBOURING BUBBLES)
 				other_lines = [l[0] for l in rapid_lines if not any(detect.box_iou(l[0], sm[0]) > 0.50 for sm in s_matched)]
-				_apply_mask_growth(s_region, comic_mask, hull_pts, len(s_matched), box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img)
+				_apply_mask_growth(s_region, comic_mask, hull_pts, len(s_matched), box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img, color_wm=color_wm, watermark_boxes=detected_watermark_boxes)
 				regions.append(s_region)
 		else:
 			crop = ocr.crop_region(ocr_img, box, margin=2)
@@ -1429,7 +1442,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 						angle=float(np.median([a for _l, _t, _s, a in s_matched])) if s_matched else 0.0,
 					)
 					other_lines = [l[0] for l in rapid_lines if not any(detect.box_iou(l[0], sm[0]) > 0.50 for sm in s_matched)]
-					_apply_mask_growth(sub_reg, comic_mask, sub_poly, len(s_matched), box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img)
+					_apply_mask_growth(sub_reg, comic_mask, sub_poly, len(s_matched), box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img, color_wm=color_wm, watermark_boxes=detected_watermark_boxes)
 					regions.append(sub_reg)
 			elif ocr_result:
 				region.text = _clean_stray_ocr_artifacts(ocr_result.text)
@@ -1460,7 +1473,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 
 				# MASK-GUIDED GROWTH FOR crop region
 				other_lines = [l[0] for l in rapid_lines if detect.box_iou(l[0], box) <= 0.50]
-				_apply_mask_growth(region, comic_mask, None, 0, box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img)
+				_apply_mask_growth(region, comic_mask, None, 0, box, page_w, page_h, other_boxes=other_lines, ocr_img=ocr_img, color_wm=color_wm, watermark_boxes=detected_watermark_boxes)
 				regions.append(region)
 
 	# -- STRAY-DOT / EXCLAMATION CLEANUP:

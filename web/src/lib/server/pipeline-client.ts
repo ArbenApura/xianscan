@@ -40,7 +40,11 @@ export interface HardwareStatus {
 	available_providers: string[];
 	has_cuda: boolean;
 	has_directml: boolean;
+	has_directml_raw?: boolean;
 	has_coreml: boolean;
+	has_dedicated_gpu?: boolean;
+	detected_gpus?: Array<{ device_id: number; name: string; vram_mb: number; is_dedicated: boolean; is_integrated: boolean }>;
+	gpu_warning?: string | null;
 }
 
 export interface PipelineClient {
@@ -173,7 +177,7 @@ export class HttpPipelineClient implements PipelineClient {
 export function createPipelineClient(): PipelineClient {
 	const baseUrl = env.ML_BASE_URL ?? '';
 	if (!baseUrl) {
-		throw new Error('ML_BASE_URL is not set — start the ML sidecar (ml/README) and set ML_BASE_URL=http://127.0.0.1:8001');
+		throw new Error('ML_BASE_URL is not set — start the ML sidecar (ml/README) and set ML_BASE_URL=http://127.0.0.1:8123');
 	}
 	return new HttpPipelineClient(baseUrl.replace(/\/+$/, ''));
 }

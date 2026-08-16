@@ -1,6 +1,6 @@
 # MANU-TRANSLATOR ML SIDECAR — FASTAPI ENTRYPOINT.
 #
-#   uvicorn app.main:app --host 127.0.0.1 --port 8001
+#   uvicorn app.main:app --host 127.0.0.1 --port 8123
 #
 # ENDPOINTS:
 #   GET  /health         → {status, detector, inpainter, ocr} (MODEL AVAILABILITY, NOT JUST ALIVE)
@@ -27,8 +27,9 @@ def warmup_models() -> dict[str, bool]:
     print("=" * 64)
     print("  XIANSCAN ML SIDECAR -- HARDWARE ACCELERATION ENGINE")
     print("=" * 64)
+    prov_names = [p[0] if isinstance(p, (tuple, list)) else p for p in config.ORT_PROVIDERS]
     print(f"  * Device / Accelerator : {config.DEVICE_LABEL}")
-    print(f"  * Execution Providers  : {', '.join(config.ORT_PROVIDERS)}")
+    print(f"  * Execution Providers  : {', '.join(prov_names)}")
     print(f"  * Models Directory     : {config.MODELS_DIR}")
     print("-" * 64)
 
@@ -95,7 +96,7 @@ def health() -> dict:
     return {
         "status": "ok",
         "accelerator": config.DEVICE_LABEL,
-        "providers": config.ORT_PROVIDERS,
+        "providers": [p[0] if isinstance(p, (tuple, list)) else p for p in config.ORT_PROVIDERS],
         "detector": "comic-ctd" if pipeline.detector.available() else "rapidocr-fallback",
         "inpainter": available_backend(),
         "ocr": "rapidocr",
@@ -277,4 +278,4 @@ def reslice_pages(files: list[UploadFile] = File(...)) -> Response:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=8001)
+    uvicorn.run(app, host="127.0.0.1", port=8123)
