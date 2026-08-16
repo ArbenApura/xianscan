@@ -52,6 +52,8 @@ if (!globalThis.__mtSqlite) {
 	sqlite.pragma('foreign_keys = ON');
 	sqlite.pragma('busy_timeout = 30000');
 	sqlite.pragma('synchronous = NORMAL');
+	sqlite.pragma('cache_size = -32000');
+	sqlite.pragma('wal_autocheckpoint = 1000');
 	// SELF-HOSTED FRIENDLINESS: RUN PENDING MIGRATIONS AT BOOT SO `npm run dev` / `npm run start` WORK ON
 	// A FRESH CLONE WITHOUT A MANUAL `npm run db:migrate` STEP (migrate RUNS ONLY PENDING ONES — THE
 	migrate(drizzle(sqlite, { schema }), { migrationsFolder: MIGRATIONS_DIR });
@@ -79,9 +81,25 @@ if (!globalThis.__mtSqlite) {
 	} catch {
 		// ignore
 	}
+
+	// CLEAN DB CHECKPOINT AND SHUTDOWN HOOK
+	const closeHandler = () => {
+		try {
+			if (globalThis.__mtSqlite && globalThis.__mtSqlite.open) {
+				globalThis.__mtSqlite.pragma('wal_checkpoint(TRUNCATE)');
+				globalThis.__mtSqlite.close();
+			}
+		} catch {
+			// ignore
+		}
+	};
+	process.once('SIGINT', closeHandler);
+	process.once('SIGTERM', closeHandler);
+	process.once('beforeExit', closeHandler);
 }
 const sqlite = globalThis.__mtSqlite!;
 
 export const db = drizzle(sqlite, { schema });
 
 export { schema };
+

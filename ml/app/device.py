@@ -246,7 +246,13 @@ def create_inference_session(model_path: str | os.PathLike, session_options: Any
 	import onnxruntime as ort
 
 	providers = get_ort_providers()
-	opts = session_options or ort.SessionOptions()
+	if session_options is None:
+		opts = ort.SessionOptions()
+		opts.enable_cpu_mem_arena = False
+		opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+		opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+	else:
+		opts = session_options
 
 	# LaMa's Fast Fourier Convolution (FFC) architecture uses dynamic complex tensor MatMuls
 	# which are not supported by DirectML's HLSL compiler. Run LaMa on multi-threaded CPU when on DirectML.
@@ -284,6 +290,8 @@ def create_inference_session(model_path: str | os.PathLike, session_options: Any
 
 def set_active_provider(mode: str) -> tuple[list[Any], str]:
 	"""DYNAMICALLY SWITCHES THE ACTIVE HARDWARE PROVIDER AND RELOADS RUNNING SESSIONS."""
+	import gc
+
 	global _RESOLVED_PROVIDERS, _DEVICE_LABEL
 	clean_mode = mode.lower().strip()
 	os.environ["MT_DEVICE"] = clean_mode
@@ -294,17 +302,19 @@ def set_active_provider(mode: str) -> tuple[list[Any], str]:
 
 	# HOT-RELOAD RUNNING SESSIONS ACROSS ALL PIPELINE STAGES
 	try:
-		from . import pipeline, ocr, inpaint
+		from . import inpaint, ocr, pipeline
 
 		if pipeline.detector is not None:
 			pipeline.detector._session = None
 		ocr._engine = None
 		inpaint._lama_model = None
 		inpaint._lama_ready.clear()
+		gc.collect()
 	except Exception as e:
 		logger.warning("Could not reset model sessions on device switch: %s", e)
 
 	return providers, label
+
 
 
 def get_hardware_status() -> dict[str, Any]:

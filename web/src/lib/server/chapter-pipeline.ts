@@ -125,7 +125,6 @@ function cleanDir(path: string): void {
 // PER-PAGE SLOT — CARRIES THE PAGE THROUGH THE STAGES; `outcome` DOUBLES AS THE ORDERED-EVENT
 type PageSlot = {
 	page: Page;
-	image?: Buffer;
 	analyzed?: AnalyzeResult;
 	outcome?: 'analyzed' | 'done' | 'error';
 	failedStep?: PipelineStep;
@@ -451,7 +450,6 @@ export async function runChapterPipeline(
 			signal.throwIfAborted();
 			if (deps.isPageCancelled?.(page.id)) return;
 
-			slot.image = image;
 			slot.analyzed = analyzed;
 			slot.outcome = 'analyzed';
 

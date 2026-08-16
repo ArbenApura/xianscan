@@ -703,7 +703,7 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 		const rawText = sanitizeForFont(r.text.trim());
 		if (!rawText) continue;
 
-		const bg = sampleBackground(img, r.box.x, r.box.y, r.box.w, r.box.h);
+		const bg = sampleBackground(ctx, r.box.x, r.box.y, r.box.w, r.box.h);
 		let color = pickTextColor(bg);
 
 		// STAT-PANEL PATH — structured multi-segment rendering
@@ -802,26 +802,38 @@ export async function typesetPage(cleanedPng: Buffer, regions: TypesetRegion[], 
 }
 
 export function sampleBackground(
-	img: Image,
+	source: SKRSContext2D | Image,
 	x: number,
 	y: number,
 	w: number,
 	h: number,
 ): { r: number; g: number; b: number } {
+	const srcW = 'canvas' in source ? source.canvas.width : source.width;
+	const srcH = 'canvas' in source ? source.canvas.height : source.height;
+
 	const sx = Math.max(0, Math.floor(x + w * 0.2));
 	const sy = Math.max(0, Math.floor(y + h * 0.2));
-	const ex = Math.min(img.width, Math.ceil(x + w * 0.8));
-	const ey = Math.min(img.height, Math.ceil(y + h * 0.8));
-	if (ex - sx < 4 || ey - sy < 4) return { r: 255, g: 255, b: 255 };
+	const ex = Math.min(srcW, Math.ceil(x + w * 0.8));
+	const ey = Math.min(srcH, Math.ceil(y + h * 0.8));
+	const cw = ex - sx;
+	const ch = ey - sy;
+	if (cw < 4 || ch < 4) return { r: 255, g: 255, b: 255 };
 
-	const probe = createCanvas(ex - sx, ey - sy);
-	const pctx = probe.getContext('2d');
-	pctx.drawImage(img, sx, sy, ex - sx, ey - sy, 0, 0, ex - sx, ey - sy);
-	const data = pctx.getImageData(0, 0, ex - sx, ey - sy).data;
+	let data: Uint8ClampedArray;
+	if ('getImageData' in source) {
+		// Fast path: sample directly from the existing canvas context without allocating a new Skia canvas
+		data = source.getImageData(sx, sy, cw, ch).data;
+	} else {
+		const probe = createCanvas(cw, ch);
+		const pctx = probe.getContext('2d');
+		pctx.drawImage(source, sx, sy, cw, ch, 0, 0, cw, ch);
+		data = pctx.getImageData(0, 0, cw, ch).data;
+	}
+
 	let r = 0;
 	let g = 0;
 	let b = 0;
-	const n = (ex - sx) * (ey - sy);
+	const n = cw * ch;
 	for (let i = 0; i < data.length; i += 4) {
 		r += data[i];
 		g += data[i + 1];
@@ -829,3 +841,4 @@ export function sampleBackground(
 	}
 	return { r: Math.round(r / n), g: Math.round(g / n), b: Math.round(b / n) };
 }
+

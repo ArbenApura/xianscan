@@ -110,6 +110,12 @@ function pruneRetained(): void {
 	}
 }
 
+// PERIODIC BACKGROUND PRUNER (UNREF'D SO IT DOES NOT HOLD THE PROCESS OPEN)
+if (typeof setInterval !== 'undefined') {
+	const pruneInterval = setInterval(pruneRetained, 60_000);
+	if (pruneInterval.unref) pruneInterval.unref();
+}
+
 function updateSnapshot(snapshot: ChapterJobSnapshot, event: JobEvent): void {
 	const now = event.timestamp ?? Date.now();
 

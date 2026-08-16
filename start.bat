@@ -66,8 +66,14 @@ echo   [+] Starting Web App on    http://localhost:8124
 echo ================================================================
 echo.
 
-:: Launch ML Sidecar in background window and Web App in foreground
-start "XianScan ML Backend" cmd /k "cd /d "%~dp0ml" && ..\ml\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8123 --reload"
+:: Launch ML Sidecar in background
+start "XianScan ML Backend" /min cmd /c "cd /d "%~dp0ml" && ..\ml\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8123"
 
 cd /d "%~dp0web"
 call npm run preview
+
+:: CLEANUP ON TERMINATION (WHEN WEB APP STOPS)
+echo.
+echo [*] Shutting down XianScan services...
+call "%~dp0stop.bat"
+

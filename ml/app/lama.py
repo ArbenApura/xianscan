@@ -20,6 +20,8 @@ class LamaInpainter:
 		opts = ort.SessionOptions()
 		opts.inter_op_num_threads = 1
 		opts.intra_op_num_threads = 4
+		opts.enable_cpu_mem_arena = False
+		opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 		self.session = config.create_session(model_path, session_options=opts)
 		inputs = self.session.get_inputs()
 		self.img_name = inputs[0].name
