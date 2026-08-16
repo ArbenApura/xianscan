@@ -421,3 +421,116 @@ class TestReportedCases:
         vert_bubble = next((r for r in resp.regions if "肖凝儿？" in r.text), None)
         assert vert_bubble is not None, "Vertical bubble '肖凝儿？' missing"
         assert vert_bubble.vertical is True, f"Vertical bubble must have vertical=True: {vert_bubble}"
+
+    # --- CASE 20: DIALOGUE SPEECH BUBBLE RIGHT-SIDE BOUNDARY OVER-EXPANSION GUARD ---
+    def test_case_20_dialogue_bubble_tight_boundary_guard(self):
+        """Case 20 (Page 45504 sample):
+        Dialogue bubble with complete ellipsis ('你可不要\\n乱动……') must not expand its left and right
+        boundaries across the entire bubble whitespace (from x=59 to x=234) when the text hull only spans x=[85..215].
+        """
+        # Text hull for '你可不要\n乱动……' spanning x=[85..215], y=[1095..1165]
+        base_pts = _box(85, 1095, 130, 70)
+        # ComicTextDetector bubble mask box spanning [59, 1095, 175, 79] (x=[59..234])
+        union_box = _box(59, 1095, 175, 79)
+        poly = pipeline._ellipsis_polygon(base_pts, union_box, "你可不要\n乱动……", page_w=800)
+        bx, by, bw, bh = pipeline._polygon_bounds(poly)
+
+        # The bounding box should remain tightly bounded around the text (x ~ 83..85, x+w ~ 215..217, width ~ 130..135)
+        # and NOT stretch to the detector's right edge (234) or left edge (59).
+        assert bx >= 80, f"Left boundary expanded too far into left bubble margin: got x={bx} (expected >= 80)"
+        assert bx + bw <= 220, f"Right boundary expanded too far into right bubble margin: got x+w={bx+bw} (expected <= 220)"
+        assert bw <= 140, f"Box width must not expand to full bubble width (175): got {bw}"
+
+    # --- CASE 21: OVERSIZED SINGLE-CHARACTER ARTWORK HALLUCINATION FILTERING ---
+    def test_case_21_oversized_single_char_artwork_hallucination(self):
+        """Case 21 (Page 45517 sample):
+        Oversized single character ('福', box 250x261) hallucinated from character clothing/ribbon folds
+        with negligible text mask coverage is recognized as unsupported character noise and filtered.
+        """
+        c_count = 1
+        t_strip = "福"
+        conf = 0.90287
+        w, h = 250, 261
+        is_punct = bool(pipeline._PUNCT_ONLY.fullmatch(t_strip) or pipeline._ALL_ELLIPSIS.fullmatch(t_strip))
+        # Mask with 0 text coverage on clothing folds
+        comic_mask = np.zeros((1612, 800), dtype=np.uint8)
+        mask_cov = np.sum(comic_mask[309:309+h, 129:129+w] >= 127) / float(w * h)
+
+        is_unsupported_char_noise = (
+            c_count == 1
+            and not is_punct
+            and (
+                (conf < 0.70 and w <= 55 and h <= 70 and (comic_mask is None or np.sum(comic_mask[309:309+h, 129:129+w] >= 127) == 0))
+                or (comic_mask is not None and w >= 160 and h >= 160 and w * h >= 30000 and mask_cov < 0.10)
+            )
+        )
+        assert bool(is_unsupported_char_noise) is True, "Oversized single character hallucination on artwork folds must be filtered"
+
+    # --- CASE 22: DIALOGUE PARAGRAPH FRAGMENTATION & MULTI-LINE GROUPING GUARD ---
+    def test_case_22_dialogue_paragraph_fragmentation_guard(self):
+        """Case 22 (Page 45516 sample):
+        Multi-line dialogue speech bubble:
+        Line 1-2 (upper): '算了，岁数也大了\\n身体也不行\\n1我还是' (box [13, 807, 289, 74])
+        Line 3 (trailing): '乖乖练级吧。' (box [16, 876, 175, 34])
+        Adjacent right bubble: '需要我带你升\\n级吗？' (box [520, 871, 194, 74])
+
+        All lines of the left speech bubble must be grouped into ONE single region spanning y=[807..910]
+        and not fragmented into disjoint regions, preserving clean typography and reading order.
+        """
+        b_left_top = _box(13, 807, 289, 74)
+        b_left_bot = _box(16, 876, 175, 34)
+        b_right = _box(520, 871, 194, 74)
+
+        boxes = [b_left_top, b_right, b_left_bot]
+        scores = [0.99992, 0.9982, 0.9997]
+        texts = [
+            "算了，岁数也大了\n身体也不行\n1我还是",
+            "需要我带你升\n级吗？",
+            "乖乖练级吧。",
+        ]
+
+        grouped_boxes, grouped_scores = detect.group_paragraphs(boxes, scores, texts=texts)
+        assert len(grouped_boxes) == 2, f"Expected 2 unified speech bubbles (left & right), got {len(grouped_boxes)}"
+
+        dedup_boxes, dedup_scores = detect.deduplicate_boxes(grouped_boxes, grouped_scores)
+        assert len(dedup_boxes) == 2, f"Expected 2 deduplicated bubbles, got {len(dedup_boxes)}"
+
+        order = detect.sort_regions_top_to_bottom(dedup_boxes, 1201)
+        left_idx = order[0]
+        right_idx = order[1]
+
+        left_b = dedup_boxes[left_idx]
+        right_b = dedup_boxes[right_idx]
+
+        lx, ly, lw, lh = detect.box_to_xywh(left_b)
+        rx, ry, rw, rh = detect.box_to_xywh(right_b)
+
+        # Left bubble must span from top line (y=807) to bottom line (y+h >= 910)
+        assert ly <= 807 and ly + lh >= 910, f"Left bubble height must encompass all 3 lines: y={ly}, h={lh}"
+        assert lw >= 280, f"Left bubble width must cover full dialogue width: w={lw}"
+
+        # Right bubble must remain distinct at x=520
+        assert rx >= 500, f"Right bubble must remain at x >= 500: got x={rx}"
+
+        # Sub-test: Individual lines where Line 2 text has OCR spurious newlines ('身体也不行\n1\n我还是')
+        # must still properly group all 3 dialogue lines based on physical line height limits
+        l0 = _box(13, 807, 261, 42)
+        l1 = _box(14, 839, 288, 42)
+        l2 = _box(16, 876, 175, 34)
+        r1 = _box(521, 871, 193, 37)
+        r2 = _box(520, 906, 90, 39)
+
+        raw_boxes = [l0, l1, l2, r1, r2]
+        raw_scores = [0.99] * 5
+        raw_texts = ["算了，岁数也大了", "身体也不行\n1\n我还是", "乖乖练级吧。", "需要我带你升", "级吗？"]
+
+        g_boxes, g_scores = detect.group_paragraphs(raw_boxes, raw_scores, texts=raw_texts)
+        assert len(g_boxes) == 2, f"Expected 2 grouped speech bubbles from raw lines, got {len(g_boxes)}"
+        d_boxes, _ = detect.deduplicate_boxes(g_boxes, g_scores)
+        assert len(d_boxes) == 2, f"Expected 2 deduplicated bubbles from raw lines, got {len(d_boxes)}"
+        g_left = next(b for b in d_boxes if detect.box_to_xywh(b)[0] < 100)
+        gx, gy, gw, gh = detect.box_to_xywh(g_left)
+        assert gy <= 807 and gy + gh >= 910, f"Grouped left bubble must cover all lines: y={gy}, h={gh}"
+
+
+

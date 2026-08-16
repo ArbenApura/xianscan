@@ -10,6 +10,10 @@ from app import detect, ocr, pipeline
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
+def _box(x: int, y: int, w: int, h: int) -> np.ndarray:
+    return np.array([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], dtype=np.float64)
+
+
 def test_merge_text_lines_terminal_punct_guard():
     """Terminal punctuation guard prevents horizontal merge of distinct utterances."""
     b1 = np.array([[49, 105], [253, 105], [253, 152], [49, 152]], dtype=np.float64)
@@ -1229,6 +1233,250 @@ def test_page_63572_multiline_question_bubble_and_ghost_fragment_rejection():
     assert "女巫？" in bubble2.text
     assert "顶级宠物" in bubble2.text
     assert "全能" not in bubble2.text, "Hallucinated ghost slice ('全能描到丁女巫') must be rejected"
+
+
+def test_page_718_classroom_bubble_punctuation_grouping():
+    """Page 718 test case:
+    The classroom dialogue bubble in panel 1 contains:
+    Line 1: '还不如一些平民子弟呢！'
+    Line 2: '难怪你要如此说话……'
+    Even though Line 1 ends with an exclamation mark '！', the tight vertical gap and strong horizontal
+    alignment within the same bubble must ensure it is grouped into ONE single region instead of fragmenting.
+    """
+    img_path = FIXTURES_DIR / "page_718.png"
+    if not img_path.exists():
+        pytest.skip("Page 718 fixture image not found")
+
+    with open(img_path, "rb") as f:
+        img = pipeline.decode_image(f.read())
+
+    resp = pipeline.analyze_image(img)
+    bubble = next((r for r in resp.regions if "平民子弟" in r.text), None)
+    assert bubble is not None, f"Expected dialogue bubble with '平民子弟' found in regions: {[r.text for r in resp.regions]}"
+    assert "难怪你要如此说话" in bubble.text, f"Line 2 '难怪你要如此说话' must be grouped with line 1, got: {bubble.text}"
+    assert bubble.box.h >= 50, f"Grouped bubble height should span both lines, got {bubble.box.h}"
+
+
+def test_aligned_lines_with_terminal_exclamation_grouping():
+    """Synthetic unit test: Two aligned, tightly stacked lines in the same bubble
+    where line 1 ends with '！' must merge into one paragraph.
+    """
+    b1 = np.array([[97, 153], [317, 153], [317, 181], [97, 181]], dtype=np.float64)
+    b2 = np.array([[98, 186], [308, 186], [308, 215], [98, 215]], dtype=np.float64)
+    txt1 = "还不如一些平民子弟呢！"
+    txt2 = "难怪你要如此说话……"
+
+    grouped, _ = detect.group_paragraphs([b1, b2], [0.98, 0.95], texts=[txt1, txt2])
+    assert len(grouped) == 1, f"Expected 1 grouped paragraph, got {len(grouped)}"
+    gx, gy, gw, gh = detect.box_to_xywh(grouped[0])
+    assert gy <= 153 and gy + gh >= 215
+
+
+def test_page_731_dialogue_bubbles_grouping():
+    """Page 731 test case:
+    1. Top bubble (lines 1..6) fragmented into 3 parts (line 1 question, lines 2-5 body, line 6 exclamation)
+       must merge into a single unified 6-line bubble region.
+    2. Middle bubble (lines 1..3) fragmented across period ('问题了。') must merge into 1 unified bubble,
+       tested both as multi-line blocks and as individual raw OCR lines.
+    3. Bottom bubble remains 1 unified region.
+    Total output must be exactly 3 speech bubble regions for the 3 panels.
+    """
+    # Top bubble lines
+    b_top1 = _box(86, 104, 247, 26)
+    t_top1 = "你们两个人，现实一点好吗？"
+    b_top2 = _box(85, 142, 257, 136)
+    t_top2 = "人家叶紫芸可是拥有青色灵\n魂海的天才，马上就会成为青\n铜一星妖灵师了，两个月之后\n就能进入妖灵师正式班，之后"
+    b_top3 = _box(85, 289, 235, 23)
+    t_top3 = "她的修为更是会突飞猛进！"
+
+    # Middle bubble lines
+    b_mid1 = _box(340, 448, 373, 26)
+    t_mid1 = "到时候他还记不记得你们两个都是问题了。"
+    b_mid2 = _box(340, 489, 377, 65)
+    t_mid2 = "所以我最烦你们世家子弟这一点，整天想着\n把妹，不知道努力修炼！"
+
+    # Bottom bubble lines
+    b_bot = _box(111, 846, 251, 118)
+    t_bot = "什么叫整天？！你这是\n污蔑啊！我一直有努力修炼\n好吗，每天最多只有半天想\n女人。"
+
+    all_boxes = [b_top1, b_top2, b_top3, b_mid1, b_mid2, b_bot]
+    all_scores = [0.99] * len(all_boxes)
+    all_texts = [t_top1, t_top2, t_top3, t_mid1, t_mid2, t_bot]
+
+    grouped, scores = detect.group_paragraphs(all_boxes, all_scores, texts=all_texts)
+    assert len(grouped) == 3, f"Expected 3 unified speech bubbles for page 731, got {len(grouped)}"
+
+    # Verify top bubble encompasses lines 1 to 6
+    top_bubble = next(b for b in grouped if detect.box_to_xywh(b)[1] < 200)
+    tx, ty, tw, th = detect.box_to_xywh(top_bubble)
+    assert ty <= 104 and ty + th >= 312, f"Top bubble must span full height (y={ty}, bottom={ty + th})"
+    assert tw >= 245, f"Top bubble must cover full width (w={tw})"
+
+    # Verify middle bubble encompasses lines 1 to 3
+    mid_bubble = next(b for b in grouped if 400 <= detect.box_to_xywh(b)[1] < 600)
+    mx, my, mw, mh = detect.box_to_xywh(mid_bubble)
+    assert my <= 448 and my + mh >= 554, f"Middle bubble must span full height (y={my}, bottom={my + mh})"
+
+    # Also verify raw unmerged lines of middle bubble group properly:
+    raw_m1 = _box(340, 448, 373, 26)
+    raw_t1 = "到时候他还记不记得你们两个都是问题了。"
+    raw_m2 = _box(340, 489, 377, 26)
+    raw_t2 = "所以我最烦你们世家子弟这一点，整天想着"
+    raw_m3 = _box(340, 528, 200, 26)
+    raw_t3 = "把妹，不知道努力修炼！"
+
+    raw_grouped, _ = detect.group_paragraphs([raw_m1, raw_m2, raw_m3], [0.99, 0.99, 0.99], texts=[raw_t1, raw_t2, raw_t3])
+    assert len(raw_grouped) == 1, f"Expected 1 grouped middle bubble from 3 raw lines, got {len(raw_grouped)}"
+    rx, ry, rw, rh = detect.box_to_xywh(raw_grouped[0])
+    assert ry <= 448 and ry + rh >= 554, f"Raw middle bubble must span full height (y={ry}, bottom={ry + rh})"
+
+
+def test_page_736_dialogue_bubble_period_grouping():
+    """Page 736 test case:
+    Bottom-left bubble has continuous dialogue across period:
+    '只要有钱就行了？\\n哈哈,那就简单多了。' and '三年多了，我存了两\\n千妖灵币，抵得上普\\n通人家一年的开支\\n了!'
+    Both parts belong to the exact same speech bubble contour and must merge into ONE single region.
+    """
+    b1 = _box(374, 151, 138, 144)
+    t1 = "想当妖灵师，你\n还怕麻烦！成\n为妖灵师可能\n不麻烦吗喂！"
+
+    b2 = _box(275, 545, 90, 75)
+    t2 = "麻烦倒是\n不麻烦。"
+
+    b3 = _box(628, 582, 92, 63)
+    t3 = "但是需要\n很多钱!"
+
+    b4 = _box(344, 768, 117, 119)
+    t4 = "如果能成为\n一个妖灵师，\n我可以全用\n出去"
+
+    # Bottom-left bubble split lines
+    b5 = _box(112, 831, 204, 66)
+    t5 = "只要有钱就行了？\n哈哈,那就简单多了。"
+
+    b6 = _box(111, 903, 200, 143)
+    t6 = "三年多了，我存了两\n千妖灵币，抵得上普\n通人家一年的开支\n了!"
+
+    all_boxes = [b1, b2, b3, b4, b5, b6]
+    all_scores = [0.99] * len(all_boxes)
+    all_texts = [t1, t2, t3, t4, t5, t6]
+
+    grouped, scores = detect.group_paragraphs(all_boxes, all_scores, texts=all_texts)
+    assert len(grouped) == 5, f"Expected 5 unified speech bubbles for page 736, got {len(grouped)}"
+
+    bot_left = next(b for b in grouped if detect.box_to_xywh(b)[0] < 200 and detect.box_to_xywh(b)[1] > 800)
+    bx, by, bw, bh = detect.box_to_xywh(bot_left)
+    assert by <= 831 and by + bh >= 1046, f"Bottom-left bubble must span from line 1 (y={by}) to line 6 (bottom={by + bh})"
+
+
+def test_page_747_artwork_single_digit_filtering():
+    """Page 747 test case:
+    1. Legitimate dialogue regions (spatial ring speech bubble, despicable card bubble,
+       nie li comment, silver bullet attack, competition warning) are preserved.
+    2. Isolated single-digit hallucination ('3') on artwork lines (e.g. eye/eyelash curves)
+       must be rejected as stray non-Chinese noise.
+    """
+    from app.schemas import Region, Box
+
+    reg_eye_hallucination = Region(
+        id="r5",
+        box=Box(x=101, y=904, w=44, h=40),
+        polygon=[[101, 904], [145, 904], [145, 944], [101, 944]],
+        text="3",
+        confidence=0.76918,
+        vertical=False,
+        angle=0.0,
+    )
+    reg_dialogue = Region(
+        id="r3",
+        box=Box(x=137, y=749, w=155, h=34),
+        polygon=[[137, 749], [292, 749], [292, 783], [137, 783]],
+        text="银弹攻势啊！",
+        confidence=0.99628,
+        vertical=False,
+        angle=0.0,
+    )
+
+    # Validate the stray non-Chinese noise filter directly
+    t_strip = reg_eye_hallucination.text.strip()
+    has_c = bool(detect._CHINESE_RE.search(t_strip))
+    c_count = len(pipeline.re.sub(r"\s+", "", t_strip))
+    is_punct = bool(pipeline._PUNCT_ONLY.fullmatch(t_strip) or pipeline._ALL_ELLIPSIS.fullmatch(t_strip))
+    is_stray_non_chinese = not has_c and not is_punct and (
+        (c_count <= 2 and (reg_eye_hallucination.box.h >= 120 or reg_eye_hallucination.box.w >= 120 or (reg_eye_hallucination.box.h >= 80 and (reg_eye_hallucination.box.h / max(1, reg_eye_hallucination.box.w) >= 2.5 or reg_eye_hallucination.box.w / max(1, reg_eye_hallucination.box.h) >= 2.5))))
+        or (c_count <= 1 and (bool(pipeline.re.fullmatch(r"[a-zA-Z0-9]", t_strip)) or reg_eye_hallucination.confidence < 0.85))
+        or (c_count <= 2 and (reg_eye_hallucination.confidence < 0.80 or (reg_eye_hallucination.box.w <= 65 and reg_eye_hallucination.box.h <= 65 and bool(pipeline.re.fullmatch(r"[a-zA-Z0-9\s]+", t_strip)))))
+        or (c_count <= 6 and bool(pipeline.re.fullmatch(r"^(?:[0oO·•\s]+|200|300|000)$", t_strip)) and reg_eye_hallucination.box.w <= 100 and reg_eye_hallucination.box.h <= 100)
+        or (reg_eye_hallucination.box.w <= 55 and reg_eye_hallucination.box.h <= 55 and (reg_eye_hallucination.confidence < 0.95 or bool(pipeline.re.fullmatch(r"[a-zA-Z0-91!|lIioO\s]+", t_strip))))
+    )
+    assert is_stray_non_chinese, "Isolated single-digit '3' on eye artwork must be classified as stray non-Chinese noise"
+
+    # Also verify legitimate dialogue is not filtered
+    d_strip = reg_dialogue.text.strip()
+    d_has_c = bool(detect._CHINESE_RE.search(d_strip))
+    assert d_has_c, "Legitimate Chinese dialogue must not be filtered"
+
+
+def test_page_45540_bubble_unification_and_compact_dialogue():
+    """Page 45540 test case:
+    1. '小飞快看，' (x=433, y=762, w=165, h=48) and '飞碟！' (x=436, y=802, w=100, h=47)
+       belong to the exact same speech bubble and must merge into 1 unified paragraph region.
+    2. Compact single-character dialogue bubble '哪？' (x=335, y=575, w=65, h=45) is preserved.
+    3. Stray shirt print '福' (x=182, y=828, w=24, h=31, conf=0.77) is filtered out as noise.
+    """
+    b_ufo1 = _box(433, 762, 165, 48)
+    t_ufo1 = "小飞快看，"
+    b_ufo2 = _box(436, 802, 100, 47)
+    t_ufo2 = "飞碟！"
+
+    grouped, scores = detect.group_paragraphs([b_ufo1, b_ufo2], [0.999, 0.945], texts=[t_ufo1, t_ufo2])
+    assert len(grouped) == 1, f"Expected 1 unified speech bubble for '小飞快看，\\n飞碟！', got {len(grouped)}"
+    gx, gy, gw, gh = detect.box_to_xywh(grouped[0])
+    assert gy <= 762 and gy + gh >= 849, f"Grouped bubble must span both lines: y={gy}, bottom={gy + gh}"
+
+    # Verify single-character Chinese text from comic crop is allowed
+    assert not bool(detect._CHINESE_RE.search("000"))
+    assert bool(detect._CHINESE_RE.search("哪？"))
+    assert bool(detect._CHINESE_RE.search("哪"))
+
+    # Verify stray clothing print filter
+    from app.schemas import Region, Box
+    reg_shirt = Region(
+        id="r5",
+        box=Box(x=182, y=828, w=24, h=31),
+        polygon=[[182, 828], [206, 828], [206, 859], [182, 859]],
+        text="福",
+        confidence=0.77152,
+        vertical=False,
+        angle=0.0,
+    )
+    t_str = reg_shirt.text.strip()
+    c_cnt = len(pipeline.re.sub(r"\s+", "", t_str))
+    is_p = bool(pipeline._PUNCT_ONLY.fullmatch(t_str) or pipeline._ALL_ELLIPSIS.fullmatch(t_str))
+    is_noise = (
+        c_cnt == 1
+        and not is_p
+        and (reg_shirt.confidence < 0.82 and reg_shirt.box.w <= 35 and reg_shirt.box.h <= 35)
+    )
+    assert is_noise, "Stray single-character clothing print must be rejected as noise"
+
+
+def test_page_741_dialogue_bubbles_grouping():
+    """Page 741 test case:
+    Top-left speech bubble contains:
+    Line 1: '天呐！' (x=91, y=116, w=63, h=33)
+    Line 2: '这么贵？！' (x=93, y=156, w=99, h=28)
+    Short interjection '天呐！' followed by aligned dialogue in the same speech bubble
+    must merge into ONE unified region.
+    """
+    b1 = _box(91, 116, 63, 33)
+    t1 = "天呐！"
+    b2 = _box(93, 156, 99, 28)
+    t2 = "这么贵？！"
+
+    grouped, scores = detect.group_paragraphs([b1, b2], [0.984, 0.948], texts=[t1, t2])
+    assert len(grouped) == 1, f"Expected 1 unified speech bubble for '天呐！\\n这么贵？！', got {len(grouped)}"
+    gx, gy, gw, gh = detect.box_to_xywh(grouped[0])
+    assert gy <= 116 and gy + gh >= 184, f"Merged bubble must span both lines: y={gy}, bottom={gy + gh}"
 
 
 

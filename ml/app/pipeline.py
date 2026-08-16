@@ -70,7 +70,7 @@ def _ellipsis_polygon(
 	   BASE (i.e. EVERY DETECTOR ONLY SAW THE FIRST DOTS), GROW RIGHTWARD BY 1.2× THE BASE WIDTH
 	   (CLAMPED TO THE PAGE) TO REACH THE REST OF THE LINE.
 	3. WHEN THE TEXT ENDS IN AN ELLIPSIS, EXTEND RIGHTWARD TO ENSURE FAINT TRAILING DOTS ARE FULLY ENCLOSED
-	   WITHOUT OVER-EXPANDING INTO EMPTY BANNER SPACE OR INVADING NEIGHBORING BUBBLES.
+	   WITHOUT OVER-EXPANDING INTO EMPTY BANNER SPACE OR INVADING NEIGHBORING BUBBLE MARGINS.
 	"""
 	ox, _oy, ow, _oh = detect.box_to_xywh(union_box)
 	y0 = float(base_pts[:, 1].min())
@@ -93,16 +93,17 @@ def _ellipsis_polygon(
 		if (x1 - x0) <= base_w * 1.35:
 			x1 = min(max_allowed_x, x1 + base_w * 1.2)
 	elif _ELLIPSIS_TAIL.search(text) or text.endswith("……") or text.endswith("..."):
-		x0 = max(0.0, min(base_min_x, float(ox))) if (base_min_x - float(ox)) <= 35.0 else max(0.0, base_min_x - 10.0)
+		x0 = base_min_x
+		has_full_ellipsis = text.endswith("……") or text.endswith("......")
 		last_line = text.strip().split("\n")[-1]
 		chinese_chars = len(re.findall(r"[\u4e00-\u9fa5]", last_line))
 		is_short_tail = chinese_chars <= 4
-		if base_max_x + 2.0 <= (ox + ow) <= min(max_allowed_x, base_max_x + max(70.0, base_w * 0.40)):
-			x1 = min(max_allowed_x, float(ox + ow))
-		elif comic_mask is not None and y1 > y0:
+
+		if comic_mask is not None and y1 > y0:
 			scan_y0 = max(int(y0), int(y1 - 45))
 			scan_y1 = int(y1)
 			search_w = min(120, max(0, int(max_allowed_x - base_max_x)))
+			last_col = -1
 			if search_w > 0:
 				c_mask = comic_mask
 				if other_boxes:
@@ -112,7 +113,6 @@ def _ellipsis_polygon(
 						c_mask[max(0, oby) : min(c_mask.shape[0], oby + obh), max(0, obx) : min(c_mask.shape[1], obx + obw)] = 0
 				roi = c_mask[scan_y0:scan_y1, int(base_max_x) : int(base_max_x) + search_w]
 				col_active = np.any(roi > 0, axis=0)
-				last_col = -1
 				curr_gap = 0
 				for c_idx, active in enumerate(col_active):
 					if active:
@@ -122,18 +122,23 @@ def _ellipsis_polygon(
 						curr_gap += 1
 						if curr_gap > 15 and last_col >= 0:
 							break
-				if last_col >= 0:
-					x1 = min(max_allowed_x, base_max_x + float(last_col) + 4.0)
-				elif is_short_tail:
-					x1 = min(max_allowed_x, base_max_x + max(20.0, min(35.0, base_w * 0.25)))
-				else:
-					x1 = base_max_x
+			if last_col >= 0:
+				x1 = min(max_allowed_x, base_max_x + float(last_col) + 4.0)
+			elif has_full_ellipsis:
+				x1 = base_max_x
+			elif is_short_tail and base_max_x + 2.0 <= (ox + ow):
+				x1 = min(max_allowed_x, base_max_x + max(20.0, min(35.0, base_w * 0.25)))
 			else:
 				x1 = base_max_x
-		elif is_short_tail:
-			x1 = min(max_allowed_x, base_max_x + max(20.0, min(35.0, base_w * 0.25)))
 		else:
-			x1 = base_max_x
+			if has_full_ellipsis:
+				x1 = base_max_x
+			elif base_max_x + 2.0 <= (ox + ow) <= min(max_allowed_x, base_max_x + max(70.0, base_w * 0.40)):
+				x1 = min(max_allowed_x, float(ox + ow))
+			elif is_short_tail:
+				x1 = min(max_allowed_x, base_max_x + max(20.0, min(35.0, base_w * 0.25)))
+			else:
+				x1 = base_max_x
 	else:
 		x0 = min(base_min_x, float(ox))
 		x1 = min(max_allowed_x, max(base_max_x, float(ox + ow)))
@@ -828,14 +833,17 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		is_circle_noise = bool(re.fullmatch(r'^[0oO·•\s]{1,6}$', t.strip())) and not has_chinese
 		is_in_bubble = bool(comic_boxes and any(detect.line_center_inside(pts, cb) for cb in comic_boxes))
 		is_sfx_tail = bool(re.search(r"[-—―_~～·.．…!！?？]", t))
+		is_sfx_glyph = any(k in clean_t for k in ("噗", "轰", "咚", "咳", "啪", "砰", "咔", "唰", "嘭", "哇", "嗷", "嘶", "呜", "呼", "哈", "！", "!"))
 		is_giant_artwork = (
 			is_circle_noise
 			or (not is_in_bubble and not is_sfx_tail and char_count >= 2 and lh >= 100 and (lw / char_count) >= 90 and s < 0.85)
+			or (not is_in_bubble and not is_sfx_tail and not is_sfx_glyph and char_count <= 2 and lh >= 100 and lw >= 140)
 			or (not is_in_bubble and not has_chinese and lh >= 100 and (lw / char_count) >= 90 and s < 0.85)
 			or (lh >= 180 and lw >= 350 and not has_chinese)
 			or (lh >= 350 and lw >= 350 and char_count <= 6 and not has_chinese)
 			or (not has_chinese and lh >= 80 and s < 0.90 and char_count <= 4)
 			or (not has_chinese and char_count <= 2 and (lh >= 120 or lw >= 120 or (lh >= 80 and (lh / lw >= 2.5 or lw / lh >= 2.5))))
+			or (char_count >= 3 and lw <= 35 and (lw / float(char_count)) <= 12 and s < 0.75)
 		)
 		if is_giant_artwork:
 			continue
@@ -909,7 +917,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 			for c_box, c_txt, c_score in c_lines:
 				clean_t = c_txt.strip()
 				is_circle_noise = bool(re.fullmatch(r'^[0oO·•\s]{1,6}$', clean_t)) and not bool(detect._CHINESE_RE.search(clean_t))
-				if not clean_t or is_circle_noise or (len(clean_t) < 2 and not bool(_PUNCT_ONLY.fullmatch(clean_t))) or c_score < 0.60:
+				if not clean_t or is_circle_noise or (len(clean_t) < 2 and not bool(_PUNCT_ONLY.fullmatch(clean_t)) and not bool(detect._CHINESE_RE.search(clean_t))) or c_score < 0.60:
 					continue
 				shifted_box = c_box.copy()
 				shifted_box[:, 0] += offset_x
@@ -917,7 +925,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 				sx, sy, sw, sh = detect.box_to_xywh(shifted_box)
 				# If clean_t is pure punctuation and follows an existing text line on the same row, merge it directly
 				merged_tail = False
-				if bool(_PUNCT_ONLY.fullmatch(clean_t)):
+				if bool(re.fullmatch(r"^[.．…·!！?？~～\-_—―]{1,6}$", clean_t)):
 					for idx, (r_pts, r_txt, r_sc, r_ang) in enumerate(rapid_lines):
 						rx, ry, rw, rh = detect.box_to_xywh(r_pts)
 						y_overlap = min(sy + sh, ry + rh) - max(sy, ry)
@@ -1062,10 +1070,13 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 					unique_matched.append(m)
 			matched = unique_matched
 			
-			# 1. DISCARD NON-CHINESE / ENGLISH SUBTITLE LINES IF CHINESE IS PRESENT
-			chinese_matched = [m for m in matched if detect._CHINESE_RE.search(m[1])]
-			if chinese_matched:
-				matched = chinese_matched
+			# 1. DISCARD NON-CHINESE / ENGLISH SUBTITLE LINES IF CHINESE IS PRESENT (BUT PRESERVE PUNCTUATION FRAGMENTS)
+			has_any_chinese = any(detect._CHINESE_RE.search(m[1]) for m in matched)
+			if has_any_chinese:
+				matched = [
+					m for m in matched
+					if detect._CHINESE_RE.search(m[1]) or re.fullmatch(r"^[~～·\-_—―.．!！?？\s]+$", m[1].strip())
+				]
 			# 2. DISCARD WATERMARK / SCANLATION SIGNATURE LINES IF LEGITIMATE STORY DIALOGUE IS PRESENT
 			story_matched = [m for m in matched if not detect._is_watermark_line(m[1])]
 			if story_matched:
@@ -1177,7 +1188,7 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 							(len(s_matched) == 1 and 1.25 * hh <= bh <= 4.0 * hh)
 							or (is_unclosed_tail and (bh - hh) >= 0.45 * avg_lh)
 							or s_region.confidence < 0.70
-							or (detect.is_vertical_box(hull_pts) and s_region.confidence < 0.85)
+							or (detect.is_vertical_box(hull_pts) and (s_region.confidence < 0.95 or (bh - hh) >= 0.25 * avg_lh))
 						)
 					)
 					if needs_rescue:
@@ -1602,19 +1613,34 @@ def analyze_image(img_bgr: np.ndarray) -> AnalyzeResponse:
 		is_punct = bool(_PUNCT_ONLY.fullmatch(t_strip) or _ALL_ELLIPSIS.fullmatch(t_strip))
 		is_stray_non_chinese = not has_c and not is_punct and (
 			(c_count <= 2 and (r.box.h >= 120 or r.box.w >= 120 or (r.box.h >= 80 and (r.box.h / max(1, r.box.w) >= 2.5 or r.box.w / max(1, r.box.h) >= 2.5))))
-			or (c_count <= 1 and (bool(re.fullmatch(r"[a-zA-Z]", t_strip)) or r.confidence < 0.75))
-			or (c_count <= 6 and bool(re.fullmatch(r"^(?:[0oO·•\s]+|200|300|000)$", t_strip)) and r.box.w <= 100 and r.box.h <= 100)
-			or (r.box.w <= 40 and r.box.h <= 40 and (r.confidence < 0.95 or bool(re.fullmatch(r"[a-zA-Z1!|lIioO\s]+", t_strip))))
+			or (c_count <= 1 and (bool(re.fullmatch(r"[a-zA-Z0-9]", t_strip)) or r.confidence < 0.85))
+			or (c_count <= 2 and (r.confidence < 0.80 or (r.box.w <= 65 and r.box.h <= 65 and bool(re.fullmatch(r"[a-zA-Z0-9\s]+", t_strip)))))
+			or (c_count <= 6 and bool(re.fullmatch(r"^(?:[0oO·•\s]+|200|300|000|[0-9][.．…]+)$", t_strip)) and r.box.w <= 100 and r.box.h <= 100)
+			or (r.box.w <= 55 and r.box.h <= 55 and (r.confidence < 0.95 or bool(re.fullmatch(r"[a-zA-Z0-91!|lIioO\s]+", t_strip))))
 		)
 		is_unsupported_char_noise = (
 			c_count == 1
 			and not is_punct
-			and r.confidence < 0.70
-			and r.box.w <= 55
-			and r.box.h <= 70
 			and (
-				comic_mask is None
-				or (np.sum(comic_mask[max(0, r.box.y):min(page_h, r.box.y + r.box.h), max(0, r.box.x):min(page_w, r.box.x + r.box.w)] >= 127) == 0)
+				(r.confidence < 0.82 and r.box.w <= 35 and r.box.h <= 35)
+				or (
+					r.confidence < 0.70
+					and r.box.w <= 55
+					and r.box.h <= 70
+					and (
+						comic_mask is None
+						or (np.sum(comic_mask[max(0, r.box.y):min(page_h, r.box.y + r.box.h), max(0, r.box.x):min(page_w, r.box.x + r.box.w)] >= 127) == 0)
+					)
+				)
+				or (
+					# Oversized single-character hallucination on large artwork/folds (box >= 160x160 or area >= 30000 with low mask coverage)
+					comic_mask is not None
+					and r.confidence < 0.90
+					and r.box.w >= 160
+					and r.box.h >= 160
+					and r.box.w * r.box.h >= 30000
+					and (np.sum(comic_mask[max(0, r.box.y):min(page_h, r.box.y + r.box.h), max(0, r.box.x):min(page_w, r.box.x + r.box.w)] >= 127) / float(r.box.w * r.box.h) < 0.10)
+				)
 			)
 		)
 		if not t_strip or _IGNORED_NOISE_RE.fullmatch(t_strip) or detect.is_pure_watermark_region(t_strip) or is_stray_non_chinese or is_unsupported_char_noise:

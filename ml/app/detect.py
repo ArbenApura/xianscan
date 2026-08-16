@@ -257,9 +257,9 @@ _WATERMARK_RE = re.compile(
 	r'速漫库|速漫|漫库|qumanku|quman|包子|baozimh|baozi|colamanga|colamanhua|colam|'
 	r'acloudmerge|acloud|loudmer|udmer|merd|oamanhua|'
 	r'merge|cloud|manga|manhua|comic|'
-	r'yumanhua|mangabox|comick|腾讯[动漫慢]*|阅文[集团]*|快看[动漫]*|微信|公众号|qq群|企鹅群|群号|'
-	r'严禁转载|独家|扫图|录入|修图|嵌字|翻译[:：]|翻译组|汉化组|'
-	r'免费漫画|最新免费|漫画网|看漫画|首发|独家首发|漫客[栈拌]|漫客|mkzhan|nga\.com)',
+	r'yumanhua|mangabox|comick|腾讯[动漫慢]*|腾[动漫慢]{1,2}|阅文[集团]*|快看(?:漫画|动漫|app|独家|首发)|微信|公众号|qq群|企鹅群|群号|'
+	r'严禁转载|独家(?:首发|连载|授权|发布|提供)|扫图|录入|修图|嵌字|翻译[:：]|翻译组|汉化组|'
+	r'免费漫画|最新免费|漫画网|看漫画网|首发|独家首发|漫客[栈拌]|漫客|mkzhan|nga\.com)',
 	re.IGNORECASE,
 )
 
@@ -351,8 +351,8 @@ def merge_text_lines(
 			overlap = min(y1, ly1) - max(y, ly0)
 			lcy = ly0 + lh / 2.0
 
-			# MUST BE ON THE SAME HORIZONTAL LINE (y-centers aligned within 40% of line height)
-			if abs(cy - lcy) > 0.40 * min_h or overlap < overlap_min * min_h:
+			# MUST BE ON THE SAME HORIZONTAL LINE (y-centers aligned or high vertical overlap inside line band)
+			if (overlap < 0.60 * min_h and abs(cy - lcy) > 0.40 * min_h) or overlap < overlap_min * min_h:
 				continue
 
 			gap = x - lx1
@@ -365,8 +365,8 @@ def merge_text_lines(
 			is_same_line_detection = (x_inter >= 0.40 * min_w) and (overlap >= 0.40 * min_h)
 
 			# TRAILING PUNCTUATION / ELLIPSIS / DASH SEGMENT:
-			# A short trailing segment (dots ……, dashes ——, punctuation) sits within the line's Y-band and immediately right of the line
-			has_words = bool(txt.strip() and _CHINESE_RE.search(txt))
+			# A short trailing segment (dots ……, dashes ——, tildes ~～～, punctuation) sits within the line's Y-band and immediately right of the line
+			has_words = bool(txt.strip() and re.search(r'[\u4e00-\u9fa5\u3400-\u4dbf]', txt))
 			is_trailing_segment = (
 				(overlap >= 0.70 * min_h)
 				and (x >= lx0)
@@ -379,8 +379,10 @@ def merge_text_lines(
 			# DISTINCT MULTI-CHARACTER CLAUSE GUARD:
 			# TWO DISTINCT FULL-TEXT CLAUSES (>= 3 CHINESE CHARACTERS EACH) SEPARATED BY A POSITIVE GAP
 			# BELONG TO SEPARATE ADJACENT SPEECH BUBBLES SITTING ON THE SAME ROW.
-			has_words_l = bool(l_txt.strip() and _CHINESE_RE.search(l_txt) and len(l_txt.strip()) >= 3)
-			has_words_r = bool(txt.strip() and _CHINESE_RE.search(txt) and len(txt.strip()) >= 3)
+			c_count_l = len(re.findall(r'[\u4e00-\u9fa5]', l_txt))
+			c_count_r = len(re.findall(r'[\u4e00-\u9fa5]', txt))
+			has_words_l = c_count_l >= 3
+			has_words_r = c_count_r >= 3
 			if has_words_l and has_words_r and gap >= max(8.0, 0.25 * max(h, lh)):
 				continue
 
@@ -504,11 +506,23 @@ def group_paragraphs(
 
 			# Effective single-line heights for multi-line boxes (e.g. from crop OCR or merged blocks)
 			last_txt = para_texts[p_idx][-1] if para_texts[p_idx] else ""
-			cand_line_count = max(1, len([ln for ln in txt.strip().split('\n') if ln.strip()])) if txt else 1
-			last_line_count = max(1, len([ln for ln in last_txt.strip().split('\n') if ln.strip()])) if last_txt else 1
-			eff_h = h / float(cand_line_count)
+			raw_cand_lines = len([ln for ln in txt.strip().split('\n') if ln.strip()]) if txt else 1
+			raw_last_lines = len([ln for ln in last_txt.strip().split('\n') if ln.strip()]) if last_txt else 1
+			last_line_count = min(max(1, raw_last_lines), max(1, int(round(lh / 22.0))))
 			eff_lh = lh / float(last_line_count)
+			cand_max_lines = max(1, int(round(h / 22.0)))
+			cand_line_count = 1 if (eff_lh > 0 and h <= 1.6 * eff_lh) else min(max(1, raw_cand_lines), cand_max_lines)
+			eff_h = h / float(cand_line_count)
 			min_eff_h = min(eff_h, eff_lh)
+
+			# Alignment guards
+			is_left_aligned = abs(x - lx) <= 0.25 * min(w, lw)
+			is_right_aligned = abs(x1 - lx1) <= 0.25 * min(w, lw)
+			new_cx = x + w / 2.0
+			para_mean_cx = sum(para_cx_lists[p_idx]) / len(para_cx_lists[p_idx])
+			overlap = min(x1, lx1) - max(x, lx)
+			is_aligned = is_left_aligned or is_right_aligned or abs(new_cx - para_mean_cx) <= 0.30 * min(w, lw)
+			is_strongly_aligned = overlap >= 0.50 * min(w, lw) and is_aligned
 
 			# VERTICAL CONTIGUITY: THE NEW LINE SITS AT OR BELOW THE PARAGRAPH'S BOTTOM LINE.
 			gap = y - (ly + lh)
@@ -518,37 +532,57 @@ def group_paragraphs(
 				or (len(txt.strip()) > 0 and len(txt.strip()) <= 3 and not txt.strip().endswith(("，", ",", "、", ":", "：")) and eff_h <= eff_lh * 1.80)
 				or is_parenthetical
 			)
-			gap_multiplier = 2.8 if is_parenthetical else (1.8 if is_trailing_tail else 1.0)
+			gap_multiplier = 2.8 if is_parenthetical else (1.8 if is_trailing_tail else (1.6 if (is_strongly_aligned and (txt.strip() or last_txt.strip())) else 1.0))
 			max_allowed_gap = gap_factor * gap_multiplier * min_eff_h
 			if gap > max_allowed_gap or y < ly - 0.35 * min_eff_h:
 				continue
 
-			# HORIZONTAL CENTROID
-			new_cx = x + w / 2.0
-			para_mean_cx = sum(para_cx_lists[p_idx]) / len(para_cx_lists[p_idx])
-
 			# HORIZONTAL ALIGNMENT: X-RANGES OVERLAP LIKE CENTERED BUBBLE LINES
-			overlap = min(x1, lx1) - max(x, lx)
 			if overlap < overlap_min * min(w, lw):
 				continue
 
-			# Alignment guards
-			is_left_aligned = abs(x - lx) <= 0.25 * min(w, lw)
-			is_right_aligned = abs(x1 - lx1) <= 0.25 * min(w, lw)
+			is_tight_bubble_pair = gap <= 0.35 * min_eff_h and overlap >= 0.50 * min(w, lw) and is_aligned
 
 			# Terminal punctuation guard:
 			# 1. Full-stops '。' and semicolons ';；' signify complete statements.
+			#    Two standalone single lines that each end with a full-stop (e.g. '好啦。' vs '不说这些了。'
+			#    or separate system notification cards) remain separate items when separated by a gap.
 			# 2. Exclamation '！' and question marks '？' on short interjections/utterances (<= 5 chars)
 			#    or with large vertical gap / horizontal offset signify separate speech bubbles.
 			if last_txt:
 				last_strip = last_txt.strip()
-				if bool(re.search(r"[。;；]$", last_strip)) and (gap >= 0.15 * min_eff_h or (abs(new_cx - para_mean_cx) > 0.35 * min(w, lw) and not (is_left_aligned or is_right_aligned))):
+				cand_strip = txt.strip()
+				last_clean = last_strip.rstrip("）)\"'”’")
+				cand_clean = cand_strip.rstrip("）)\"'”’")
+				is_new_ui_card = bool(re.search(r"^(?:嘟|叮|提示|系统|注意)[!！:：]?", cand_clean))
+				if is_new_ui_card and gap >= 0.10 * min_eff_h:
 					continue
-				if bool(re.search(r"[!！?？]$", last_strip)):
-					is_short_utterance = len(last_strip) <= 5
-					has_noticeable_gap = gap >= 0.30 * min_eff_h
+				if bool(re.search(r"[。;；]$", last_clean)):
+					is_both_single_period_lines = (
+						cand_line_count == 1
+						and last_line_count == 1
+						and bool(re.search(r"[。;；]$", cand_clean))
+					)
+					is_short_utterance = len(last_clean) <= 5
+					has_noticeable_gap = gap >= 0.30 * min_eff_h and not (is_aligned and overlap >= 0.50 * min(w, lw))
+					has_offset = abs(new_cx - para_mean_cx) > 0.40 * min(w, lw) and not (is_left_aligned or is_right_aligned)
+					if (
+						(is_both_single_period_lines and gap >= 0.15 * min_eff_h)
+						or (is_short_utterance and not (is_aligned and overlap >= 0.50 * min(w, lw)) and gap >= 0.15 * min_eff_h)
+						or has_noticeable_gap
+						or (has_offset and gap > 0.10 * min_eff_h)
+					):
+						continue
+				if bool(re.search(r"[!！?？]$", last_clean)):
+					is_standalone_sfx_or_interjection = len(last_clean) <= 2
+					has_noticeable_gap = gap >= 0.30 * min_eff_h and not (is_aligned and overlap >= 0.50 * min(w, lw))
 					has_offset = abs(new_cx - para_mean_cx) > 0.45 * min(w, lw) and not (is_left_aligned or is_right_aligned)
-					if (is_short_utterance and gap >= 0.20 * min_eff_h) or has_noticeable_gap or (has_offset and gap > 0.10 * min_eff_h):
+					if (
+						(is_standalone_sfx_or_interjection and gap >= 0.15 * min_eff_h)
+						or (len(last_clean) <= 5 and not (is_aligned and overlap >= 0.50 * min(w, lw)) and gap >= 0.15 * min_eff_h)
+						or has_noticeable_gap
+						or (has_offset and gap > 0.10 * min_eff_h)
+					):
 						continue
 
 			# FONT-SIZE GATE: ONLY LINES OF SIMILAR FONT SIZE GROUP (OR SHORT TRAILING LINE / ELLIPSIS / PARENTHETICAL).
@@ -557,7 +591,6 @@ def group_paragraphs(
 				if height_ratio > 2.5:
 					continue
 			else:
-				is_tight_bubble_pair = gap <= 0.35 * min_eff_h and overlap >= 0.50 * min(w, lw) and (is_left_aligned or is_right_aligned or abs(new_cx - para_mean_cx) <= 0.30 * min(w, lw))
 				max_allowed_ratio = 2.0 if (cand_line_count > 1 or last_line_count > 1) else (1.75 if is_tight_bubble_pair else height_sim_max)
 				if height_ratio > max_allowed_ratio:
 					continue
