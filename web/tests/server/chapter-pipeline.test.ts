@@ -10,7 +10,7 @@ import { eq } from 'drizzle-orm';
 import { getTestDb, resetDb, seedBook, seedChapter, seedPage, type TestDb } from '../helpers/db';
 import type { AnalyzeResult, PipelineClient } from '$lib/server/pipeline-client';
 import { chapterWork } from '$lib/server/chapter-pipeline';
-import { pages, regions } from '$lib/server/db/schema';
+import { pages, regions, glossary } from '$lib/server/db/schema';
 
 vi.mock('$lib/server/db', async () => ({ db: (await import('../helpers/db')).getTestDb() }));
 
@@ -564,6 +564,53 @@ describe('runChapterPipeline', () => {
 		expect(p0Translate).toBeGreaterThanOrEqual(0);
 		expect(p1Analyze).toBeGreaterThanOrEqual(0);
 		expect(p0Translate).toBeLessThan(p1Analyze);
+	});
+
+	it('persists newly discovered terms from single-call page translation to the book glossary', async () => {
+		seedBook(db, { id: 'b_terms' });
+		const chapter = seedChapter(db, { bookId: 'b_terms', seq: 0 });
+		seedPage(db, { chapterId: chapter.id, seq: 0, filePath: 'uploads/terms_0.png' });
+		mkdirSync(join(dataRoot, 'uploads'), { recursive: true });
+		writeFileSync(join(dataRoot, 'uploads', 'terms_0.png'), PAGE_PNG);
+
+		const fakeLlmWithTerms = {
+			chat: {
+				completions: {
+					create: async () => ({
+						choices: [
+							{
+								message: {
+									content: JSON.stringify({
+										translations: { r0: 'Hello there' },
+										newTerms: [
+											{ source: '你好', target: 'Hello', category: 'other', gender: 'neuter' },
+										],
+									}),
+								},
+							},
+						],
+						usage: { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 },
+					}),
+				},
+			},
+		} as unknown as OpenAI;
+
+		await chapterWork(chapter.id, {
+			pipeline,
+			dataRoot,
+			llm: fakeLlmWithTerms,
+		})(new AbortController().signal, () => {});
+
+		const bookTerms = db
+			.select()
+			.from(glossary)
+			.where(eq(glossary.bookId, 'b_terms'))
+			.all();
+
+		expect(bookTerms).toHaveLength(1);
+		expect(bookTerms[0].source).toBe('你好');
+		expect(bookTerms[0].target).toBe('Hello');
+		expect(bookTerms[0].status).toBe('ai');
 	});
 });
 

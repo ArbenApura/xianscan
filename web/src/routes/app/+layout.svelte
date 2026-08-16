@@ -30,8 +30,14 @@
 
 	// -- STATES -- //
 	let settingsOpen = false;
+	let settingsTab: 'ai' | 'compute' | 'general' = 'ai';
 	let lastScrollY = 0;
 	let topbarHidden = false;
+
+	function openSettings(tab: 'ai' | 'compute' | 'general' = 'ai') {
+		settingsTab = tab;
+		settingsOpen = true;
+	}
 
 	onMount(() => {
 		mlStatus.startPolling();
@@ -199,7 +205,7 @@
 				<!-- ML SIDECAR STATUS PILL (RESPONSIVE: COMPACT ON MOBILE, EXPANDED ON TABLET/DESKTOP) -->
 				<button
 					type="button"
-					on:click={() => (settingsOpen = true)}
+					on:click={() => openSettings('ai')}
 					class={`flex h-8 sm:h-9 items-center gap-1.5 rounded-xl border px-2 sm:px-2.5 text-xs font-semibold shadow-2xs backdrop-blur transition-all duration-200 active:scale-95 ${
 						$mlStatus.online
 							? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:border-emerald-500/50 hover:bg-emerald-500/15 dark:text-emerald-400 dark:bg-emerald-500/10 dark:hover:bg-emerald-500/20'
@@ -208,10 +214,10 @@
 								: 'border-red-500/30 bg-red-500/10 text-red-600 hover:border-red-500/50 hover:bg-red-500/15 dark:text-red-400 dark:bg-red-500/10 dark:hover:bg-red-500/20'
 					}`}
 					title={$mlStatus.online
-						? `ML Sidecar: Online (${$mlStatus.deviceLabel}) — Click to configure hardware`
+						? `ML Sidecar: Online (${$mlStatus.deviceLabel}) — Click to configure AI & Providers`
 						: $mlStatus.loading
 							? 'Connecting to ML Sidecar service...'
-							: `ML Sidecar: Offline (${$mlStatus.error || 'Unreachable'}) — Click to check settings`}
+							: `ML Sidecar: Offline (${$mlStatus.error || 'Unreachable'}) — Click to configure AI & Providers`}
 					aria-label="ML Sidecar Status"
 					use:ripple
 				>
@@ -243,7 +249,7 @@
 				<!-- SETTINGS DIALOG BUTTON -->
 				<button
 					type="button"
-					on:click={() => (settingsOpen = true)}
+					on:click={() => openSettings('general')}
 					class="group flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-xl border border-black/10 bg-white/70 text-current shadow-2xs backdrop-blur transition-all duration-200 hover:border-black/25 hover:bg-white hover:shadow-xs active:scale-95 dark:border-white/10 dark:bg-white/[0.04] dark:hover:border-white/20 dark:hover:bg-white/[0.08]"
 					aria-label="Settings"
 					title="Preferences & Model Configuration"
@@ -266,4 +272,4 @@
 
 
 <!-- GLOBAL SETTINGS & PREFERENCES MODAL -->
-<SettingsModal bind:open={settingsOpen} />
+<SettingsModal bind:open={settingsOpen} initialTab={settingsTab} />

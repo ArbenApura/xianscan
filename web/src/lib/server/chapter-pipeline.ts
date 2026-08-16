@@ -266,6 +266,9 @@ export async function runChapterPipeline(
 						const translated = await translatePage(sources, pageTerms, pair, { client: deps.llm, model, signal });
 						if (signal.aborted || deps.isPageCancelled?.(injectRow.id)) return;
 						for (const [id, text] of translated.byRegion) byRegion.set(id, text);
+						if (translated.newTerms && translated.newTerms.length > 0) {
+							await addNewTerms(chapter.bookId, translated.newTerms, chapterId);
+						}
 						emit({ type: 'page-step-end', chapterId, page: injectIdx, pageId: injectRow.id, step: 'translate', stepStatus: 'completed', durationMs: performance.now() - tT0, stepDetails: { cacheHit: false, model: translated.usage.model, tokens: (translated.usage.promptTokens ?? 0) + (translated.usage.completionTokens ?? 0), costUsd: translated.usage.costUsd } });
 						if (translated.usage && deps.onUsage) deps.onUsage(translated.usage);
 					}
@@ -513,6 +516,9 @@ export async function runChapterPipeline(
 				signal.throwIfAborted();
 				if (deps.isPageCancelled?.(page.id)) return;
 				for (const [id, text] of translated.byRegion) byRegion.set(id, text);
+				if (translated.newTerms && translated.newTerms.length > 0) {
+					await addNewTerms(chapter.bookId, translated.newTerms, chapterId);
+				}
 				const tTrans = performance.now() - tTrans0;
 				emit({
 					type: 'page-step-end',

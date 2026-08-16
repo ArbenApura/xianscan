@@ -30,6 +30,7 @@ export interface PageTranslationOptions {
 export interface PageTranslation {
 	byRegion: Map<string, string>;
 	usage: TranslationUsage;
+	newTerms?: TermDraft[];
 }
 
 // -- CONSTANTS -- //
@@ -179,7 +180,11 @@ export function userPrompt(regions: RegionSource[]): string {
 
 ${regionPayload(regions)}
 
-Return a JSON object mapping each id exactly to its translation, e.g. ${exampleJson}. Every id must appear exactly once using the exact same id string as provided above. No markdown fences.`;
+Return a JSON object with:
+- "translations": { ${exampleEntries || '"r0": "Hello"'} } mapping each id exactly to its translation. Every id must appear exactly once using the exact same id string as provided above.
+- "newTerms" (optional): list of any new proper nouns, character names, locations, or martial arts/techniques appearing in these regions that are NOT already in the glossary, e.g. [{"source": "叶凡", "target": "Ye Fan", "category": "character", "gender": "masculine"}]. If none, use [] or omit.
+
+Alternatively, a flat JSON object ${exampleJson} is also accepted. No markdown fences.`;
 }
 
 export function buildMessages(regions: RegionSource[], terms: TermDraft[], pair: LangPair): OpenAI.Chat.ChatCompletionMessageParam[] {
@@ -214,11 +219,24 @@ export function parseTranslations(
 			const jsonStr = cleaned.slice(firstBrace, lastBrace + 1);
 			const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
 			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-				for (const [k, val] of Object.entries(parsed)) {
+				const transObj =
+					parsed.translations &&
+					typeof parsed.translations === 'object' &&
+					!Array.isArray(parsed.translations)
+						? (parsed.translations as Record<string, unknown>)
+						: parsed;
+
+				for (const [k, val] of Object.entries(transObj)) {
+					if (k === 'newTerms' || k === 'terms' || k === 'translations') continue;
 					if (typeof val === 'string') {
 						const trimmed = val.trim();
 						if (trimmed) rawMap.set(k, trimmed);
-					} else if (val && typeof val === 'object' && 'text' in val && typeof (val as { text: unknown }).text === 'string') {
+					} else if (
+						val &&
+						typeof val === 'object' &&
+						'text' in val &&
+						typeof (val as { text: unknown }).text === 'string'
+					) {
 						const trimmed = (val as { text: string }).text.trim();
 						if (trimmed) rawMap.set(k, trimmed);
 					}
@@ -234,6 +252,19 @@ export function parseTranslations(
 		const unbraced = cleaned.replace(/^\{/, '').replace(/\}$/, '');
 		for (const m of unbraced.matchAll(/"([A-Za-z0-9_-]+)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
 			const k = m[1];
+			if (
+				k === 'newTerms' ||
+				k === 'terms' ||
+				k === 'translations' ||
+				k === 'source' ||
+				k === 'target' ||
+				k === 'category' ||
+				k === 'gender' ||
+				k === 'context' ||
+				k === 'aliases'
+			) {
+				continue;
+			}
 			const text = m[2]
 				.replace(/\\n/g, '\n')
 				.replace(/\\"/g, '"')
@@ -355,9 +386,9 @@ async function callTranslate(
 	const client = opts.client ?? createClient();
 	const model = resolveModel(opts.model);
 	const messages = buildMessages(regions, terms, pair);
-	// ~2 TOKENS PER SOURCE CHAR + ROOM FOR THE JSON ENVELOPE — THE SOURCE TEXT DRIVES THE BUDGET
+	// ~3 TOKENS PER SOURCE CHAR + ROOM FOR JSON TRANSLATIONS & OPTIONAL NEW TERMS ENVELOPE
 	const sourceChars = regions.reduce((n, r) => n + r.text.length, 0);
-	const maxTokens = Math.max(256, Math.ceil(sourceChars * 2 + 256));
+	const maxTokens = Math.max(512, Math.ceil(sourceChars * 3 + 512));
 	const resp = await queued(() =>
 		withRetry(async () => {
 			const r = await client.chat.completions.create(
@@ -388,12 +419,17 @@ export async function translatePage(
 	const model = resolveModel(opts.model);
 	const usage = { model, promptTokens: 0, cachedTokens: 0, completionTokens: 0, costUsd: 0 } as TranslationUsage;
 
-	if (regions.length === 0) return { byRegion: new Map(), usage };
+	if (regions.length === 0) return { byRegion: new Map(), usage, newTerms: [] };
 
 	// FIRST PASS — THE FULL REGION LIST
 	const { raw, usage: u1 } = await callTranslate(regions, terms, pair, opts);
 	mergeUsage(usage, u1);
 	const byRegion = parseTranslations(raw, new Set(regions.map((r) => r.id)), regions) ?? new Map();
+
+	// EXTRACT ANY NEW TERMS DISCOVERED IN THIS PAGE
+	const pageSourceText = regions.map((r) => r.text).join('\n');
+	const knownSources = new Set(terms.map((t) => t.source.trim()));
+	const discoveredTerms = parseExtractedTerms(raw, pageSourceText).filter((t) => !knownSources.has(t.source.trim()));
 
 	// REFILL — REGIONS THAT CAME BACK EMPTY / MISSING / DEGENERATE GET ONE TARGETED CALL
 	const missing = regions.filter((r) => {
@@ -429,7 +465,7 @@ export async function translatePage(
 		}
 	}
 
-	return { byRegion, usage };
+	return { byRegion, usage, newTerms: discoveredTerms };
 }
 
 function mergeUsage(acc: TranslationUsage, u: TranslationUsage): void {
@@ -481,7 +517,7 @@ export function parseTermObjects(text: string): unknown[] {
 	const cleaned = text.replace(/```(?:json)?/gi, '').trim();
 	const whole = tryParse(cleaned);
 	if (Array.isArray(whole)) return whole;
-	const terms = (whole as { terms?: unknown })?.terms;
+	const terms = (whole as { terms?: unknown })?.terms ?? (whole as { newTerms?: unknown })?.newTerms;
 	if (Array.isArray(terms)) return terms;
 	// SALVAGE EVERY COMPLETE {…} OBJECT (HANDLES A TRUNCATED ARRAY THAT NEVER GOT ITS CLOSING `]`)
 	const objs: unknown[] = [];

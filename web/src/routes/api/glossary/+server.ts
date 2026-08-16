@@ -4,7 +4,7 @@ import { z } from 'zod';
 // IMPORTED MODULES
 import { DEFAULT_SOURCE_LANG, DEFAULT_TARGET_LANG } from '$lib/languages';
 import { assertBookExists } from '$lib/server/books';
-import { addTerm, bookPair, getGlossaryPage } from '$lib/server/glossary';
+import { addTerm, batchUpdateTerms, bookPair, clearGlossaryScope, deleteTerms, getGlossaryPage } from '$lib/server/glossary';
 // IMPORTED TYPES
 import type { LangPair } from '$lib/types';
 import type { RequestHandler } from './$types';
@@ -40,6 +40,25 @@ const PostBody = z.object({
 	category: categorySchema.nullable().optional(),
 	pinned: z.boolean().optional(),
 	aliases: z.array(z.string()).nullable().optional(),
+});
+
+const DeleteBody = z.object({
+	ids: z.array(z.number().int()).optional(),
+	clearScope: z.boolean().optional(),
+	scope: scopeSchema.optional(),
+	bookId: z.string().nullable().optional(),
+	sourceLang: z.string().optional(),
+	targetLang: z.string().optional(),
+});
+
+const PatchBody = z.object({
+	ids: z.array(z.number().int()).min(1),
+	scope: scopeSchema.optional(),
+	bookId: z.string().nullable().optional(),
+	pinned: z.boolean().optional(),
+	category: categorySchema.nullable().optional(),
+	gender: z.enum(['neuter', 'masculine', 'feminine']).optional(),
+	status: z.enum(['ai', 'user']).optional(),
 });
 
 // -- FUNCTIONS -- //
@@ -101,4 +120,39 @@ export const POST: RequestHandler = async ({ request }) => {
 		aliases: aliases ?? null,
 	}, pair);
 	return json(row, { status: 201 });
+};
+
+export const DELETE: RequestHandler = async ({ request }) => {
+	const parsed = DeleteBody.safeParse(await request.json().catch(() => null));
+	if (!parsed.success) throw error(400, 'Invalid delete request.');
+	const { ids, clearScope, scope, bookId, sourceLang, targetLang } = parsed.data;
+
+	if (clearScope) {
+		if (!scope) throw error(400, 'scope is required to clear glossary.');
+		if (scope === 'book') {
+			if (!bookId) throw error(400, 'bookId is required to clear book glossary.');
+			await assertBookExists(bookId);
+			const count = await clearGlossaryScope('book', bookId);
+			return json({ success: true, count });
+		} else {
+			const pair = pairFrom(sourceLang, targetLang);
+			const count = await clearGlossaryScope('global', null, pair);
+			return json({ success: true, count });
+		}
+	}
+
+	if (ids && ids.length > 0) {
+		const count = await deleteTerms(ids, scope, bookId ?? null);
+		return json({ success: true, count });
+	}
+
+	throw error(400, 'No terms or scope specified for deletion.');
+};
+
+export const PATCH: RequestHandler = async ({ request }) => {
+	const parsed = PatchBody.safeParse(await request.json().catch(() => null));
+	if (!parsed.success) throw error(400, 'Invalid patch request.');
+	const { ids, scope, bookId, ...patch } = parsed.data;
+	const count = await batchUpdateTerms(ids, patch, scope, bookId ?? null);
+	return json({ success: true, count });
 };

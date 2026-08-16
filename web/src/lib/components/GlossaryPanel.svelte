@@ -12,6 +12,8 @@
 	import { chapterLabel } from '$lib/chapter-label';
 	import { DEFAULT_SOURCE_LANG, DEFAULT_TARGET_LANG } from '$lib/languages';
 	import { settings, THEME_CLASS } from '$lib/stores/settings';
+	import { fly } from 'svelte/transition';
+	import { cubicOut } from 'svelte/easing';
 	// IMPORTED DEP-COMPONENTS
 	import ChevronLeft from 'lucide-svelte/icons/chevron-left';
 	import ChevronRight from 'lucide-svelte/icons/chevron-right';
@@ -24,8 +26,15 @@
 	import Star from 'lucide-svelte/icons/star';
 	import Trash2 from 'lucide-svelte/icons/trash-2';
 	import Upload from 'lucide-svelte/icons/upload';
+	import Check from 'lucide-svelte/icons/check';
+	import CheckSquare from 'lucide-svelte/icons/check-square';
+	import Square from 'lucide-svelte/icons/square';
+	import Pin from 'lucide-svelte/icons/pin';
+	import PinOff from 'lucide-svelte/icons/pin-off';
+	import X from 'lucide-svelte/icons/x';
 	// IMPORTED COMPONENTS
 	import Button from '$lib/components/ui/Button.svelte';
+	import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte';
 	import Modal from '$lib/components/ui/Modal.svelte';
 	import Select from '$lib/components/ui/Select.svelte';
 
@@ -157,7 +166,21 @@
 	let debounce: ReturnType<typeof setTimeout>;
 	let loadToken = 0; // GUARDS AGAINST OUT-OF-ORDER load() RESPONSES PAINTING STALE ROWS
 
+	// MULTI-SELECTION & BATCH ACTIONS STATES
+	let selectedTermIds = new Set<number>();
+	let batchDeleteConfirmOpen = false;
+
+	// DANGEROUS CLEAR SCOPE CONFIRMATION STATES
+	let clearScopeConfirmOpen = false;
+	let clearingScope = false;
+
 	// -- REACTIVE STATES -- //
+
+	$: allVisibleSelected = rows.length > 0 && rows.every((r) => selectedTermIds.has(r.id));
+	$: someVisibleSelected = rows.some((r) => selectedTermIds.has(r.id)) && !allVisibleSelected;
+	$: selectedTermsList = rows.filter((r) => selectedTermIds.has(r.id));
+	$: anySelectedPinned = selectedTermsList.some((r) => r.pinned);
+	$: allSelectedPinned = selectedTermsList.length > 0 && selectedTermsList.every((r) => r.pinned);
 
 	$: scopeQs =
 		scope === 'book' && bookId
@@ -187,6 +210,110 @@
 	$: jumpValue = page;
 
 	// -- FUNCTIONS -- //
+
+	function toggleSelectTerm(id: number, e?: MouseEvent | KeyboardEvent) {
+		if (e) e.stopPropagation();
+		const next = new Set(selectedTermIds);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		selectedTermIds = next;
+	}
+
+	function toggleSelectAllVisible() {
+		if (allVisibleSelected) {
+			const next = new Set(selectedTermIds);
+			for (const r of rows) next.delete(r.id);
+			selectedTermIds = next;
+		} else {
+			const next = new Set(selectedTermIds);
+			for (const r of rows) next.add(r.id);
+			selectedTermIds = next;
+		}
+	}
+
+	function clearSelection() {
+		selectedTermIds = new Set();
+	}
+
+	function promptBatchDelete() {
+		if (selectedTermIds.size === 0) return;
+		batchDeleteConfirmOpen = true;
+	}
+
+	async function confirmBatchDelete() {
+		if (selectedTermIds.size === 0) return;
+		const count = selectedTermIds.size;
+		busy = true;
+		try {
+			const res = await apiFetch('/api/glossary', {
+				method: 'DELETE',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ ids: [...selectedTermIds], scope, bookId }),
+			});
+			if (!res.ok) throw new Error('Batch delete failed');
+			toast.success(`Deleted ${count} term${count === 1 ? '' : 's'}.`);
+			clearSelection();
+			await load();
+		} catch {
+			toast.error('Could not delete selected terms.');
+		} finally {
+			busy = false;
+			batchDeleteConfirmOpen = false;
+		}
+	}
+
+	async function batchTogglePin(targetPinState: boolean) {
+		if (selectedTermIds.size === 0) return;
+		busy = true;
+		try {
+			const res = await apiFetch('/api/glossary', {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ ids: [...selectedTermIds], pinned: targetPinState, scope, bookId }),
+			});
+			if (!res.ok) throw new Error('Batch pin update failed');
+			toast.success(`${targetPinState ? 'Pinned' : 'Unpinned'} ${selectedTermIds.size} term${selectedTermIds.size === 1 ? '' : 's'}.`);
+			clearSelection();
+			await load();
+		} catch {
+			toast.error('Could not update pin state.');
+		} finally {
+			busy = false;
+		}
+	}
+
+	function openClearScopeModal() {
+		clearScopeConfirmOpen = true;
+	}
+
+	async function confirmClearScope() {
+		clearingScope = true;
+		try {
+			const res = await apiFetch('/api/glossary', {
+				method: 'DELETE',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					clearScope: true,
+					scope,
+					bookId: scope === 'book' ? bookId : undefined,
+					sourceLang: scope === 'global' ? sourceLang : undefined,
+					targetLang: scope === 'global' ? targetLang : undefined,
+				}),
+			});
+			if (!res.ok) throw new Error('Clear scope failed');
+			const data = await res.json();
+			const count = data.count ?? total;
+			toast.success(`Cleared ${count} term${count === 1 ? '' : 's'} from ${scope === 'book' ? (bookTitle || 'book') : 'global'} glossary.`);
+			clearScopeConfirmOpen = false;
+			clearSelection();
+			page = 1;
+			await load();
+		} catch {
+			toast.error('Could not clear glossary scope.');
+		} finally {
+			clearingScope = false;
+		}
+	}
 
 	async function load() {
 		const token = ++loadToken;
@@ -479,6 +606,35 @@
 			<Button href={exportHref(scope)}>
 				<Upload size={14} /><span class="sr-only sm:not-sr-only sm:ml-1.5">Export</span>
 			</Button>
+
+			{#if rows.length > 0}
+				<button
+					type="button"
+					on:click={toggleSelectAllVisible}
+					class="inline-flex h-[34px] items-center gap-1.5 rounded-lg border border-black/10 bg-black/5 px-2.5 text-xs font-medium transition hover:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
+					title={allVisibleSelected ? 'Deselect all visible terms' : 'Select all terms on this page'}
+					use:ripple
+				>
+					{#if allVisibleSelected}
+						<CheckSquare size={13} class="text-[#b23a2e] dark:text-[#e08a63]" />
+					{:else}
+						<Square size={13} class="opacity-60" />
+					{/if}
+					<span>{allVisibleSelected ? 'Deselect All' : 'Select Page'}</span>
+				</button>
+			{/if}
+
+			<!-- DANGEROUS CLEAR SCOPE BUTTON -->
+			<Button
+				class="text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 border-rose-500/20"
+				disabled={busy || total === 0}
+				on:click={openClearScopeModal}
+				title={`Permanently delete all terms in ${scope === 'book' ? (bookTitle || 'this book') : 'global'} glossary`}
+			>
+				<Trash2 size={14} />
+				<span class="sr-only sm:not-sr-only sm:ml-1.5">Clear Scope</span>
+			</Button>
+
 			<span class="ml-auto text-xs tabular-nums opacity-60">{total.toLocaleString()} terms</span>
 			<input bind:this={fileInput} type="file" accept=".csv,text/csv" class="hidden" on:change={onImport} />
 		</div>
@@ -527,81 +683,99 @@
 				{query ? 'No matches.' : 'No terms yet — add or import some.'}
 			</p>
 		{:else}
-			<!-- READ-ONLY CARD LIST: FLUID CHIP LAYOUT THAT STACKS CLEANLY ON MOBILE AND BREATHES ON WIDE -->
+			<!-- READ-ONLY CARD LIST WITH CHECKBOX SELECTION: FLUID CHIP LAYOUT -->
 			<ul
 				class="divide-y divide-black/[0.06] overflow-hidden rounded-xl border border-black/[0.06] transition-opacity dark:divide-white/[0.045] dark:border-white/[0.045]"
 				class:opacity-50={loading}
 			>
 				{#each rows as e (e.id)}
 					{@const firstLabel = firstAppearanceLabel(e)}
-					<li>
-						<!-- WHOLE CARD IS THE EDIT TRIGGER — NO INLINE FIELDS -->
-						<button
-							type="button"
-							use:ripple
-							on:click={() => openEdit(e)}
-							class="flex w-full items-start gap-3 px-3 py-2.5 text-left transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
-						>
-							<div class="min-w-0 flex-1">
-								<!-- SOURCE → TARGET (PINNED STAR INLINE, ONLY WHEN PINNED — NO RESERVED LEFT GUTTER; WRAPS ON NARROW WIDTHS) -->
-								<div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-									{#if e.pinned}
-										<Star size={13} class="shrink-0 self-center fill-amber-400 text-amber-500" />
+					{@const isSelected = selectedTermIds.has(e.id)}
+					<li class={`transition-colors ${isSelected ? 'bg-[#b23a2e]/5 dark:bg-[#e08a63]/10' : ''}`}>
+						<div class="flex items-start gap-2.5 px-3 py-2.5">
+							<!-- CARD CHECKBOX TOGGLE -->
+							<button
+								type="button"
+								on:click={(ev) => toggleSelectTerm(e.id, ev)}
+								class={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-all mt-1 ${
+									isSelected
+										? 'bg-[#b23a2e] border-[#b23a2e] text-white shadow-xs'
+										: 'border-black/20 bg-transparent text-transparent hover:border-black/40 dark:border-white/20 dark:hover:border-white/40'
+								}`}
+								title={isSelected ? 'Deselect term' : 'Select term'}
+								aria-label="Select term"
+							>
+								<Check size={12} class={isSelected ? 'stroke-[2.5]' : 'opacity-0'} />
+							</button>
+
+							<!-- WHOLE CARD IS THE EDIT TRIGGER — NO INLINE FIELDS -->
+							<button
+								type="button"
+								use:ripple
+								on:click={() => openEdit(e)}
+								class="flex min-w-0 flex-1 items-start gap-3 text-left transition-colors hover:opacity-90"
+							>
+								<div class="min-w-0 flex-1">
+									<!-- SOURCE → TARGET (PINNED STAR INLINE, ONLY WHEN PINNED — NO RESERVED LEFT GUTTER; WRAPS ON NARROW WIDTHS) -->
+									<div class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+										{#if e.pinned}
+											<Star size={13} class="shrink-0 self-center fill-amber-400 text-amber-500" />
+										{/if}
+										<span class="font-medium">{e.source}</span>
+										<span class="opacity-30">→</span>
+										<span class="break-words text-[#b23a2e] dark:text-[#e08a63]">{e.target}</span>
+									</div>
+									<!-- DESCRIPTION — CLAMPED SO LONG NOTES DON'T BLOAT THE ROW -->
+									{#if e.context}
+										<p class="mt-1 line-clamp-2 text-xs leading-relaxed opacity-55">{e.context}</p>
 									{/if}
-									<span class="font-medium">{e.source}</span>
-									<span class="opacity-30">→</span>
-									<span class="break-words text-[#b23a2e] dark:text-[#e08a63]">{e.target}</span>
+									<!-- META CHIPS: CATEGORY · GENDER · ALIASES · FIRST-SEEN · STATUS -->
+									<div class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+										{#if e.category}
+											<!-- CATEGORY CHIP — RUNTIME PER-CATEGORY COLOUR (style EXCEPTION) -->
+											<span
+												class="rounded-full border px-1.5 py-0.5"
+												style="color: {CATEGORY_COLOR[e.category]}; border-color: {CATEGORY_COLOR[
+													e.category
+												]}66;">{CATEGORY_LABELS[e.category]}</span
+											>
+										{/if}
+										{#if e.gender === 'masculine'}
+											<span
+												class="bg-[#3b6fb0]/12 rounded px-1.5 py-0.5 text-[#3b6fb0] dark:text-[#7aa6e0]"
+												>Masculine</span
+											>
+										{:else if e.gender === 'feminine'}
+											<span
+												class="rounded bg-rose-500/10 px-1.5 py-0.5 text-rose-600 dark:text-rose-300"
+												>Feminine</span
+											>
+										{/if}
+										{#if e.aliases.length}<span class="truncate opacity-45"
+												>also: {e.aliases.join(', ')}</span
+											>{/if}
+										{#if firstLabel}
+											<span class="opacity-45" title="First appears in this chapter"
+												>{firstLabel}</span
+											>
+										{/if}
+										<span
+											class={cn(
+												'rounded px-1.5 py-0.5',
+												e.status === 'user'
+													? 'bg-[#5b8a72]/14 text-[#4f7a64] dark:text-[#83b39a]'
+													: 'opacity-45',
+											)}
+											title={e.status === 'user'
+												? 'Added or confirmed by you'
+												: 'Auto-extracted (unreviewed)'}>{e.status === 'user' ? 'You' : 'AI'}</span
+										>
+									</div>
 								</div>
-								<!-- DESCRIPTION — CLAMPED SO LONG NOTES DON'T BLOAT THE ROW -->
-								{#if e.context}
-									<p class="mt-1 line-clamp-2 text-xs leading-relaxed opacity-55">{e.context}</p>
-								{/if}
-								<!-- META CHIPS: CATEGORY · GENDER · ALIASES · FIRST-SEEN · STATUS -->
-								<div class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-									{#if e.category}
-										<!-- CATEGORY CHIP — RUNTIME PER-CATEGORY COLOUR (style EXCEPTION) -->
-										<span
-											class="rounded-full border px-1.5 py-0.5"
-											style="color: {CATEGORY_COLOR[e.category]}; border-color: {CATEGORY_COLOR[
-												e.category
-											]}66;">{CATEGORY_LABELS[e.category]}</span
-										>
-									{/if}
-									{#if e.gender === 'masculine'}
-										<span
-											class="bg-[#3b6fb0]/12 rounded px-1.5 py-0.5 text-[#3b6fb0] dark:text-[#7aa6e0]"
-											>Masculine</span
-										>
-									{:else if e.gender === 'feminine'}
-										<span
-											class="rounded bg-rose-500/10 px-1.5 py-0.5 text-rose-600 dark:text-rose-300"
-											>Feminine</span
-										>
-									{/if}
-									{#if e.aliases.length}<span class="truncate opacity-45"
-											>also: {e.aliases.join(', ')}</span
-										>{/if}
-									{#if firstLabel}
-										<span class="opacity-45" title="First appears in this chapter"
-											>{firstLabel}</span
-										>
-									{/if}
-									<span
-										class={cn(
-											'rounded px-1.5 py-0.5',
-											e.status === 'user'
-												? 'bg-[#5b8a72]/14 text-[#4f7a64] dark:text-[#83b39a]'
-												: 'opacity-45',
-										)}
-										title={e.status === 'user'
-											? 'Added or confirmed by you'
-											: 'Auto-extracted (unreviewed)'}>{e.status === 'user' ? 'You' : 'AI'}</span
-									>
-								</div>
-							</div>
-							<!-- EDIT AFFORDANCE -->
-							<ChevronRight size={16} class="shrink-0 self-center opacity-25" />
-						</button>
+								<!-- EDIT AFFORDANCE -->
+								<ChevronRight size={16} class="shrink-0 self-center opacity-25" />
+							</button>
+						</div>
 					</li>
 				{/each}
 			</ul>
@@ -662,6 +836,87 @@
 		</div>
 	{/if}
 </div>
+
+<!-- STICKY FLOATING BATCH ACTIONS TOOLBAR -->
+{#if selectedTermIds.size > 0}
+	<div
+		transition:fly={{ y: 40, duration: 250, easing: cubicOut }}
+		class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2.5 sm:gap-4 rounded-2xl border border-black/15 bg-white/95 px-3 sm:px-4 py-2 sm:py-2.5 shadow-2xl backdrop-blur-xl dark:border-white/15 dark:bg-[#1a1714]/95 max-w-[95vw]"
+	>
+		<div class="flex items-center gap-2 text-xs font-semibold">
+			<span class="flex h-6 w-6 items-center justify-center rounded-lg bg-[#b23a2e] text-white font-mono text-[11px] font-bold shadow-xs">
+				{selectedTermIds.size}
+			</span>
+			<span class="hidden sm:inline">Selected</span>
+		</div>
+
+		<div class="h-4 w-px bg-black/10 dark:bg-white/10"></div>
+
+		<div class="flex items-center gap-1.5 sm:gap-2">
+			<!-- BATCH PIN / UNPIN -->
+			<Button
+				variant="secondary"
+				size="sm"
+				class="gap-1 text-xs h-8 sm:h-9 px-2.5"
+				on:click={() => batchTogglePin(!allSelectedPinned)}
+				title={allSelectedPinned ? 'Unpin selected terms' : 'Pin selected terms'}
+			>
+				{#if allSelectedPinned}
+					<PinOff size={13} />
+					<span>Unpin ({selectedTermIds.size})</span>
+				{:else}
+					<Pin size={13} />
+					<span>Pin ({selectedTermIds.size})</span>
+				{/if}
+			</Button>
+
+			<!-- BATCH DELETE -->
+			<Button
+				variant="secondary"
+				size="sm"
+				class="gap-1 text-xs h-8 sm:h-9 px-2.5 text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 border-rose-500/20"
+				on:click={promptBatchDelete}
+				title="Delete selected terms"
+			>
+				<Trash2 size={13} />
+				<span>Delete ({selectedTermIds.size})</span>
+			</Button>
+
+			<button
+				type="button"
+				on:click={clearSelection}
+				class="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-black/5 hover:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10 transition opacity-70 hover:opacity-100"
+				title="Clear selection"
+				aria-label="Clear selection"
+			>
+				<X size={14} />
+			</button>
+		</div>
+	</div>
+{/if}
+
+<!-- DANGEROUS CLEAR SCOPE CONFIRMATION DIALOG (USES SHARED APP CONFIRM DIALOG WITH VERIFICATION CODE) -->
+<ConfirmDialog
+	open={clearScopeConfirmOpen}
+	title="Clear Entire Glossary?"
+	message={`Are you sure you want to permanently delete all ${total.toLocaleString()} glossary term${total === 1 ? '' : 's'} in ${scope === 'book' ? (bookTitle || 'this book') : `${sourceLang} → ${targetLang} Global`}? This action cannot be undone.`}
+	confirmLabel={`Clear All (${total.toLocaleString()} terms)`}
+	variant="danger"
+	requireVerificationCode={true}
+	on:confirm={confirmClearScope}
+	on:cancel={() => (clearScopeConfirmOpen = false)}
+/>
+
+<!-- BATCH DELETE CONFIRMATION DIALOG -->
+<ConfirmDialog
+	open={batchDeleteConfirmOpen}
+	title="Delete Selected Terms?"
+	message={`Are you sure you want to delete ${selectedTermIds.size} selected glossary term${selectedTermIds.size === 1 ? '' : 's'}?`}
+	confirmLabel={`Delete (${selectedTermIds.size})`}
+	variant="danger"
+	on:confirm={confirmBatchDelete}
+	on:cancel={() => (batchDeleteConfirmOpen = false)}
+/>
 
 <!-- ADD / EDIT TERM DIALOG (ONE FORM, MODE-SWITCHED) -->
 <Modal open={formOpen} title={formMode === 'add' ? 'Add term' : 'Edit term'} size="sm" on:close={closeForm}>

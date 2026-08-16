@@ -14,6 +14,9 @@ const {
 	addTerm,
 	updateTerm,
 	deleteTerm,
+	deleteTerms,
+	clearGlossaryScope,
+	batchUpdateTerms,
 	mergeGlossary,
 	addNewTerms,
 	getEffectiveGlossary,
@@ -282,5 +285,66 @@ describe('getEffectiveGlossary', () => {
 		invalidateBook('b1');
 		const terms = await getEffectiveGlossary('b1');
 		expect(terms.map((t) => t.source)).toContain('直达');
+	});
+});
+
+describe('batch glossary operations', () => {
+	it('deleteTerms deletes multiple entries and invalidates cache', async () => {
+		seedBook(db, { id: 'b_batch' });
+		const t1 = await addTerm('book', 'b_batch', { source: 'Term1', target: 'T1', gender: 'neuter' }, PAIR);
+		const t2 = await addTerm('book', 'b_batch', { source: 'Term2', target: 'T2', gender: 'neuter' }, PAIR);
+		const t3 = await addTerm('book', 'b_batch', { source: 'Term3', target: 'T3', gender: 'neuter' }, PAIR);
+
+		const deletedCount = await deleteTerms([t1.id, t2.id], 'book', 'b_batch');
+		expect(deletedCount).toBe(2);
+
+		const remaining = await getEffectiveGlossary('b_batch');
+		expect(remaining).toHaveLength(1);
+		expect(remaining[0].source).toBe('Term3');
+	});
+
+	it('clearGlossaryScope deletes all terms for book scope', async () => {
+		seedBook(db, { id: 'b_clear' });
+		await addTerm('book', 'b_clear', { source: 'A', target: '1', gender: 'neuter' }, PAIR);
+		await addTerm('book', 'b_clear', { source: 'B', target: '2', gender: 'neuter' }, PAIR);
+		await addTerm('global', null, { source: 'G', target: 'Global', gender: 'neuter' }, PAIR);
+
+		const count = await clearGlossaryScope('book', 'b_clear');
+		expect(count).toBe(2);
+
+		const bookTerms = await getGlossaryPage('book', 'b_clear', { limit: 10, offset: 0 });
+		expect(bookTerms.total).toBe(0);
+
+		// Global terms remain unaffected
+		const globalTerms = await getGlossaryPage('global', null, { limit: 10, offset: 0, pair: PAIR });
+		expect(globalTerms.total).toBe(1);
+	});
+
+	it('clearGlossaryScope deletes terms for a specific global language pair', async () => {
+		await addTerm('global', null, { source: 'ZH1', target: 'EN1', gender: 'neuter' }, PAIR);
+		await addTerm('global', null, { source: 'ZH2', target: 'EN2', gender: 'neuter' }, PAIR);
+		await addTerm('global', null, { source: 'FR1', target: 'EN1', gender: 'neuter' }, { sourceLang: 'fr', targetLang: 'en' });
+
+		const count = await clearGlossaryScope('global', null, PAIR);
+		expect(count).toBe(2);
+
+		const zhGlobals = await getGlossaryPage('global', null, { limit: 10, offset: 0, pair: PAIR });
+		expect(zhGlobals.total).toBe(0);
+
+		const frGlobals = await getGlossaryPage('global', null, { limit: 10, offset: 0, pair: { sourceLang: 'fr', targetLang: 'en' } });
+		expect(frGlobals.total).toBe(1);
+	});
+
+	it('batchUpdateTerms updates pin, category, and gender across selected IDs', async () => {
+		seedBook(db, { id: 'b_up' });
+		const t1 = await addTerm('book', 'b_up', { source: 'C1', target: 'T1', gender: 'neuter', pinned: false }, PAIR);
+		const t2 = await addTerm('book', 'b_up', { source: 'C2', target: 'T2', gender: 'neuter', pinned: false }, PAIR);
+
+		const updatedCount = await batchUpdateTerms([t1.id, t2.id], { pinned: true, category: 'character' }, 'book', 'b_up');
+		expect(updatedCount).toBe(2);
+
+		const effective = await getEffectiveGlossary('b_up');
+		expect(effective.every((t) => t.pinned)).toBe(true);
+		expect(effective.every((t) => t.category === 'character')).toBe(true);
 	});
 });

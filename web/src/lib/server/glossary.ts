@@ -235,6 +235,69 @@ export async function deleteTerm(id: number): Promise<void> {
 	invalidate(existing.scope, existing.bookId);
 }
 
+// BATCH DELETE TERMS BY IDS; INVALIDATES CACHE FOR THE SCOPE/BOOK.
+export async function deleteTerms(
+	ids: number[],
+	scope?: GlossaryScope,
+	bookId?: string | null,
+): Promise<number> {
+	if (ids.length === 0) return 0;
+	let effScope = scope;
+	let effBookId = bookId;
+	if (!effScope) {
+		const [first] = await db
+			.select({ scope: glossary.scope, bookId: glossary.bookId })
+			.from(glossary)
+			.where(inArray(glossary.id, ids))
+			.limit(1);
+		if (first) {
+			effScope = first.scope;
+			effBookId = first.bookId;
+		}
+	}
+	const result = await db.delete(glossary).where(inArray(glossary.id, ids)).returning({ id: glossary.id });
+	if (effScope) invalidate(effScope, effBookId ?? null);
+	else invalidateAll();
+	return result.length;
+}
+
+// PERMANENTLY CLEAR ALL TERMS IN A GIVEN SCOPE (BOOK OR GLOBAL LANGUAGE PAIR).
+export async function clearGlossaryScope(
+	scope: GlossaryScope,
+	bookId: string | null,
+	pair?: LangPair,
+): Promise<number> {
+	const where = scopeWhere(scope, bookId, pair);
+	const result = await db.delete(glossary).where(where).returning({ id: glossary.id });
+	invalidate(scope, bookId);
+	return result.length;
+}
+
+// BATCH UPDATE SPECIFIC FIELDS (PIN, CATEGORY, GENDER) ACROSS MULTIPLE TERMS.
+export async function batchUpdateTerms(
+	ids: number[],
+	patch: Partial<TermDraft>,
+	scope?: GlossaryScope,
+	bookId?: string | null,
+): Promise<number> {
+	if (ids.length === 0) return 0;
+	const updateSet: Record<string, unknown> = { updatedAt: Date.now() };
+	if (patch.pinned !== undefined) updateSet.pinned = !!patch.pinned;
+	if (patch.category !== undefined) updateSet.category = patch.category ?? null;
+	if (patch.gender !== undefined) updateSet.gender = patch.gender;
+	if (patch.status !== undefined) updateSet.status = patch.status;
+
+	const result = await db
+		.update(glossary)
+		.set(updateSet)
+		.where(inArray(glossary.id, ids))
+		.returning({ id: glossary.id });
+
+	if (scope) invalidate(scope, bookId ?? null);
+	else invalidateAll();
+	return result.length;
+}
+
 // BULK UPSERT TERMS INTO ONE SCOPE; RETURNS {added, updated}. ATOMIC — ALL-OR-NOTHING.
 export async function mergeGlossary(
 	scope: GlossaryScope,

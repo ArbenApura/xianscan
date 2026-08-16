@@ -132,6 +132,19 @@ describe('parseTranslations', () => {
 		]);
 	});
 
+	it('parses a nested { translations, newTerms } envelope', () => {
+		const out = parseTranslations(
+			JSON.stringify({
+				translations: { r0: 'Hi', r1: 'BOOM!' },
+				newTerms: [{ source: '叶凡', target: 'Ye Fan', category: 'character' }],
+			}),
+			ids,
+		);
+		expect(out!.get('r0')).toBe('Hi');
+		expect(out!.get('r1')).toBe('BOOM!');
+		expect(out!.has('newTerms')).toBe(false);
+	});
+
 	it('strips markdown fences', () => {
 		const out = parseTranslations('```json\n{"r0": "Hi"}\n```', ids);
 		expect(out!.get('r0')).toBe('Hi');
@@ -254,6 +267,31 @@ describe('translatePage', () => {
 		expect(result.byRegion.get('r1')).toBe('BOOM!');
 		expect(result.usage.promptTokens).toBe(100);
 		expect(result.usage.completionTokens).toBe(20);
+	});
+
+	it('extracts newTerms from combined single-call LLM response and filters known terms', async () => {
+		const pageRegions = [
+			{ id: 'r0', text: '叶凡来到了紫山！' },
+			{ id: 'r1', text: '你好' },
+		];
+		const responseJson = JSON.stringify({
+			translations: { r0: 'Ye Fan arrived at Purple Mountain!', r1: 'Hello' },
+			newTerms: [
+				{ source: '叶凡', target: 'Ye Fan', category: 'character', gender: 'masculine' },
+				{ source: '紫山', target: 'Purple Mountain', category: 'location' },
+			],
+		});
+		// If 叶凡 is already in known terms, it should be filtered out from newTerms
+		const existingTerms: TermDraft[] = [
+			{ source: '叶凡', target: 'Ye Fan', category: 'character', gender: 'masculine', status: 'user' },
+		];
+		const { client } = fakeClient([responseJson]);
+		const result = await translatePage(pageRegions, existingTerms, PAIR, { client });
+		expect(result.byRegion.get('r0')).toBe('Ye Fan arrived at Purple Mountain!');
+		expect(result.byRegion.get('r1')).toBe('Hello');
+		expect(result.newTerms).toHaveLength(1);
+		expect(result.newTerms![0].source).toBe('紫山');
+		expect(result.newTerms![0].target).toBe('Purple Mountain');
 	});
 
 	it('replaces degenerate ellipsis on an SFX with canonical fallback', async () => {

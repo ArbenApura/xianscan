@@ -10,6 +10,7 @@ export const load: PageServerLoad = async ({ url }) => {
 		.select({
 			id: books.id,
 			title: books.title,
+			titleTarget: books.titleTarget,
 			sourceLang: books.sourceLang,
 			targetLang: books.targetLang,
 		})

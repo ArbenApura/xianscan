@@ -40,9 +40,10 @@
 
 	// -- PROPS & EVENTS -- //
 	export let open = false;
+	export let initialTab: 'ai' | 'compute' | 'general' = 'ai';
 
 	// -- STATES -- //
-	let activeSettingsTab: 'ai' | 'compute' | 'general' = 'ai';
+	let activeSettingsTab: 'ai' | 'compute' | 'general' = initialTab;
 
 	interface HardwareInfo {
 		device_label: string;
@@ -126,6 +127,7 @@
 	}
 
 	$: if (open) {
+		activeSettingsTab = initialTab;
 		apiKeyDraft = {};
 		testResult = null;
 		loadHardwareStatus();

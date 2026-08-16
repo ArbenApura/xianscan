@@ -88,7 +88,15 @@
 	}
 
 	$: selectedBook = books.find((b) => b.id === selectedBookId);
-	$: bookSelectItems = books.map((b) => ({ value: b.id, label: b.title }));
+	$: bookSelectItems = books.map((b) => {
+		const primary = b.titleTarget?.trim() || b.title;
+		const hint = b.titleTarget?.trim() && b.title ? b.title : undefined;
+		return {
+			value: b.id,
+			label: primary,
+			hint,
+		};
+	});
 </script>
 
 <svelte:head>
@@ -118,8 +126,8 @@
 
 		{#if scope === 'book' && selectedBook}
 			<ChevronRight size={14} class="opacity-30 shrink-0" />
-			<span class="opacity-70 truncate max-w-[160px] sm:max-w-xs font-medium">
-				{selectedBook.title}
+			<span class="opacity-70 truncate max-w-[160px] sm:max-w-xs font-medium" title={selectedBook.titleTarget ? `${selectedBook.titleTarget} (${selectedBook.title})` : selectedBook.title}>
+				{selectedBook.titleTarget || selectedBook.title}
 			</span>
 		{/if}
 	</nav>
@@ -215,7 +223,7 @@
 				<GlossaryPanel
 					scope="book"
 					bookId={selectedBookId}
-					bookTitle={selectedBook.title}
+					bookTitle={selectedBook.titleTarget || selectedBook.title}
 					initialRows={data.initialScope === 'book' && data.initialBookId === selectedBookId ? data.initialGlossary.rows : null}
 					initialTotal={data.initialScope === 'book' && data.initialBookId === selectedBookId ? data.initialGlossary.total : null}
 				/>
